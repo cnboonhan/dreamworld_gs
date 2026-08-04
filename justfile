@@ -1,11 +1,9 @@
 # dreamworld_gs — panorama -> navigable 3DGS world (+ Isaac Sim USDZ)
 #
 #   just setup                       one-time: fetch weights + build images
-#   just up                          start the stack (prefect, vlm, generator, viewer)
-#   just generate office             assets/panos/office.png -> a world
-#   just ui                          Prefect UI: run history, per-stage logs
-#   just view                        browse generated worlds
-#   just panoview                    inspect input panoramas in 360
+#   just up                          start everything, print the URLs
+#   just generate office             assets/panos/office/ -> a world
+#   just video office                walkthrough mp4 along the capture path
 #
 # Services live in compose.yaml; these recipes drive them.
 
@@ -41,29 +39,35 @@ fetch-assets:
 build:
     docker compose build
 
-# Start the whole stack. The VLM and generator take a few minutes to load.
+# Job server, VLM, generator and both viewers come up together and stay up;
+# `just generate` depends on this recipe, so nothing needs launching by hand.
+#
+# Start everything and print the URLs.
 up: _env
     docker compose up -d --wait
-    @echo "prefect ui : http://localhost:4200"
-    @echo "viewer     : http://localhost:8081"
-    @echo "pano viewer: http://localhost:8082"
+    @echo
+    @echo "  jobs + logs   http://localhost:4200"
+    @echo "  worlds        http://localhost:8081/?url=files/<scene>/world.ply"
+    @echo "  panoramas     http://localhost:8082"
+    @echo
+    @echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
+    @echo "              -L 8082:localhost:8082 <this-host>"
 
 # Stop everything.
 down:
     docker compose down
 
-# Build a world from assets/panos/<name>/ — a folder of panoramas of one
-# space, reconstructed together (reproject -> SfM -> gaussian splatting).
-#
-# A single image file in assets/panos works too, and takes the generative
+# A folder of panoramas of one space is reconstructed together (reproject ->
+# SfM -> gaussian splatting). A single image file takes the generative
 # HY-World path instead: one vantage point, the rest imagined.
 #
-# spacing: metres between consecutive standpoints, if you walked a known step
-# (`just generate h2rc "" 1.0`). SfM is scale-free, so without this the world
-# is geometrically right but unitless; with it the export is in metres, which
-# is what a simulator needs.
-# ^C stops following; the job keeps running (watch it in the Prefect UI).
-generate pano scene="" spacing="0": up
+# spacing: metres between consecutive standpoints, default 0.5. SfM is
+# scale-free, so this is what puts the world in metres, which a simulator
+# needs; pass 0 to leave it unitless. ^C stops following, the job keeps
+# running (watch it at :4200).
+#
+# Build a world from assets/panos/<name>.
+generate pano scene="" spacing="0.5": up
     #!/usr/bin/env bash
     set -euo pipefail
     src=$(ls -d {{assets}}/panos/{{pano}} {{assets}}/panos/{{pano}}.* 2>/dev/null | head -1 || true)
@@ -109,16 +113,16 @@ generate pano scene="" spacing="0": up
     echo "-> assets/scenes/$scene/world.ply (+ .usdz, .cam.json)"
 
 # Render a walkthrough video following the capture path.
-#   just video h2rc            20s at 30fps
-#   just video h2rc 40         longer
+#
+# The camera splines through the standpoints the panoramas were shot from,
+# because that is where the scene was actually observed. `just video h2rc 40`
+# for a longer one.
+#
+# Render a walkthrough video following the capture path.
 video scene seconds="20":
     docker compose exec -T generator python tools/render_video.py \
         /workspace/scenes/{{scene}} --seconds {{seconds}}
     @echo "-> assets/scenes/{{scene}}/walkthrough.mp4"
-
-# Inspect the input panoramas in a 360 viewer.
-panoview port="8082":
-    @echo "http://localhost:{{port}}  (remote: ssh -L {{port}}:localhost:{{port}} <this-host>)"
 
 # List the panoramas available to generate from.
 panos:
@@ -128,11 +132,3 @@ panos:
 jobs:
     docker compose exec -T generator prefect flow-run ls --limit 15
 
-# Prefect UI (run history, per-stage logs, retries).
-ui port="4200":
-    @echo "http://localhost:{{port}}  (remote: ssh -L {{port}}:localhost:{{port}} <this-host>)"
-
-# Browse generated worlds (each opens at its tagged spawn camera).
-view port="8081":
-    @echo "http://localhost:{{port}}/?url=files/<scene>/world.ply"
-    @echo "  (remote: ssh -L {{port}}:localhost:{{port}} <this-host>)"

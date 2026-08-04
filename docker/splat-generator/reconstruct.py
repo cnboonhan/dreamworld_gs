@@ -420,12 +420,12 @@ def export(scene: str) -> dict:
 @flow(name="reconstruct-world", log_prints=True)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
                       iters: int = 15000, downscale: int = 1,
-                      aniso_weight: float = 0.0, spacing: float = 0.0) -> dict:
+                      aniso_weight: float = 0.0, spacing: float = 0.5) -> dict:
     """scene: output dir; panos: panoramas of one space.
 
-    spacing: metres between consecutive standpoints, if you walked a known
-    step. Without it the world is geometrically right but unitless; with it
-    the export is metric, which is what a simulator needs.
+    spacing: metres between consecutive standpoints. Defaults to the 0.5 m
+    we walk; pass 0 to leave the world unitless. SfM is scale-free, so this
+    is what makes the export metric, which is what a simulator needs.
     """
     reproject(scene, panos, views, size)
     sfm = run_sfm(scene, spacing)
@@ -452,7 +452,7 @@ def main() -> None:
     one.add_argument("panos")
     one.add_argument("--views", type=int, default=8)
     one.add_argument("--iters", type=int, default=15000)
-    one.add_argument("--spacing", type=float, default=0.0,
+    one.add_argument("--spacing", type=float, default=0.5,
                      help="metres between standpoints (enables metric scale)")
     args = p.parse_args()
 
