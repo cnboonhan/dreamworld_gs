@@ -88,8 +88,12 @@ def reproject(scene: str, panos_dir: str, views: int, size: int) -> dict:
     # a ring of yaws at eye level, plus one tilted up and one down: enough
     # overlap to match, without flooding SfM with near-duplicate views
     ring = [(i * 2 * math.pi / views, 0.0) for i in range(views)]
-    tilts = [(i * 2 * math.pi / views + math.pi / views, a)
-             for i in range(views) for a in (math.radians(35), math.radians(-35))]
+    # half as many tilted views as ring views: exhaustive matching is
+    # quadratic in image count, and the tilted ones (ceiling, floor) are the
+    # least likely to register anyway
+    tilts = [(i * 4 * math.pi / views + math.pi / views,
+              math.radians(35 if i % 2 else -35))
+             for i in range(views // 2)]
     angles = ring + tilts
 
     n = 0
@@ -132,9 +136,13 @@ def run_sfm(scene: str) -> dict:
 
     logger.info("feature extraction")
     pycolmap.extract_features(db, images, camera_mode=pycolmap.CameraMode.SINGLE)
-    logger.info("exhaustive matching")
+    n_img = len(list(images.iterdir()))
+    logger.info("exhaustive matching over %d views (%d pairs)",
+                n_img, n_img * (n_img - 1) // 2)
     pycolmap.match_exhaustive(db)
-    logger.info("incremental mapping")
+    # mapping is one long call with no output of its own; say so, otherwise
+    # the run looks hung for minutes
+    logger.info("incremental mapping (no output until it finishes)")
     recs = pycolmap.incremental_mapping(db, images, sparse)
     if not recs:
         raise RuntimeError(

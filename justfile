@@ -57,7 +57,7 @@ down:
 #
 # A single image file in assets/panos works too, and takes the generative
 # HY-World path instead: one vantage point, the rest imagined.
-# ^C detaches without cancelling; follow the run in the Prefect UI.
+# ^C stops following; the job keeps running (watch it in the Prefect UI).
 generate pano scene="": up
     #!/usr/bin/env bash
     set -euo pipefail
@@ -80,10 +80,10 @@ generate pano scene="": up
     if [ -d "$src" ]; then
         n=$(ls "$src" | wc -l)
         echo "reconstructing $scene from $n panoramas"
-        docker compose exec -T generator prefect deployment run \
-            reconstruct-world/dreamworld --watch \
-            -p scene=/workspace/scenes/"$scene" \
-            -p panos=/workspace/panos/"$(basename "$src")"
+        docker compose exec -T generator python submit.py \
+            reconstruct-world/dreamworld \
+            scene=/workspace/scenes/"$scene" \
+            panos=/workspace/panos/"$(basename "$src")"
     else
         cp "$src" {{assets}}/scenes/"$scene"/_input.${src##*.}
         # the generative pipeline reads panorama.png
@@ -95,10 +95,10 @@ generate pano scene="": up
         src = next(p for p in d.iterdir() if p.stem == '_input')
         Image.open(src).convert('RGB').save(d / 'panorama.png')
         src.unlink()"
-        docker compose exec -T generator prefect deployment run \
-            generate-world/dreamworld --watch \
-            -p scene=/workspace/scenes/"$scene" \
-            -p gpus={{gpus}} -p steps={{steps}}
+        docker compose exec -T generator python submit.py \
+            generate-world/dreamworld \
+            scene=/workspace/scenes/"$scene" \
+            gpus={{gpus}} steps={{steps}}
     fi
     echo "-> assets/scenes/$scene/world.ply (+ .usdz, .cam.json)"
 
