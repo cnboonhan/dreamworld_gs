@@ -1,0 +1,124 @@
+# dreamworld_gs services. Paths are relative to this file, so the stack works
+# from any working directory. Driven by the justfile — see `just --list`.
+#
+#   prefect    long-running: job orchestration + UI on :4200
+#   vlm        long-running: plans camera trajectories, captions views
+#   viewer     long-running: serves generated worlds over HTTP
+#   generator  long-running: waits for jobs, runs the 6-stage pipeline
+#
+# Nothing here reaches the network at runtime: model weights are mounted from
+# assets/ and the containers run with HuggingFace offline mode set.
+
+name: dreamworld
+
+x-as-caller: &as-caller
+  # run as the invoking user so outputs aren't root-owned; that uid has no
+  # entry in the image's passwd, which some libraries insist on reading
+  user: "${DW_UID:-1000}:${DW_GID:-1000}"
+  volumes:
+    - /etc/passwd:/etc/passwd:ro
+  environment:
+    HOME: /tmp
+
+services:
+
+  prefect:
+    image: prefecthq/prefect:3.8.1-python3.11
+    container_name: dreamworld-prefect
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "${DW_PREFECT_PORT:-4200}:4200"
+    volumes:
+      - ./assets/prefect:/prefect
+    environment:
+      PREFECT_HOME: /prefect
+      PREFECT_API_URL: http://127.0.0.1:4200/api
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+    user: "${DW_UID:-1000}:${DW_GID:-1000}"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4200/api/health')"]
+      interval: 5s
+      timeout: 5s
+      start_period: 2m
+      retries: 5
+    restart: unless-stopped
+  vlm:
+    image: vllm/vllm-openai:v0.11.0
+    container_name: dreamworld-vlm
+    # host networking: the generator reaches this on 127.0.0.1:8000
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./assets/hf:/hf:ro
+    environment:
+      HF_HOME: /hf
+      HF_HUB_OFFLINE: "1"
+    command:
+      - --model=Qwen/Qwen3-VL-8B-Instruct
+      - --port=8000
+      - --host=127.0.0.1
+      - --max-model-len=32768
+      - --trust-remote-code
+      - --gpu-memory-utilization=0.80
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]   # the generator uses the rest
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/v1/models"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15m           # first start loads ~17GB from disk
+      retries: 3
+    restart: unless-stopped
+
+  viewer:
+    build:
+      context: ./docker/splat-viewer
+      dockerfile: splat-viewer.Dockerfile
+    image: dreamworld/splat-viewer:latest
+    container_name: dreamworld-viewer
+    ports:
+      - "${DW_VIEWER_PORT:-8081}:80"
+    volumes:
+      - ./assets/scenes:/usr/share/nginx/html/files:ro
+    restart: unless-stopped
+
+  generator:
+    <<: *as-caller
+    build:
+      context: ./docker/splat-generator
+      dockerfile: splat-generator.Dockerfile
+    image: dreamworld/splat-generator:latest
+    network_mode: host            # to reach the vlm
+    shm_size: 32gb
+    volumes:
+      - /etc/passwd:/etc/passwd:ro
+      - ./assets/models:/assets/models:ro
+      - ./assets/hf:/assets/hf:ro
+      - ./assets/scenes:/workspace/scenes
+    environment:
+      HOME: /tmp
+      # must match the GPUs reserved below: the renderer sizes its work by
+      # torch.cuda.device_count(), so extra visible GPUs make it broadcast
+      # from ranks torchrun never launched
+      CUDA_VISIBLE_DEVICES: "${DW_GPU_IDS:-1,2,3,4}"
+      PREFECT_API_URL: http://127.0.0.1:${DW_PREFECT_PORT:-4200}/api
+      PREFECT_HOME: /tmp/prefect
+    depends_on:
+      prefect:
+        condition: service_healthy
+      vlm:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
