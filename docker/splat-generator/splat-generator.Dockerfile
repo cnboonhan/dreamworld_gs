@@ -49,13 +49,14 @@ COPY build_env.sh /tmp/build_env.sh
 RUN bash /tmp/build_env.sh
 
 COPY tools/ /opt/tools/
-COPY flow.py /opt/flow.py
+COPY flow.py reconstruct.py serve.py /opt/
 
 # Prefect orchestrates the six stages: per-stage logs/timing in its UI, and a
 # failed run can be retried from the stage that broke.
 RUN uv pip install --python /opt/venv/bin/python "prefect==3.8.1" \
     && chmod -R a+rX /opt/venv
 
-WORKDIR /workspace
-ENTRYPOINT ["python", "/opt/flow.py"]
-CMD ["serve"]
+
+WORKDIR /opt
+ENTRYPOINT ["python"]
+CMD ["serve.py"]

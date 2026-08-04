@@ -1,11 +1,20 @@
 # dreamworld_gs
 
-Turn a 360° panorama into a navigable 3D Gaussian Splatting world, exported
-for both **web viewing** (`.ply`) and **NVIDIA Isaac Sim** (`.usdz`, NuRec).
+Turn 360° panoramas into a navigable 3D Gaussian Splatting world, exported for
+both **web viewing** (`.ply`) and **NVIDIA Isaac Sim** (`.usdz`, NuRec).
 
-Built on [HY-World 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0)
-(panorama → WorldNav trajectory planning → WorldStereo expansion → 3DGS) with
-Isaac export via [3DGRUT](https://github.com/nv-tlabs/3dgrut)'s NuRec exporter.
+Two ways in, chosen by what you put in `assets/panos/`:
+
+| Input | Pipeline | Geometry |
+| --- | --- | --- |
+| `<name>/` — a folder of panoramas of one space | **reconstruct**: reproject → SfM → gaussian splatting | **measured** from the parallax between standpoints |
+| `<name>.jpg` — a single panorama | **generate**: [HY-World 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (WorldNav → WorldStereo → 3DGS) | **imagined** beyond the one vantage point |
+
+Reconstruction is faithful to the real room but only knows what the cameras
+saw — its quality tracks how many standpoints you capture. Generation fills a
+whole walkable world from one photo, but everything outside that photo is
+plausible invention. Isaac export in both cases uses
+[3DGRUT](https://github.com/nv-tlabs/3dgrut)'s NuRec exporter.
 
 ## Quick start
 
@@ -83,14 +92,16 @@ override it at build time with
 | `panoviewer` | 360 viewer for the input panoramas in `assets/panos/` on :8082 |
 
 ```bash
-just panos                     # what's available to generate from
-just panoview                  # inspect them in 360 at :8082
-just generate office           # assets/panos/office.png -> assets/scenes/office
+just panos                     # what's available to build from
+just panoview                  # inspect the panoramas in 360 at :8082
+just generate office           # assets/panos/office{,.jpg} -> assets/scenes/office
 just generate office lobby_v2  # ...into a differently named scene
-just generate-all              # every panorama that has no world yet
 just jobs                      # recent runs and their state
 just down                      # stop everything
 ```
+
+`generate` skips a scene that already has a `world.ply`; delete the scene
+directory to rebuild it.
 
 A job takes ~12 minutes on 4x H200. `just generate` streams progress, but the
 work happens in the generator service — Ctrl-C detaches without cancelling,
@@ -105,6 +116,13 @@ training cameras, so it opens upright rather than at an arbitrary angle.
 ## Notes on the pipeline
 
 Six stages, all inside the generator container:
+
+**reconstruct** — four stages: each panorama is reprojected into 24 pinhole
+views (an 8-yaw ring plus tilts, 90° FOV so neighbours overlap), COLMAP
+recovers poses across all of them, gsplat optimises against the posed views,
+then the same export step runs. Needs two or more overlapping panoramas.
+
+**generate** — six stages:
 
 | Stage | What |
 | --- | --- |

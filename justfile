@@ -52,54 +52,55 @@ up: _env
 down:
     docker compose down
 
-# `pano` names an image in assets/panos; ^C detaches without cancelling.
+# Build a world from assets/panos/<name>/ — a folder of panoramas of one
+# space, reconstructed together (reproject -> SfM -> gaussian splatting).
 #
-# Any extension works; the panorama must be 2:1 equirectangular. The world
-# lands in assets/scenes under the panorama's name unless you pass an explicit
-# `scene`. Follow a detached run in the Prefect UI.
+# A single image file in assets/panos works too, and takes the generative
+# HY-World path instead: one vantage point, the rest imagined.
+# ^C detaches without cancelling; follow the run in the Prefect UI.
 generate pano scene="": up
     #!/usr/bin/env bash
     set -euo pipefail
-    src=$(ls {{assets}}/panos/{{pano}} {{assets}}/panos/{{pano}}.* 2>/dev/null | head -1 || true)
+    src=$(ls -d {{assets}}/panos/{{pano}} {{assets}}/panos/{{pano}}.* 2>/dev/null | head -1 || true)
     if [ -z "$src" ]; then
-        echo "no such panorama: {{pano}}" >&2
+        echo "no such panorama or folder: {{pano}}" >&2
         echo "available in assets/panos:" >&2
         ls {{assets}}/panos 2>/dev/null | sed 's/^/  /' >&2
         exit 1
     fi
     scene="{{scene}}"
     [ -n "$scene" ] || scene=$(basename "${src%.*}")
+    if [ -f {{assets}}/scenes/"$scene"/world.ply ]; then
+        echo "$scene: already built, skipping"
+        echo "   (delete assets/scenes/$scene to rebuild)"
+        exit 0
+    fi
     mkdir -p {{assets}}/scenes/"$scene"
-    cp "$src" {{assets}}/scenes/"$scene"/_input.${src##*.}
-    # the pipeline reads panorama.png, so convert whatever was supplied
-    docker compose exec -T generator python -c "
-    from pathlib import Path
-    from PIL import Image
-    Image.MAX_IMAGE_PIXELS = None
-    d = Path('/workspace/scenes/$scene')
-    src = next(p for p in d.iterdir() if p.stem == '_input')
-    Image.open(src).convert('RGB').save(d / 'panorama.png')
-    src.unlink()"
-    docker compose exec -T generator prefect deployment run \
-        generate-world/dreamworld --watch \
-        -p scene=/workspace/scenes/"$scene" \
-        -p gpus={{gpus}} -p steps={{steps}}
-    echo "-> assets/scenes/$scene/world.ply (+ .usdz, .cam.json)"
 
-# Generate a world for every panorama in assets/panos (skips finished ones).
-generate-all: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for src in {{assets}}/panos/*; do
-        [ -f "$src" ] || continue
-        scene=$(basename "${src%.*}")
-        if [ -f {{assets}}/scenes/"$scene"/world.ply ]; then
-            echo "== $scene: already generated, skipping"
-            continue
-        fi
-        echo "== $scene"
-        just generate "$(basename "$src")" "$scene"
-    done
+    if [ -d "$src" ]; then
+        n=$(ls "$src" | wc -l)
+        echo "reconstructing $scene from $n panoramas"
+        docker compose exec -T generator prefect deployment run \
+            reconstruct-world/dreamworld --watch \
+            -p scene=/workspace/scenes/"$scene" \
+            -p panos=/workspace/panos/"$(basename "$src")"
+    else
+        cp "$src" {{assets}}/scenes/"$scene"/_input.${src##*.}
+        # the generative pipeline reads panorama.png
+        docker compose exec -T generator python -c "
+        from pathlib import Path
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        d = Path('/workspace/scenes/$scene')
+        src = next(p for p in d.iterdir() if p.stem == '_input')
+        Image.open(src).convert('RGB').save(d / 'panorama.png')
+        src.unlink()"
+        docker compose exec -T generator prefect deployment run \
+            generate-world/dreamworld --watch \
+            -p scene=/workspace/scenes/"$scene" \
+            -p gpus={{gpus}} -p steps={{steps}}
+    fi
+    echo "-> assets/scenes/$scene/world.ply (+ .usdz, .cam.json)"
 
 # Inspect the input panoramas in a 360 viewer.
 panoview port="8082":

@@ -34,11 +34,33 @@ def training_cameras(scene: Path) -> np.ndarray:
     return np.stack(mats)
 
 
-def main() -> None:
-    scene = Path(sys.argv[1])
-    world = Path(sys.argv[2]) if len(sys.argv) > 2 else scene / "world.ply"
+def colmap_cameras(model: Path) -> np.ndarray:
+    """(N,4,4) world->camera matrices from a COLMAP sparse model."""
+    import pycolmap
 
-    w2c = training_cameras(scene)
+    rec = pycolmap.Reconstruction(model)
+    mats = []
+    for _, im in sorted(rec.images.items()):
+        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+        m = np.eye(4)
+        m[:3, :] = np.asarray(cfw.matrix(), dtype=np.float64)
+        mats.append(m)
+    if not mats:
+        raise SystemExit(f"no registered images in {model}")
+    return np.stack(mats)
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    # --colmap <sparse-model> <world.ply>: the reconstruction flow has no
+    # gs_data/cameras.json, its poses live in the COLMAP model
+    if args and args[0] == "--colmap":
+        model, world = Path(args[1]), Path(args[2])
+        w2c = colmap_cameras(model)
+    else:
+        scene = Path(args[0])
+        world = Path(args[1]) if len(args) > 1 else scene / "world.ply"
+        w2c = training_cameras(scene)
     centers = np.stack([-m[:3, :3].T @ m[:3, 3] for m in w2c])
     # most central camera: representative of the interior, and away from the
     # trajectory endpoints that often sit against a wall
