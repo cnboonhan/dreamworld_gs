@@ -10,9 +10,12 @@ Isaac export via [3DGRUT](https://github.com/nv-tlabs/3dgrut)'s NuRec exporter.
 ## Quick start
 
 ```bash
-just setup                              # one-time: ~300GB of weights + 2 images
-just generate my_panorama.png office    # panorama -> world (offline)
-just view                               # http://localhost:8081
+just setup                # one-time: model weights + images (~500GB, needs network)
+just up                   # start the stack: prefect, vlm, generator, viewer
+
+cp my_pano.png assets/panos/
+just generate my_pano     # -> assets/scenes/my_pano/{world.ply,world.usdz}
+just view                 # browse at http://localhost:8081
 ```
 
 Everything after `just setup` runs **fully offline** — containers mount model
@@ -34,12 +37,13 @@ copied into an image lives there, nothing is pulled from the repo root.
 
 ```
 justfile                       all workflows (just --list)
+compose.yaml                   the four services
 docker/
   splat-generator/             HY-World pipeline image (GPU) — build context
     splat-generator.Dockerfile clones HY-World at a pinned commit + patches it
     hyworld.patch              our changes to upstream (offline, SAM3 paths)
     build_env.sh               env build, with upstream fixes documented
-    generate.sh                the 6-stage pipeline
+    flow.py                    the 6-stage pipeline, as a Prefect flow
     tools/
       ply_to_isaac.py          3DGS PLY -> Isaac Sim NuRec USDZ
       threedgrut/              vendored 3dgrut export subtree (Apache 2.0)
@@ -48,11 +52,14 @@ docker/
     nginx.conf
     www/                       vendored antimatter15/splat viewer
 scripts/                       host-side only (see scripts/README.md)
+  fetch_assets.py              downloads everything in models.txt
   extract_sam3_image.py        derive SAM3 image model from video packaging
 assets/                        gitignored, all large files
   models/                      SAM 3 weights (image + video packaging)
   hf/                          HuggingFace cache (HY-World, Qwen, WorldStereo)
-  scenes/<name>/               panorama.png -> world.ply + world.usdz
+  panos/                       input: equirectangular panoramas you drop here
+  scenes/<name>/               output: world.ply + world.usdz + world.cam.json
+  prefect/                     job history database
 ```
 
 The HY-World commit is pinned as `HYWORLD_REF` in the generator Dockerfile;
@@ -61,25 +68,32 @@ override it at build time with
 
 ## Usage
 
-```bash
-# generate: panorama must be 1920x960 equirectangular
-just generate path/to/panorama.png office
-#   -> assets/scenes/office/world.ply    (3DGS, ~50MB)
-#   -> assets/scenes/office/world.usdz   (Isaac Sim NuRec, ~25MB)
+`just up` starts four services (see `compose.yaml`):
 
-just generate pano.png office --gpus 2   # fewer GPUs
-just view                                # browse at :8081
-just to-isaac some_other.ply             # convert any 3DGS PLY for Isaac
-just stop                                # stop viewer + VLM
+| Service | Role |
+| --- | --- |
+| `prefect` | job queue + UI on :4200 — run history, per-stage logs, retries |
+| `vlm` | Qwen3-VL on GPU 0: picks navigation targets, captions rendered views |
+| `generator` | waits for jobs, runs the pipeline on the remaining GPUs |
+| `viewer` | serves `assets/scenes/` over HTTP on :8081 |
+
+```bash
+just panos                     # what's available to generate from
+just generate office           # assets/panos/office.png -> assets/scenes/office
+just generate office lobby_v2  # ...into a differently named scene
+just jobs                      # recent runs and their state
+just down                      # stop everything
 ```
+
+A job takes ~12 minutes on 4x H200. `just generate` streams progress, but the
+work happens in the generator service — Ctrl-C detaches without cancelling,
+and you can follow or retry the run in the Prefect UI.
 
 Viewing remotely: `ssh -L 8081:localhost:8081 <host>`, then open
 `http://localhost:8081/?url=files/office/world.ply` in a **real browser tab**
 (embedded IDE browsers abort large downloads). Drag to look, WASD to move.
-
-The trajectory planner needs a VLM; `just generate` starts one automatically
-(vLLM serving Qwen3-VL-8B on GPU 0) and leaves it running for subsequent
-generations. `just stop` shuts it down.
+Each world carries a `world.cam.json` spawn pose taken from one of its own
+training cameras, so it opens upright rather than at an arbitrary angle.
 
 ## Notes on the pipeline
 
@@ -92,20 +106,24 @@ Six stages, all inside the generator container:
 | 3. WorldStereo 2.0 | 17B diffusion generates consistent keyframes, expanding the world |
 | 4. GS data | frames + aligned depth + normals + cameras |
 | 5. 3DGS | gaussian training with MaskGaussian pruning |
-| 6. Isaac export | PLY → NuRec USDZ |
+| 6. Export | PLY → NuRec USDZ, plus the viewer spawn camera |
 
 **Why classic (not antialiased) 3DGS training**: `--antialiased` bakes
 mip-splatting opacity compensation into the gaussians; they then render
 correctly *only* in renderers applying the same compensation. Classic mode
 keeps the PLY portable across SuperSplat, web viewers, and Isaac.
 
-**SAM 3 weights**: `facebook/sam3` on HuggingFace is gated. `just fetch-sam3`
+**SAM 3 weights**: `facebook/sam3` on HuggingFace is gated. `just fetch-assets`
 pulls the same weights from ModelScope (ungated), then derives the *image*
 model variant the planner needs — upstream distributes only the video
 packaging (`scripts/extract_sam3_image.py`). If you have HF access, you can
 point `SAM3_IMAGE_DIR` / `SAM3_VIDEO_DIR` at official copies instead.
 
-**Upstream patches** are recorded in `scripts/hyworld.patch` against the
-commit in `scripts/hyworld.ref`; the environment fixes (glm vendoring,
-tokenizers pin, cupy variant, setuptools constraint, undeclared `peft`) are
-documented inline in `docker/splat-generator/build_env.sh`.
+**Upstream patches** live in `docker/splat-generator/hyworld.patch`, applied
+to the commit pinned as `HYWORLD_REF`; see `scripts/README.md` for what each
+one fixes. Environment fixes (glm vendoring, tokenizers pin, cupy variant,
+setuptools constraint, undeclared `peft`/`rtree`, and the CUDA-arch settings
+that `docker build` needs because it exposes no GPU) are documented inline in
+`docker/splat-generator/build_env.sh`.
+
+Third-party code and model licenses: see `NOTICE.md`.
