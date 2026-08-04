@@ -34,9 +34,13 @@ TOOLS = Path("/opt/tools")
 DEPLOYMENT = "dreamworld"
 PANO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 SH_C0 = 0.28209479177387814
-# a gaussian may be this much longer than it is thin before the loss pushes
-# back; flat splats on flat surfaces are legitimate, needles are not
-ANISO_MAX = 8.0
+# How much longer a gaussian's longest axis may be than its *middle* one
+# before the loss pushes back. Measuring against the middle axis rather than
+# the shortest is the whole point: a splat lying on a floor or wall is a flat
+# disc (two long axes, one flat) and is correct, while a needle is long in
+# one axis only. Penalising longest/shortest hits the discs and inflates them
+# into a haze over the floor.
+NEEDLE_MAX = 15.0
 
 
 # ---------------------------------------------------------------- reprojection
@@ -296,7 +300,7 @@ def save_ply(params, path: Path) -> int:
 
 @task(name="3. gaussian splatting")
 def train(scene: str, iters: int, downscale: int,
-          aniso_weight: float = 0.01) -> dict:
+          aniso_weight: float = 0.0) -> dict:
     """Optimise gaussians against the posed views.
 
     Classic rasterization (not antialiased): AA-trained opacities only render
@@ -363,12 +367,17 @@ def train(scene: str, iters: int, downscale: int,
         l1 = (out[0] - gt).abs().mean()
         ssim = ssim_fn(out.permute(0, 3, 1, 2), gt[None].permute(0, 3, 1, 2), data_range=1.0)
         loss = 0.8 * l1 + 0.2 * (1 - ssim)
-        # discourage needles rather than only pruning them afterwards: penalise
-        # how far each gaussian's longest axis exceeds its shortest
+        # Off by default: it does bound needle shapes, but it costs real
+        # sharpness everywhere (28.4 -> 26.6 dB) and does not fix the
+        # blurring, which comes from surfaces no camera saw twice rather than
+        # from splat shape. Filtering needles at export changes nothing
+        # visible either. More standpoints is the remedy.
         if aniso_weight:
-            scl = torch.exp(params["scales"])
-            ratio = scl.max(dim=1).values / scl.min(dim=1).values.clamp(min=1e-8)
-            loss = loss + aniso_weight * (ratio.clamp(min=ANISO_MAX) - ANISO_MAX).mean()
+            srt = torch.sort(torch.exp(params["scales"]), dim=1,
+                             descending=True).values
+            needle = srt[:, 0] / srt[:, 1].clamp(min=1e-8)
+            loss = loss + aniso_weight * (
+                needle.clamp(min=NEEDLE_MAX) - NEEDLE_MAX).mean()
         loss.backward()
         strategy.step_post_backward(params, opts, state, step, info, packed=False)
         for o in opts.values():
@@ -411,7 +420,7 @@ def export(scene: str) -> dict:
 @flow(name="reconstruct-world", log_prints=True)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
                       iters: int = 15000, downscale: int = 1,
-                      aniso_weight: float = 0.01, spacing: float = 0.0) -> dict:
+                      aniso_weight: float = 0.0, spacing: float = 0.0) -> dict:
     """scene: output dir; panos: panoramas of one space.
 
     spacing: metres between consecutive standpoints, if you walked a known
