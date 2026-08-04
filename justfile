@@ -5,6 +5,7 @@
 #   just generate office             assets/panos/office.png -> a world
 #   just ui                          Prefect UI: run history, per-stage logs
 #   just view                        browse generated worlds
+#   just panoview                    inspect input panoramas in 360
 #
 # Services live in compose.yaml; these recipes drive them.
 
@@ -45,6 +46,7 @@ up: _env
     docker compose up -d --wait
     @echo "prefect ui : http://localhost:4200"
     @echo "viewer     : http://localhost:8081"
+    @echo "pano viewer: http://localhost:8082"
 
 # Stop everything.
 down:
@@ -98,6 +100,10 @@ generate-all: up
         echo "== $scene"
         just generate "$(basename "$src")" "$scene"
     done
+
+# Inspect the input panoramas in a 360 viewer.
+panoview port="8082":
+    @echo "http://localhost:{{port}}  (remote: ssh -L {{port}}:localhost:{{port}} <this-host>)"
 
 # List the panoramas available to generate from.
 panos:

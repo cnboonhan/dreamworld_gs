@@ -4,6 +4,7 @@
 #   prefect    long-running: job orchestration + UI on :4200
 #   vlm        long-running: plans camera trajectories, captions views
 #   viewer     long-running: serves generated worlds over HTTP
+#   panoviewer long-running: 360 viewer for the input panoramas
 #   generator  long-running: waits for jobs, runs the 6-stage pipeline
 #
 # Nothing here reaches the network at runtime: model weights are mounted from
@@ -86,6 +87,18 @@ services:
       - "${DW_VIEWER_PORT:-8081}:80"
     volumes:
       - ./assets/scenes:/usr/share/nginx/html/files:ro
+    restart: unless-stopped
+
+  panoviewer:
+    build:
+      context: ./docker/pano-viewer
+      dockerfile: pano-viewer.Dockerfile
+    image: dreamworld/pano-viewer:latest
+    container_name: dreamworld-panoviewer
+    ports:
+      - "${DW_PANO_PORT:-8082}:80"
+    volumes:
+      - ./assets/panos:/usr/share/nginx/html/files:ro
     restart: unless-stopped
 
   generator:

@@ -6,6 +6,7 @@ Vendored into this repository:
 | --- | --- | --- |
 | `docker/splat-generator/tools/threedgrut/` | [nv-tlabs/3dgrut](https://github.com/nv-tlabs/3dgrut) — export subtree only, used to write Isaac Sim NuRec USDZ | Apache-2.0 |
 | `docker/splat-viewer/www/` | [antimatter15/splat](https://github.com/antimatter15/splat) — WebGL 3DGS viewer by Kevin Kwok; patched to resolve `?url=` against this origin and to load a `.cam.json` spawn pose | MIT |
+| `docker/pano-viewer/www/` | equirect WebGL viewer engine from the `dream_editor` tool in the internal htx-robotics-release dreamworld project; reduced to a single panel, given a file picker and an aspect-ratio check | internal |
 
 Fetched at build or run time, not vendored:
 

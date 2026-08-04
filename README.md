@@ -47,10 +47,14 @@ docker/
     tools/
       ply_to_isaac.py          3DGS PLY -> Isaac Sim NuRec USDZ
       threedgrut/              vendored 3dgrut export subtree (Apache 2.0)
-  splat-viewer/                nginx + WebGL viewer image (CPU) — build context
+  splat-viewer/                nginx + WebGL 3DGS viewer (CPU) — build context
     splat-viewer.Dockerfile
     nginx.conf
     www/                       vendored antimatter15/splat viewer
+  pano-viewer/                 nginx + WebGL 360 viewer (CPU) — build context
+    pano-viewer.Dockerfile
+    nginx.conf
+    www/                       equirect viewer for generation inputs
 scripts/                       host-side only (see scripts/README.md)
   fetch_assets.py              downloads everything in models.txt
   extract_sam3_image.py        derive SAM3 image model from video packaging
@@ -75,12 +79,15 @@ override it at build time with
 | `prefect` | job queue + UI on :4200 — run history, per-stage logs, retries |
 | `vlm` | Qwen3-VL on GPU 0: picks navigation targets, captions rendered views |
 | `generator` | waits for jobs, runs the pipeline on the remaining GPUs |
-| `viewer` | serves `assets/scenes/` over HTTP on :8081 |
+| `viewer` | serves generated worlds from `assets/scenes/` on :8081 |
+| `panoviewer` | 360 viewer for the input panoramas in `assets/panos/` on :8082 |
 
 ```bash
 just panos                     # what's available to generate from
+just panoview                  # inspect them in 360 at :8082
 just generate office           # assets/panos/office.png -> assets/scenes/office
 just generate office lobby_v2  # ...into a differently named scene
+just generate-all              # every panorama that has no world yet
 just jobs                      # recent runs and their state
 just down                      # stop everything
 ```
