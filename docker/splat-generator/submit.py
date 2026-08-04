@@ -26,14 +26,23 @@ TERMINAL = {"COMPLETED", "FAILED", "CRASHED", "CANCELLED"}
 POLL_SECONDS = 5
 
 
+def coerce(v: str) -> object:
+    """key=value comes in as text; the API validates against the flow's types."""
+    if v.lower() in ("true", "false"):
+        return v.lower() == "true"
+    for cast in (int, float):
+        try:
+            return cast(v)
+        except ValueError:
+            pass
+    return v
+
+
 def parse(args: list[str]) -> dict:
     params: dict[str, object] = {}
     for a in args:
         k, _, v = a.partition("=")
-        if v.lstrip("-").isdigit():
-            params[k] = int(v)
-        else:
-            params[k] = v
+        params[k] = coerce(v)
     return params
 
 

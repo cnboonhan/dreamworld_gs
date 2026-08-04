@@ -57,8 +57,13 @@ down:
 #
 # A single image file in assets/panos works too, and takes the generative
 # HY-World path instead: one vantage point, the rest imagined.
+#
+# spacing: metres between consecutive standpoints, if you walked a known step
+# (`just generate h2rc "" 1.0`). SfM is scale-free, so without this the world
+# is geometrically right but unitless; with it the export is in metres, which
+# is what a simulator needs.
 # ^C stops following; the job keeps running (watch it in the Prefect UI).
-generate pano scene="": up
+generate pano scene="" spacing="0": up
     #!/usr/bin/env bash
     set -euo pipefail
     src=$(ls -d {{assets}}/panos/{{pano}} {{assets}}/panos/{{pano}}.* 2>/dev/null | head -1 || true)
@@ -83,7 +88,8 @@ generate pano scene="": up
         docker compose exec -T generator python submit.py \
             reconstruct-world/dreamworld \
             scene=/workspace/scenes/"$scene" \
-            panos=/workspace/panos/"$(basename "$src")"
+            panos=/workspace/panos/"$(basename "$src")" \
+            spacing={{spacing}}
     else
         cp "$src" {{assets}}/scenes/"$scene"/_input.${src##*.}
         # the generative pipeline reads panorama.png
@@ -101,6 +107,14 @@ generate pano scene="": up
             gpus={{gpus}} steps={{steps}}
     fi
     echo "-> assets/scenes/$scene/world.ply (+ .usdz, .cam.json)"
+
+# Render a walkthrough video following the capture path.
+#   just video h2rc            20s at 30fps
+#   just video h2rc 40         longer
+video scene seconds="20":
+    docker compose exec -T generator python tools/render_video.py \
+        /workspace/scenes/{{scene}} --seconds {{seconds}}
+    @echo "-> assets/scenes/{{scene}}/walkthrough.mp4"
 
 # Inspect the input panoramas in a 360 viewer.
 panoview port="8082":

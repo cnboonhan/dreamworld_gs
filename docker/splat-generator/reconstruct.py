@@ -20,6 +20,7 @@ Two ways to run it:
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import shutil
 import subprocess
@@ -33,6 +34,9 @@ TOOLS = Path("/opt/tools")
 DEPLOYMENT = "dreamworld"
 PANO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 SH_C0 = 0.28209479177387814
+# a gaussian may be this much longer than it is thin before the loss pushes
+# back; flat splats on flat surfaces are legitimate, needles are not
+ANISO_MAX = 8.0
 
 
 # ---------------------------------------------------------------- reprojection
@@ -116,8 +120,56 @@ def reproject(scene: str, panos_dir: str, views: int, size: int) -> dict:
 
 # ------------------------------------------------------------------------ sfm
 
+def standpoints(rec) -> list[np.ndarray]:
+    """One camera centre per panorama, in capture order.
+
+    Views are named <panorama>_<k>, so all views from one 360 shot share a
+    physical position; the median of the group is robust to a stray view.
+    """
+    groups: dict[str, list[np.ndarray]] = {}
+    for _, im in rec.images.items():
+        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+        m = np.asarray(cfw.matrix(), dtype=np.float64)
+        groups.setdefault(im.name.rsplit("_", 1)[0], []).append(-m[:3, :3].T @ m[:3, 3])
+    return [np.median(np.stack(v), 0) for _, v in sorted(groups.items())]
+
+
+def rescale_to_metric(model: Path, spacing: float, logger) -> float:
+    """Put the reconstruction in metres, using the known standpoint spacing.
+
+    SfM recovers geometry only up to scale. If the panoramas were shot a known
+    distance apart, the recovered distance between consecutive standpoints is
+    a ruler: the median ratio converts the whole model to metres, which is
+    what Isaac Sim (and any robot policy) needs.
+    """
+    import pycolmap
+
+    rec = pycolmap.Reconstruction(model)
+    centres = standpoints(rec)
+    if len(centres) < 2:
+        logger.warning("only %d standpoint(s); cannot infer scale", len(centres))
+        return 1.0
+
+    steps = np.linalg.norm(np.diff(np.stack(centres), axis=0), axis=1)
+    median_step = float(np.median(steps))
+    if median_step <= 0:
+        logger.warning("standpoints coincide; cannot infer scale")
+        return 1.0
+
+    scale = spacing / median_step
+    spread = float(np.max(steps) / np.min(steps)) if np.min(steps) > 0 else float("inf")
+    if spread > 3:
+        logger.warning("standpoint spacing varies %.1fx — the median is a poor "
+                       "ruler if the walk was not evenly spaced", spread)
+    rec.transform(pycolmap.Sim3d(scale, pycolmap.Rotation3d(), np.zeros(3)))
+    rec.write(str(model))
+    logger.info("metric scale: %.4f (median step %.4f -> %.2f m)",
+                scale, median_step, spacing)
+    return scale
+
+
 @task(name="2. structure from motion")
-def run_sfm(scene: str) -> dict:
+def run_sfm(scene: str, spacing: float = 0.0) -> dict:
     """COLMAP poses across every view from every panorama.
 
     Exhaustive matching: the views come from a handful of standpoints rather
@@ -168,8 +220,10 @@ def run_sfm(scene: str) -> dict:
         if src.exists():
             src.rename(model / f)
     shutil.rmtree(undist / "stereo", ignore_errors=True)
+
+    scale = rescale_to_metric(model, spacing, logger) if spacing > 0 else 1.0
     return {"registered": best.num_reg_images(), "total": total,
-            "points": best.num_points3D()}
+            "points": best.num_points3D(), "metric_scale": scale}
 
 
 # ---------------------------------------------------------------------- train
@@ -241,7 +295,8 @@ def save_ply(params, path: Path) -> int:
 
 
 @task(name="3. gaussian splatting")
-def train(scene: str, iters: int, downscale: int) -> dict:
+def train(scene: str, iters: int, downscale: int,
+          aniso_weight: float = 0.01) -> dict:
     """Optimise gaussians against the posed views.
 
     Classic rasterization (not antialiased): AA-trained opacities only render
@@ -283,6 +338,10 @@ def train(scene: str, iters: int, downscale: int) -> dict:
            "opacities": 5e-2, "colors": 2.5e-3}
     opts = {k: torch.optim.Adam([v], lr=lrs[k], eps=1e-15) for k, v in params.items()}
     sched = torch.optim.lr_scheduler.ExponentialLR(opts["means"], gamma=0.01 ** (1 / iters))
+    # Leave prune_scale3d at its default. Its threshold is
+    # prune_scale3d * scene_scale, and scene_scale here is the spread of the
+    # capture standpoints, not the size of the room — tightening it to 0.04
+    # pruned legitimate wall and floor splats and cost 23 dB.
     strategy = DefaultStrategy(refine_stop_iter=iters // 2)
     strategy.check_sanity(params, opts)
     state = strategy.initialize_state(scene_scale=scale)
@@ -303,7 +362,14 @@ def train(scene: str, iters: int, downscale: int) -> dict:
         strategy.step_pre_backward(params, opts, state, step, info)
         l1 = (out[0] - gt).abs().mean()
         ssim = ssim_fn(out.permute(0, 3, 1, 2), gt[None].permute(0, 3, 1, 2), data_range=1.0)
-        (0.8 * l1 + 0.2 * (1 - ssim)).backward()
+        loss = 0.8 * l1 + 0.2 * (1 - ssim)
+        # discourage needles rather than only pruning them afterwards: penalise
+        # how far each gaussian's longest axis exceeds its shortest
+        if aniso_weight:
+            scl = torch.exp(params["scales"])
+            ratio = scl.max(dim=1).values / scl.min(dim=1).values.clamp(min=1e-8)
+            loss = loss + aniso_weight * (ratio.clamp(min=ANISO_MAX) - ANISO_MAX).mean()
+        loss.backward()
         strategy.step_post_backward(params, opts, state, step, info, packed=False)
         for o in opts.values():
             o.step(); o.zero_grad(set_to_none=True)
@@ -344,12 +410,24 @@ def export(scene: str) -> dict:
 
 @flow(name="reconstruct-world", log_prints=True)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
-                      iters: int = 15000, downscale: int = 1) -> dict:
-    """scene: output dir; panos: directory of panoramas of one space."""
+                      iters: int = 15000, downscale: int = 1,
+                      aniso_weight: float = 0.01, spacing: float = 0.0) -> dict:
+    """scene: output dir; panos: panoramas of one space.
+
+    spacing: metres between consecutive standpoints, if you walked a known
+    step. Without it the world is geometrically right but unitless; with it
+    the export is metric, which is what a simulator needs.
+    """
     reproject(scene, panos, views, size)
-    run_sfm(scene)
-    stats = train(scene, iters, downscale)
+    sfm = run_sfm(scene, spacing)
+    stats = train(scene, iters, downscale, aniso_weight)
     out = export(scene)
+    if spacing > 0:
+        Path(scene, "world.info.json").write_text(json.dumps({
+            "units": "metres", "standpoint_spacing_m": spacing,
+            "metric_scale": sfm["metric_scale"]}, indent=2))
+        print(f"metric: {sfm['metric_scale']:.4f}x applied "
+              f"({spacing} m between standpoints)")
     print(f"3DGS : {out['ply']}  ({stats['gaussians']:,} gaussians, "
           f"{stats['psnr']} dB)")
     print(f"Isaac: {out['usdz']}")
@@ -365,12 +443,15 @@ def main() -> None:
     one.add_argument("panos")
     one.add_argument("--views", type=int, default=8)
     one.add_argument("--iters", type=int, default=15000)
+    one.add_argument("--spacing", type=float, default=0.0,
+                     help="metres between standpoints (enables metric scale)")
     args = p.parse_args()
 
     if args.mode == "serve":
         reconstruct_world.serve(name=DEPLOYMENT, limit=1)
     else:
-        reconstruct_world(args.scene, args.panos, views=args.views, iters=args.iters)
+        reconstruct_world(args.scene, args.panos, views=args.views,
+                          iters=args.iters, spacing=args.spacing)
 
 
 if __name__ == "__main__":
