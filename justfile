@@ -115,13 +115,16 @@ generate pano scene="" spacing="0.5": up
 # Render a walkthrough video following the capture path.
 #
 # The camera splines through the standpoints the panoramas were shot from,
-# because that is where the scene was actually observed. `just video h2rc 40`
-# for a longer one.
+# because that is where the scene was actually observed.
+#
+#   just video h2rc 40           longer
+#   just video h2rc 20 line      straight, along their best-fit axis
+#   just video h2rc 20 orbit     circle the centre (expect artifacts)
 #
 # Render a walkthrough video following the capture path.
-video scene seconds="20":
+video scene seconds="20" path="capture":
     docker compose exec -T generator python tools/render_video.py \
-        /workspace/scenes/{{scene}} --seconds {{seconds}}
+        /workspace/scenes/{{scene}} --seconds {{seconds}} --path {{path}}
     @echo "-> assets/scenes/{{scene}}/walkthrough.mp4"
 
 # List the panoramas available to generate from.

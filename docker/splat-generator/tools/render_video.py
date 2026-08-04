@@ -6,7 +6,7 @@ observed. Straying far from it is what makes gaussian splats look bad: those
 regions were never constrained by any view.
 
     python render_video.py <scene-dir> [--seconds 20] [--fps 30]
-                           [--orbit] [--height 1200] [--fov 75]
+                           [--path capture|line|orbit] [--fov 75]
 
 Writes <scene>/walkthrough.mp4.
 """
@@ -102,9 +102,11 @@ def main() -> None:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fov", type=float, default=75.0)
-    ap.add_argument("--orbit", action="store_true",
-                    help="circle the scene centre instead of following the "
-                         "capture path (expect artifacts off-path)")
+    ap.add_argument("--path", choices=("capture", "line", "orbit"),
+                    default="capture",
+                    help="capture: spline through the standpoints (default); "
+                         "line: straight, along their best-fit axis; "
+                         "orbit: circle the centre (expect off-path artifacts)")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -117,7 +119,7 @@ def main() -> None:
     centres, up = capture_path(scene / "undistorted" / "sparse" / "0")
     n_frames = int(args.seconds * args.fps)
 
-    if args.orbit:
+    if args.path == "orbit":
         mid = centres.mean(0)
         radius = float(np.linalg.norm(centres - mid, axis=1).max()) * 1.6 + 1e-3
         ang = np.linspace(0, 2 * np.pi, n_frames, endpoint=False)
@@ -125,6 +127,18 @@ def main() -> None:
         eyes = mid + radius * (np.outer(np.cos(ang), basis[0])
                                + np.outer(np.sin(ang), basis[1]))
         targets = np.repeat(mid[None], n_frames, 0)
+    elif args.path == "line":
+        # straight walk along the standpoints' principal axis: the least-
+        # squares line through where the panoramas were actually shot, so the
+        # camera stays as close to observed space as a straight path can
+        centred = centres - centres.mean(0)
+        axis = np.linalg.svd(centred, full_matrices=False)[2][0]
+        t = centred @ axis
+        if t[0] > t[-1]:            # travel in capture order
+            axis, t = -axis, -t
+        mid = centres.mean(0)
+        eyes = np.linspace(mid + axis * t.min(), mid + axis * t.max(), n_frames)
+        targets = eyes + axis * max(1.0, float(t.max() - t.min()) * 0.3)
     else:
         eyes = catmull_rom(centres, n_frames)
         # aim a little ahead along the path so the motion reads as walking
