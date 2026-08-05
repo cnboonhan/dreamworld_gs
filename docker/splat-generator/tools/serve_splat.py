@@ -57,9 +57,14 @@ def add_tour(server, scene: Path) -> None:
     Position is never a free variable here: a capture only constrains the
     space its cameras saw, and flying out of it is what makes a splat look
     broken. So the tour rides the straight line fitted through the
-    standpoints — playing forward on its own, or scrubbed by hand — while you
-    keep hold of the camera's orientation. Each step translates the whole
-    camera frame, so whatever you are looking at stays framed as you move.
+    standpoints — playing forward on its own, or scrubbed by hand — while the
+    direction you are facing stays yours.
+
+    Position is set absolutely from the path each tick, never read back from
+    the client and nudged: a round-trip to the browser takes long enough that
+    read-modify-write races itself, which reads as the camera jumping between
+    standpoints instead of gliding. Only the view *direction* is taken from
+    the client, so turning the camera still works while it moves.
     """
     import threading
 
@@ -71,62 +76,65 @@ def add_tour(server, scene: Path) -> None:
     centres, up = capture_path(model)
     if len(centres) < 2:
         return
-    path, axis = straight_path(centres, 600)
+    path, axis = straight_path(centres, 2000)
     span = float(np.linalg.norm(path[-1] - path[0]))
+    ahead = max(1.0, span * 0.3)
 
     with server.gui.add_folder("tour"):
         play = server.gui.add_checkbox("play", False)
         secs = server.gui.add_slider("seconds end to end", 5.0, 120.0, 1.0, 30.0)
+        bounce = server.gui.add_checkbox("turn around at the end", True)
         where = server.gui.add_slider("along path", 0.0, 1.0, 0.001, 0.0)
         recentre = server.gui.add_button("face along path")
 
-    last = {"pos": np.asarray(path[0], dtype=np.float64)}
+    t = {"v": 0.0, "dir": 1.0}          # authoritative position along the path
 
-    def at(t: float) -> np.ndarray:
-        return path[int(np.clip(t, 0.0, 1.0) * (len(path) - 1))]
+    def at(u: float) -> np.ndarray:
+        return path[int(np.clip(u, 0.0, 1.0) * (len(path) - 1))]
 
-    def face_forward(client) -> None:
-        """Absolute placement: on the path, looking the way it goes."""
-        pos = at(where.value)
-        client.camera.position = pos
-        client.camera.look_at = pos + axis * max(1.0, span * 0.3)
-        client.camera.up_direction = up
-
-    def advance(t: float) -> None:
-        """Translate the camera frame, so the view direction is untouched."""
-        pos = np.asarray(at(t), dtype=np.float64)
-        delta = pos - last["pos"]
-        if not np.any(delta):
-            return
-        for client in server.get_clients().values():
-            client.camera.position = np.asarray(client.camera.position) + delta
-            client.camera.look_at = np.asarray(client.camera.look_at) + delta
-        last["pos"] = pos
+    def move(u: float, reface: bool = False) -> None:
+        pos = at(u)
+        for c in server.get_clients().values():
+            eye = np.asarray(c.camera.position, dtype=np.float64)
+            look = np.asarray(c.camera.look_at, dtype=np.float64)
+            d = look - eye
+            n = float(np.linalg.norm(d))
+            if reface or n < 1e-6:
+                d, n = np.asarray(axis, dtype=np.float64), ahead
+            c.camera.position = pos
+            c.camera.look_at = pos + d / n * n
+            c.camera.up_direction = up
 
     @where.on_update
     def _(_) -> None:
-        advance(where.value)
+        # only react to a human scrubbing; playback updates this for display
+        if abs(where.value - t["v"]) > 0.004:
+            t["v"] = where.value
+            move(t["v"])
 
     @recentre.on_click
     def _(_) -> None:
-        for client in server.get_clients().values():
-            face_forward(client)
-        last["pos"] = np.asarray(at(where.value), dtype=np.float64)
+        move(t["v"], reface=True)
 
     @server.on_client_connect
     def _(client) -> None:
-        face_forward(client)
+        move(t["v"], reface=True)
 
     def playback() -> None:
-        tick = 1 / 30
+        tick, shown = 1 / 30, 0.0
         while True:
             time.sleep(tick)
             if not play.value:
                 continue
-            t = where.value + tick / max(secs.value, 1e-3)
-            where.value = t % 1.0 if t > 1.0 else t
-            if t > 1.0:                       # wrapped: jump without dragging
-                last["pos"] = np.asarray(at(where.value), dtype=np.float64)
+            t["v"] += t["dir"] * tick / max(secs.value, 1e-3)
+            if t["v"] >= 1.0 or t["v"] <= 0.0:
+                if bounce.value:                  # walk back rather than cut
+                    t["dir"] *= -1
+                t["v"] = float(np.clip(t["v"], 0.0, 1.0)) if bounce.value else 0.0
+            move(t["v"])
+            if abs(t["v"] - shown) > 0.02:        # the slider is a readout;
+                shown = t["v"]                    # updating it 30x/s is noise
+                where.value = t["v"]
 
     threading.Thread(target=playback, daemon=True).start()
 
