@@ -736,6 +736,90 @@ let defaultViewMatrix = [
     0.03, 6.55, 1,
 ];
 let viewMatrix = defaultViewMatrix;
+
+// Tour: the camera rides the line the panoramas were shot along, and you look
+// around from it like a panorama viewer. Off that line nothing constrained the
+// geometry, so free flight is where a splat starts to look broken — the tour is
+// therefore how a scene opens, and you leave it deliberately.
+//
+// Heading is kept as yaw/pitch about the scene's own up vector rather than as
+// an accumulated rotation, so the horizon never rolls however far you drag.
+const tour = {
+    points: null, t: 0, dir: 1, on: false, playing: false, seconds: 10,
+    up: null, a: null, b: null, yaw: 0, pitch: 0, release: null,
+};
+const MOVE_KEYS = new Set([
+    "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space",
+]);
+const PITCH_LIMIT = 85 * Math.PI / 180;   // as the pano viewer clamps it
+
+const dot3 = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+const cross3 = (u, v) => [u[1] * v[2] - u[2] * v[1],
+                          u[2] * v[0] - u[0] * v[2],
+                          u[0] * v[1] - u[1] * v[0]];
+function norm3(v) {
+    const n = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / n, v[1] / n, v[2] / n];
+}
+
+function tourInit(p) {
+    tour.points = p.points;
+    const n = p.points.length;
+    const up = norm3(p.up && p.up.length === 3 ? p.up : [0, -1, 0]);
+    // level the direction of travel against up: that is yaw = 0
+    const travel = [0, 1, 2].map((i) => p.points[n - 1][i] - p.points[0][i]);
+    let a = [0, 1, 2].map((i) => travel[i] - up[i] * dot3(travel, up));
+    if (Math.hypot(...a) < 1e-6) a = cross3(up, [1, 0, 0]);
+    a = norm3(a);
+    tour.up = up;
+    tour.a = a;
+    tour.b = norm3(cross3(up, a));
+    // start facing wherever the spawn camera faced: row 3 of the world->camera
+    // rotation is the forward axis
+    const f = norm3([viewMatrix[2], viewMatrix[6], viewMatrix[10]]);
+    tour.yaw = Math.atan2(dot3(f, tour.b), dot3(f, tour.a));
+    tour.pitch = Math.asin(Math.min(1, Math.max(-1, dot3(f, up))));
+    tour.on = true;
+    tour.playing = true;
+}
+
+function tourLook(dx, dy) {
+    // same feel as the 360 viewer: drag moves the world with your hand
+    const s = (Math.PI / 2) / innerHeight;
+    tour.yaw += dx * s;
+    tour.pitch = Math.max(-PITCH_LIMIT,
+                          Math.min(PITCH_LIMIT, tour.pitch + dy * s));
+}
+
+function tourPlace(t) {
+    const pts = tour.points, n = pts.length;
+    const f = Math.min(Math.max(t, 0), 1) * (n - 1);
+    const i = Math.floor(f), k = f - i;
+    const A = pts[i], B = pts[Math.min(i + 1, n - 1)];
+    const p = [A[0] + (B[0] - A[0]) * k,
+               A[1] + (B[1] - A[1]) * k,
+               A[2] + (B[2] - A[2]) * k];
+
+    const cp = Math.cos(tour.pitch), sp = Math.sin(tour.pitch);
+    const cy = Math.cos(tour.yaw), sy = Math.sin(tour.yaw);
+    const fwd = norm3([0, 1, 2].map((j) =>
+        cp * (cy * tour.a[j] + sy * tour.b[j]) + sp * tour.up[j]));
+    // OpenCV camera basis, matching render_video.look_at
+    const right = norm3(cross3(fwd, tour.up));
+    const down = cross3(fwd, right);
+
+    const m = new Array(16).fill(0);
+    m[0] = right[0]; m[4] = right[1]; m[8] = right[2];
+    m[1] = down[0];  m[5] = down[1];  m[9] = down[2];
+    m[2] = fwd[0];   m[6] = fwd[1];   m[10] = fwd[2];
+    m[12] = -dot3(right, p);
+    m[13] = -dot3(down, p);
+    m[14] = -dot3(fwd, p);
+    m[15] = 1;
+    viewMatrix = m;
+}
+
 async function main() {
     let carousel = true;
     const params = new URLSearchParams(location.search);
@@ -761,6 +845,50 @@ async function main() {
             }
         } catch (err) {}
     }
+
+    // the capture path, for the tour: <name>.ply -> <name>.path.json
+    // The tour is how a scene opens: it plays straight away, gliding along the
+    // line the panoramas were shot from. That is the only part of the world any
+    // camera actually observed, so it is where the splat looks right.
+    try {
+        const pathRes = await fetch(url.href.replace(/\.ply$/, "") + ".path.json");
+        if (pathRes.ok) {
+            const p = await pathRes.json();
+            if (Array.isArray(p.points) && p.points.length > 1) {
+                tourInit(p);
+                const bar = document.getElementById("tour");
+                const play = document.getElementById("tourPlay");
+                const at = document.getElementById("tourAt");
+                play.onclick = () => {
+                    tour.playing = !tour.playing;
+                    play.textContent = tour.playing ? "pause" : "play";
+                    if (tour.playing) tour.on = true;
+                    bar.classList.toggle("on", tour.on);
+                };
+                at.oninput = (e) => {
+                    tour.t = e.target.value / 1000;
+                    tour.on = true;
+                    bar.classList.add("on");
+                };
+                document.getElementById("tourSecs").oninput =
+                    (e) => { tour.seconds = +e.target.value; };
+                // hand the camera back the moment you drive it yourself,
+                // otherwise the path would overwrite you every frame
+                tour.release = () => {
+                    if (!tour.on) return;
+                    tour.on = tour.playing = false;
+                    play.textContent = "play";
+                    bar.classList.remove("on");
+                };
+                document.getElementById("tourOff").onclick = tour.release;
+                bar.style.display = "flex";
+                bar.classList.add("on");
+                play.textContent = "pause";
+                carousel = false;       // the tour owns the camera now
+            }
+        }
+    } catch (err) {}
+
     const req = await fetch(url, {
         mode: "cors", // no-cors, *cors, same-origin
         credentials: "omit", // include, *same-origin, omit
@@ -935,6 +1063,9 @@ async function main() {
     window.addEventListener("keydown", (e) => {
         // if (document.activeElement != document.body) return;
         carousel = false;
+        // moving under your own steam ends the tour: otherwise the path would
+        // overwrite the position every frame and the keys would look dead
+        if (MOVE_KEYS.has(e.code) && tour.release) tour.release();
         if (!activeKeys.includes(e.code)) activeKeys.push(e.code);
         if (/\d/.test(e.key)) {
             currentCameraIndex = parseInt(e.key);
@@ -974,6 +1105,7 @@ async function main() {
         "wheel",
         (e) => {
             carousel = false;
+            if (tour.release) tour.release();
             e.preventDefault();
             const lineHeight = 10;
             const scale =
@@ -1032,7 +1164,11 @@ async function main() {
 
     canvas.addEventListener("mousemove", (e) => {
         e.preventDefault();
-        if (down == 1) {
+        if (down == 1 && tour.on) {
+            tourLook(e.clientX - startX, e.clientY - startY);
+            startX = e.clientX;
+            startY = e.clientY;
+        } else if (down == 1) {
             let inv = invert4(viewMatrix);
             let dx = (5 * (e.clientX - startX)) / innerWidth;
             let dy = (5 * (e.clientY - startY)) / innerHeight;
@@ -1050,6 +1186,7 @@ async function main() {
             startX = e.clientX;
             startY = e.clientY;
         } else if (down == 2) {
+            if (tour.release) tour.release();
             let inv = invert4(viewMatrix);
             // inv = rotateY(inv, );
             // let preY = inv[13];
@@ -1100,7 +1237,12 @@ async function main() {
         "touchmove",
         (e) => {
             e.preventDefault();
-            if (e.touches.length === 1 && down) {
+            if (e.touches.length === 1 && down && tour.on) {
+                tourLook(e.touches[0].clientX - startX,
+                         e.touches[0].clientY - startY);
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
+            } else if (e.touches.length === 1 && down) {
                 let inv = invert4(viewMatrix);
                 let dx = (4 * (e.touches[0].clientX - startX)) / innerWidth;
                 let dy = (4 * (e.touches[0].clientY - startY)) / innerHeight;
@@ -1118,6 +1260,7 @@ async function main() {
                 startX = e.touches[0].clientX;
                 startY = e.touches[0].clientY;
             } else if (e.touches.length === 2) {
+                if (tour.release) tour.release();
                 // alert('beep')
                 const dtheta =
                     Math.atan2(startY - altY, startX - altX) -
@@ -1348,6 +1491,21 @@ async function main() {
             inv = rotate4(inv, -0.6 * t, 0, 1, 0);
 
             viewMatrix = invert4(inv);
+        }
+
+        if (tour.on) {
+            if (tour.playing) {
+                // background tabs throttle rAF, so cap the step: coming back
+                // should resume the tour, not teleport across the scene
+                const dt = Math.min((now - lastFrame) / 1000, 0.1);
+                tour.t += dt / tour.seconds * tour.dir;
+                if (tour.t >= 1 || tour.t <= 0) {
+                    tour.dir *= -1;                 // walk back, do not cut
+                    tour.t = Math.min(Math.max(tour.t, 0), 1);
+                }
+                document.getElementById("tourAt").value = tour.t * 1000;
+            }
+            tourPlace(tour.t);
         }
 
         if (isJumping) {
