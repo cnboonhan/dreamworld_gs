@@ -794,7 +794,10 @@ function tourLook(dx, dy) {
 
 function tourPlace(t) {
     const pts = tour.points, n = pts.length;
-    const f = Math.min(Math.max(t, 0), 1) * (n - 1);
+    // a non-finite t would index the array with NaN and read undefined, so
+    // pin it before it can reach pts[]
+    const u = Number.isFinite(t) ? Math.min(Math.max(t, 0), 1) : 0;
+    const f = u * (n - 1);
     const i = Math.floor(f), k = f - i;
     const A = pts[i], B = pts[Math.min(i + 1, n - 1)];
     const p = [A[0] + (B[0] - A[0]) * k,
@@ -1062,6 +1065,9 @@ async function main() {
 
     window.addEventListener("keydown", (e) => {
         // if (document.activeElement != document.body) return;
+        // arrow keys on the tour's own sliders adjust them; they must not also
+        // fly the camera and drop you off the path
+        if (e.target && e.target.closest && e.target.closest("#tour")) return;
         carousel = false;
         // moving under your own steam ends the tour: otherwise the path would
         // overwrite the position every frame and the keys would look dead
@@ -1495,9 +1501,13 @@ async function main() {
 
         if (tour.on) {
             if (tour.playing) {
-                // background tabs throttle rAF, so cap the step: coming back
-                // should resume the tour, not teleport across the scene
-                const dt = Math.min((now - lastFrame) / 1000, 0.1);
+                // the first frame is called by hand, with no timestamp; after
+                // that, background tabs throttle rAF. Both are handled by the
+                // same guard: no time, no step — and never a step big enough
+                // to teleport across the scene on the way back.
+                const dt = now > lastFrame
+                    ? Math.min((now - lastFrame) / 1000, 0.1)
+                    : 0;
                 tour.t += dt / tour.seconds * tour.dir;
                 if (tour.t >= 1 || tour.t <= 0) {
                     tour.dir *= -1;                 // walk back, do not cut
