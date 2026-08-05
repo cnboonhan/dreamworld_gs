@@ -82,28 +82,43 @@ def add_tour(server, scene: Path) -> None:
 
     with server.gui.add_folder("tour"):
         play = server.gui.add_checkbox("play", False)
-        secs = server.gui.add_slider("seconds end to end", 5.0, 120.0, 1.0, 30.0)
+        secs = server.gui.add_slider("seconds end to end", 2.0, 60.0, 0.5, 10.0)
         bounce = server.gui.add_checkbox("turn around at the end", True)
         where = server.gui.add_slider("along path", 0.0, 1.0, 0.001, 0.0)
         recentre = server.gui.add_button("face along path")
 
     t = {"v": 0.0, "dir": 1.0}          # authoritative position along the path
+    # Where each client is looking, also authoritative here. Reading it back
+    # from the browser every tick meant a stale reply could overwrite a fresh
+    # turn of the camera, and the view flicked between the two.
+    facing: dict[int, np.ndarray] = {}
+    echo: dict[int, np.ndarray] = {}    # what we last sent, to spot our own reply
 
     def at(u: float) -> np.ndarray:
         return path[int(np.clip(u, 0.0, 1.0) * (len(path) - 1))]
 
+    def unit(v: np.ndarray) -> np.ndarray:
+        n = float(np.linalg.norm(v))
+        return np.asarray(axis, dtype=np.float64) if n < 1e-9 else v / n
+
     def move(u: float, reface: bool = False) -> None:
         pos = at(u)
         for c in server.get_clients().values():
-            eye = np.asarray(c.camera.position, dtype=np.float64)
-            look = np.asarray(c.camera.look_at, dtype=np.float64)
-            d = look - eye
-            n = float(np.linalg.norm(d))
-            if reface or n < 1e-6:
-                d, n = np.asarray(axis, dtype=np.float64), ahead
+            if reface or c.client_id not in facing:
+                facing[c.client_id] = unit(np.asarray(axis, dtype=np.float64))
+            d = facing[c.client_id]
             c.camera.position = pos
-            c.camera.look_at = pos + d / n * n
-            c.camera.up_direction = up
+            c.camera.look_at = pos + d * ahead
+            echo[c.client_id] = d
+
+    def watch(client) -> None:
+        @client.camera.on_update
+        def _(_) -> None:
+            d = unit(np.asarray(client.camera.look_at, dtype=np.float64)
+                     - np.asarray(client.camera.position, dtype=np.float64))
+            prev = echo.get(client.client_id)
+            if prev is None or float(np.dot(d, prev)) < 0.9999:
+                facing[client.client_id] = d      # a real turn, not our echo
 
     @where.on_update
     def _(_) -> None:
@@ -118,6 +133,8 @@ def add_tour(server, scene: Path) -> None:
 
     @server.on_client_connect
     def _(client) -> None:
+        client.camera.up_direction = up
+        watch(client)
         move(t["v"], reface=True)
 
     def playback() -> None:
