@@ -51,7 +51,7 @@ def load_splat(ply: Path, device: str) -> dict:
     return g
 
 
-def add_tour(server, scene: Path) -> None:
+def add_tour(server, scene: Path, viewer=None) -> None:
     """Drive the camera along the capture path, leaving the view free.
 
     Position is never a free variable here: a capture only constrains the
@@ -82,6 +82,12 @@ def add_tour(server, scene: Path) -> None:
 
     with server.gui.add_folder("tour"):
         play = server.gui.add_checkbox("play", False)
+        # Rendering is not the constraint — 763k gaussians draw at ~190 fps at
+        # 1080p. Each frame still costs a JPEG and two network hops, so over a
+        # tunnel the motion is only as smooth as the link. Dropping the
+        # resolution while moving buys frames back; it snaps sharp on stop.
+        moving_res = server.gui.add_slider("resolution while moving",
+                                           256, 1600, 64, 720)
         secs = server.gui.add_slider("seconds end to end", 2.0, 60.0, 0.5, 10.0)
         bounce = server.gui.add_checkbox("turn around at the end", True)
         where = server.gui.add_slider("along path", 0.0, 1.0, 0.001, 0.0)
@@ -137,6 +143,14 @@ def add_tour(server, scene: Path) -> None:
         watch(client)
         move(t["v"], reface=True)
 
+    def set_res(px: int) -> None:
+        if viewer is not None:
+            viewer.render_tab_state.viewer_res = int(px)
+
+    @play.on_update
+    def _(_) -> None:
+        set_res(moving_res.value if play.value else 2048)
+
     def playback() -> None:
         tick, shown = 1 / 30, 0.0
         while True:
@@ -189,8 +203,8 @@ def main() -> None:
         return rgb[0].clamp(0, 1).cpu().numpy()
 
     server = viser.ViserServer(port=args.port, verbose=False)
-    nerfview.Viewer(server=server, render_fn=render, mode="rendering")
-    add_tour(server, args.scene)
+    viewer = nerfview.Viewer(server=server, render_fn=render, mode="rendering")
+    add_tour(server, args.scene, viewer)
     print(f"serving {args.scene.name} on :{args.port}", flush=True)
     while True:
         time.sleep(1)
