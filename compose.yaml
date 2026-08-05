@@ -3,14 +3,8 @@
 #
 #   prefect    long-running: job orchestration + UI on :4200
 #   vlm        long-running: plans camera trajectories, captions views
-#   panoviewer long-running: 360 viewer for the input panoramas
 #   viewer     long-running: WebGL splat viewer for every generated world
-#
-# Two ways to look at a world, and the difference matters. `viewer` ships the
-# ply to the browser, which draws it locally: smooth to fly, but WebGL sorts
-# splats approximately. `just serve <scene>` renders with the same CUDA
-# rasteriser that trained the scene and streams frames, which is faithful but
-# only as smooth as the network round-trip.
+#   panoviewer long-running: 360 viewer for the input panoramas
 #   generator  long-running: waits for jobs, runs the 6-stage pipeline
 #
 # Nothing here reaches the network at runtime: model weights are mounted from
@@ -94,7 +88,7 @@ services:
     image: dreamworld/splat-viewer:latest
     container_name: dreamworld-viewer
     ports:
-      - "${DW_VIEWER_PORT:-8080}:80"
+      - "${DW_VIEWER_PORT:-8081}:80"
     volumes:
       - ./assets/scenes:/usr/share/nginx/html/files:ro
     restart: unless-stopped
