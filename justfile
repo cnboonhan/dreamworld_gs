@@ -3,7 +3,7 @@
 #   just setup                       one-time: fetch weights + build images
 #   just up                          start everything, print the URLs
 #   just generate office             assets/panos/office/ -> a world
-#   just serve office                view it, rendered by gsplat on the GPU
+#   just serve office                view it rendered by gsplat (faithful)
 #   just video office                walkthrough mp4 along the capture path
 #
 # Services live in compose.yaml; these recipes drive them.
@@ -48,11 +48,12 @@ up: _env
     docker compose up -d --wait
     @echo
     @echo "  jobs + logs   http://localhost:4200"
+    @echo "  worlds        http://localhost:8080/?url=files/<scene>/world.ply"
     @echo "  panoramas     http://localhost:8082"
-    @echo "  worlds        just serve <scene>   -> http://localhost:8081"
+    @echo "  faithful      just serve <scene>   -> http://localhost:8081"
     @echo
-    @echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
-    @echo "              -L 8082:localhost:8082 <this-host>"
+    @echo "  remote? ssh -L 4200:localhost:4200 -L 8080:localhost:8080 \\"
+    @echo "              -L 8081:localhost:8081 -L 8082:localhost:8082 <this-host>"
 
 # Stop everything.
 down:

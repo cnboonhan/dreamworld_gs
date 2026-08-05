@@ -24,7 +24,7 @@ just up                   # start the stack: prefect, vlm, generator, viewer
 
 cp my_pano.png assets/panos/
 just generate my_pano     # -> assets/scenes/my_pano/{world.ply,world.usdz}
-just serve my_pano        # view it at http://localhost:8081
+just serve my_pano        # inspect it faithfully at http://localhost:8081
 ```
 
 Everything after `just setup` runs **fully offline** — containers mount model
@@ -58,6 +58,10 @@ docker/
       threedgrut/              vendored 3dgrut export subtree (Apache 2.0)
       serve_splat.py           gsplat rendering streamed to a browser
       render_video.py          walkthrough along the capture path
+  splat-viewer/                nginx + WebGL splat viewer (CPU) — build context
+    splat-viewer.Dockerfile
+    nginx.conf
+    www/                       vendored antimatter15/splat viewer
   pano-viewer/                 nginx + WebGL 360 viewer (CPU) — build context
     pano-viewer.Dockerfile
     nginx.conf
@@ -86,12 +90,21 @@ override it at build time with
 | `prefect` | job queue + UI on :4200 — run history, per-stage logs, retries |
 | `vlm` | Qwen3-VL on GPU 0: picks navigation targets, captions rendered views |
 | `generator` | waits for jobs, runs the pipeline on the remaining GPUs |
+| `viewer` | WebGL splat viewer, every world at once, on :8080 |
 | `panoviewer` | 360 viewer for the input panoramas in `assets/panos/` on :8082 |
 
-Worlds are viewed with `just serve <scene>`, which renders them on the GPU
-with gsplat — the same rasteriser that trained them — and streams frames to
-the browser on :8081. A WebGL viewer reimplements splatting with approximate
-sorting; this shows what was actually reconstructed.
+Two ways to look at a world, and they answer different questions:
+
+| | `viewer` (:8080) | `just serve <scene>` (:8081) |
+| --- | --- | --- |
+| Where it draws | your browser, from the ply | this GPU, frames streamed |
+| Motion | smooth — no round-trip | as smooth as the network |
+| Fidelity | WebGL, approximate sorting | the rasteriser that trained it |
+| Scenes | all of them | one, and it holds a GPU |
+| Camera | free flight | rides the capture path, view free |
+
+Use :8080 to move around, :8081 when you need to trust what you are seeing.
+For motion with neither compromise, render a walkthrough: `just video <scene>`.
 
 ```bash
 just panos                     # what's available to build from
