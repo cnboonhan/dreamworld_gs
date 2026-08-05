@@ -52,14 +52,17 @@ def load_splat(ply: Path, device: str) -> dict:
 
 
 def add_tour(server, scene: Path) -> None:
-    """A slider that walks the camera along the capture path.
+    """Drive the camera along the capture path, leaving the view free.
 
-    Free flight is the honest way to inspect a reconstruction and also the
-    quickest way to end up somewhere no camera ever stood, where the geometry
-    was never constrained and everything smears. The tour holds the camera to
-    the straight line fitted through the standpoints — the same path the
-    rendered walkthrough takes, so the two agree.
+    Position is never a free variable here: a capture only constrains the
+    space its cameras saw, and flying out of it is what makes a splat look
+    broken. So the tour rides the straight line fitted through the
+    standpoints — playing forward on its own, or scrubbed by hand — while you
+    keep hold of the camera's orientation. Each step translates the whole
+    camera frame, so whatever you are looking at stays framed as you move.
     """
+    import threading
+
     from render_video import capture_path, straight_path
 
     model = scene / "undistorted" / "sparse" / "0"
@@ -68,39 +71,64 @@ def add_tour(server, scene: Path) -> None:
     centres, up = capture_path(model)
     if len(centres) < 2:
         return
-    path, _ = straight_path(centres, 600)
+    path, axis = straight_path(centres, 600)
+    span = float(np.linalg.norm(path[-1] - path[0]))
 
     with server.gui.add_folder("tour"):
-        follow = server.gui.add_checkbox("stay on capture path", False)
-        where = server.gui.add_slider("along path", 0.0, 1.0, 0.002, 0.0)
-        step = server.gui.add_button_group("standpoint", ("prev", "next"))
+        play = server.gui.add_checkbox("play", False)
+        secs = server.gui.add_slider("seconds end to end", 5.0, 120.0, 1.0, 30.0)
+        where = server.gui.add_slider("along path", 0.0, 1.0, 0.001, 0.0)
+        recentre = server.gui.add_button("face along path")
 
-    def place(t: float) -> None:
-        i = int(np.clip(t, 0, 1) * (len(path) - 1))
-        eye = path[i]
-        ahead = path[(i + len(path) // 60) % len(path)]
+    last = {"pos": np.asarray(path[0], dtype=np.float64)}
+
+    def at(t: float) -> np.ndarray:
+        return path[int(np.clip(t, 0.0, 1.0) * (len(path) - 1))]
+
+    def face_forward(client) -> None:
+        """Absolute placement: on the path, looking the way it goes."""
+        pos = at(where.value)
+        client.camera.position = pos
+        client.camera.look_at = pos + axis * max(1.0, span * 0.3)
+        client.camera.up_direction = up
+
+    def advance(t: float) -> None:
+        """Translate the camera frame, so the view direction is untouched."""
+        pos = np.asarray(at(t), dtype=np.float64)
+        delta = pos - last["pos"]
+        if not np.any(delta):
+            return
         for client in server.get_clients().values():
-            client.camera.position = eye
-            client.camera.look_at = ahead
-            client.camera.up_direction = up
+            client.camera.position = np.asarray(client.camera.position) + delta
+            client.camera.look_at = np.asarray(client.camera.look_at) + delta
+        last["pos"] = pos
 
     @where.on_update
     def _(_) -> None:
-        if follow.value:
-            place(where.value)
+        advance(where.value)
 
-    @follow.on_update
+    @recentre.on_click
     def _(_) -> None:
-        if follow.value:
-            place(where.value)
+        for client in server.get_clients().values():
+            face_forward(client)
+        last["pos"] = np.asarray(at(where.value), dtype=np.float64)
 
-    @step.on_click
-    def _(_) -> None:
-        n = len(centres)
-        delta = (1.0 / n) * (1 if step.value == "next" else -1)
-        where.value = float(np.clip(where.value + delta, 0.0, 1.0))
-        follow.value = True
-        place(where.value)
+    @server.on_client_connect
+    def _(client) -> None:
+        face_forward(client)
+
+    def playback() -> None:
+        tick = 1 / 30
+        while True:
+            time.sleep(tick)
+            if not play.value:
+                continue
+            t = where.value + tick / max(secs.value, 1e-3)
+            where.value = t % 1.0 if t > 1.0 else t
+            if t > 1.0:                       # wrapped: jump without dragging
+                last["pos"] = np.asarray(at(where.value), dtype=np.float64)
+
+    threading.Thread(target=playback, daemon=True).start()
 
 
 def main() -> None:
