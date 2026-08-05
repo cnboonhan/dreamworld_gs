@@ -3,6 +3,7 @@
 #   just setup                       one-time: fetch weights + build images
 #   just up                          start everything, print the URLs
 #   just generate office             assets/panos/office/ -> a world
+#   just serve office                view it, rendered by gsplat on the GPU
 #   just video office                walkthrough mp4 along the capture path
 #
 # Services live in compose.yaml; these recipes drive them.
@@ -47,8 +48,8 @@ up: _env
     docker compose up -d --wait
     @echo
     @echo "  jobs + logs   http://localhost:4200"
-    @echo "  worlds        http://localhost:8081/?url=files/<scene>/world.ply"
     @echo "  panoramas     http://localhost:8082"
+    @echo "  worlds        just serve <scene>   -> http://localhost:8081"
     @echo
     @echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
     @echo "              -L 8082:localhost:8082 <this-host>"
@@ -114,6 +115,17 @@ generate pano scene="" spacing="0.5": up
 
 # Render a walkthrough video following the capture path.
 #
+# The browser viewer on :8081 renders splats itself in WebGL, with
+# approximate sorting and DC colour only. This renders with gsplat — the same
+# CUDA rasteriser that trained the scene — and ships frames to the browser,
+# so what you see matches the training-time appearance. Costs a GPU while
+# open. Ctrl-C to stop.
+#
+# Inspect a world with the real rasteriser (http://localhost:8081).
+serve scene port="8081":
+    docker compose exec generator python tools/serve_splat.py \
+        /workspace/scenes/{{scene}} --port {{port}}
+
 # The camera splines through the standpoints the panoramas were shot from,
 # because that is where the scene was actually observed.
 #

@@ -3,8 +3,10 @@
 #
 #   prefect    long-running: job orchestration + UI on :4200
 #   vlm        long-running: plans camera trajectories, captions views
-#   viewer     long-running: serves generated worlds over HTTP
 #   panoviewer long-running: 360 viewer for the input panoramas
+#
+# Worlds are viewed with `just serve <scene>`, which renders them with gsplat
+# on the GPU rather than reimplementing splatting in the browser.
 #   generator  long-running: waits for jobs, runs the 6-stage pipeline
 #
 # Nothing here reaches the network at runtime: model weights are mounted from
@@ -79,18 +81,6 @@ services:
       timeout: 5s
       start_period: 15m           # first start loads ~17GB from disk
       retries: 3
-    restart: unless-stopped
-
-  viewer:
-    build:
-      context: ./docker/splat-viewer
-      dockerfile: splat-viewer.Dockerfile
-    image: dreamworld/splat-viewer:latest
-    container_name: dreamworld-viewer
-    ports:
-      - "${DW_VIEWER_PORT:-8081}:80"
-    volumes:
-      - ./assets/scenes:/usr/share/nginx/html/files:ro
     restart: unless-stopped
 
   panoviewer:
