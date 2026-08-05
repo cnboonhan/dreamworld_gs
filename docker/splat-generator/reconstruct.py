@@ -72,12 +72,13 @@ def equirect_to_pinhole(pano: np.ndarray, yaw: float, pitch: float,
 
 
 @task(name="1. reproject")
-def reproject(scene: str, panos_dir: str, views: int, size: int) -> dict:
+def reproject(scene: str, panos_dir: str, views: int, size: int,
+              fov: float = 100.0) -> dict:
     """Each panorama -> `views` overlapping pinhole images.
 
-    Pinhole views are what SfM and 3DGS expect; a 90 degree FOV on a ring of
-    yaws (plus up/down tilts) keeps neighbouring views overlapping enough for
-    feature matching.
+    Pinhole views are what SfM and 3DGS expect. A wide field of view on a
+    ring of yaws (plus tilts) keeps neighbouring standpoints sharing features:
+    too narrow and the reconstruction fragments where the overlap runs out.
     """
     import cv2
     from PIL import Image
@@ -112,7 +113,7 @@ def reproject(scene: str, panos_dir: str, views: int, size: int) -> dict:
             logger.warning("%s is %dx%d (not 2:1) — reprojection assumes "
                            "equirectangular", src.name, w, h)
         for k, (yaw, pitch) in enumerate(angles):
-            view = equirect_to_pinhole(pano, yaw, pitch, 90.0, size)
+            view = equirect_to_pinhole(pano, yaw, pitch, fov, size)
             cv2.imwrite(str(out / f"{src.stem}_{k:03d}.jpg"), view,
                         [cv2.IMWRITE_JPEG_QUALITY, 95])
             n += 1
@@ -136,6 +137,59 @@ def standpoints(rec) -> list[np.ndarray]:
         m = np.asarray(cfw.matrix(), dtype=np.float64)
         groups.setdefault(im.name.rsplit("_", 1)[0], []).append(-m[:3, :3].T @ m[:3, 3])
     return [np.median(np.stack(v), 0) for _, v in sorted(groups.items())]
+
+
+def standpoint_map(rec) -> dict:
+    """panorama name -> its camera centre."""
+    groups: dict[str, list[np.ndarray]] = {}
+    for _, im in rec.images.items():
+        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+        m = np.asarray(cfw.matrix(), dtype=np.float64)
+        groups.setdefault(im.name.rsplit("_", 1)[0], []).append(-m[:3, :3].T @ m[:3, 3])
+    return {k: np.median(np.stack(v), 0) for k, v in groups.items()}
+
+
+def pick_model(sparse: Path, logger):
+    """Largest reconstruction, and a warning when the capture fragmented.
+
+    A walk whose standpoints stop overlapping — through a doorway, past a
+    blank wall — breaks the feature chain and COLMAP starts a second model.
+    Only the largest is usable: fragments never share an image, so aligning
+    them relies on the few panoramas that appear in both, and measured on
+    this capture that alignment was off by 15% of a standpoint step. Merging
+    on those terms doubles geometry rather than extending it. What helps is
+    knowing it happened, and where.
+    """
+    import pycolmap
+
+    models = []
+    for d in sorted(sparse.iterdir()):
+        if d.is_dir():
+            try:
+                models.append((d, pycolmap.Reconstruction(d)))
+            except Exception:
+                continue
+    if not models:
+        return None, None, {}
+    models.sort(key=lambda kv: -kv[1].num_reg_images())
+    best_dir, best = models[0]
+
+    info = {"models": len(models)}
+    if len(models) > 1:
+        unused = sum(r.num_reg_images() for _, r in models[1:])
+        info["unused_views"] = unused
+        logger.warning("SfM split into %d models (%s views); using the "
+                       "largest, so %d registered views are unused",
+                       len(models), ", ".join(str(r.num_reg_images())
+                                              for _, r in models), unused)
+        for d, r in models[1:]:
+            panos = sorted(standpoint_map(r))
+            if panos:
+                logger.warning("  model %s covers %d panoramas, %s .. %s",
+                               d.name, len(panos), panos[0][-13:], panos[-1][-13:])
+        logger.warning("  the break is between those ranges: shoot extra "
+                       "standpoints there so the chain reconnects")
+    return best_dir, best, info
 
 
 def rescale_to_metric(model: Path, spacing: float, logger) -> float:
@@ -190,8 +244,18 @@ def run_sfm(scene: str, spacing: float = 0.0) -> dict:
     shutil.rmtree(sparse, ignore_errors=True)
     sparse.mkdir(parents=True)
 
-    logger.info("feature extraction")
-    pycolmap.extract_features(db, images, camera_mode=pycolmap.CameraMode.SINGLE)
+    # Defaults are tuned for textured outdoor scenes. Interiors are full of
+    # bare wall and plain floor, where the default peak threshold finds
+    # almost nothing — so lower it and allow more features per view.
+    sift = pycolmap.SiftExtractionOptions()
+    sift.max_num_features = 16384
+    sift.peak_threshold = 0.002
+    sift.estimate_affine_shape = True   # helps on surfaces seen at a slant
+    sift.domain_size_pooling = True
+    logger.info("feature extraction (peak %.4f, up to %d features/view)",
+                sift.peak_threshold, sift.max_num_features)
+    pycolmap.extract_features(db, images, camera_mode=pycolmap.CameraMode.SINGLE,
+                              sift_options=sift)
     n_img = len(list(images.iterdir()))
     logger.info("exhaustive matching over %d views (%d pairs)",
                 n_img, n_img * (n_img - 1) // 2)
@@ -205,7 +269,8 @@ def run_sfm(scene: str, spacing: float = 0.0) -> dict:
             "SfM found no reconstruction — the panoramas probably do not "
             "overlap enough. Shoot standpoints closer together.")
 
-    best_id, best = max(recs.items(), key=lambda kv: kv[1].num_reg_images())
+    best_dir, best, frag = pick_model(sparse, logger)
+    best_id = best_dir.name
     total = len(list(images.iterdir()))
     logger.info("registered %d/%d views, %d points, %.2f px reproj error",
                 best.num_reg_images(), total, best.num_points3D(),
@@ -227,7 +292,7 @@ def run_sfm(scene: str, spacing: float = 0.0) -> dict:
 
     scale = rescale_to_metric(model, spacing, logger) if spacing > 0 else 1.0
     return {"registered": best.num_reg_images(), "total": total,
-            "points": best.num_points3D(), "metric_scale": scale}
+            "points": best.num_points3D(), "metric_scale": scale, **frag}
 
 
 # ---------------------------------------------------------------------- train
@@ -420,14 +485,15 @@ def export(scene: str) -> dict:
 @flow(name="reconstruct-world", log_prints=True)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
                       iters: int = 15000, downscale: int = 1,
-                      aniso_weight: float = 0.0, spacing: float = 0.5) -> dict:
+                      aniso_weight: float = 0.0, spacing: float = 0.5,
+                      fov: float = 100.0) -> dict:
     """scene: output dir; panos: panoramas of one space.
 
     spacing: metres between consecutive standpoints. Defaults to the 0.5 m
     we walk; pass 0 to leave the world unitless. SfM is scale-free, so this
     is what makes the export metric, which is what a simulator needs.
     """
-    reproject(scene, panos, views, size)
+    reproject(scene, panos, views, size, fov)
     sfm = run_sfm(scene, spacing)
     stats = train(scene, iters, downscale, aniso_weight)
     out = export(scene)
