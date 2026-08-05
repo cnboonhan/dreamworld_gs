@@ -126,15 +126,16 @@ serve scene port="8081":
     docker compose exec generator python tools/serve_splat.py \
         /workspace/scenes/{{scene}} --port {{port}}
 
-# The camera splines through the standpoints the panoramas were shot from,
-# because that is where the scene was actually observed.
+# The camera travels the straight line fitted through the standpoints the
+# panoramas were shot from, because that is where the scene was observed.
+# The viewer's tour uses the same path.
 #
 #   just video h2rc 40           longer
-#   just video h2rc 20 line      straight, along their best-fit axis
+#   just video h2rc 20 spline    weave through each standpoint exactly
 #   just video h2rc 20 orbit     circle the centre (expect artifacts)
 #
 # Render a walkthrough video following the capture path.
-video scene seconds="20" path="capture":
+video scene seconds="20" path="line":
     docker compose exec -T generator python tools/render_video.py \
         /workspace/scenes/{{scene}} --seconds {{seconds}} --path {{path}}
     @echo "-> assets/scenes/{{scene}}/walkthrough.mp4"

@@ -56,11 +56,11 @@ def add_tour(server, scene: Path) -> None:
 
     Free flight is the honest way to inspect a reconstruction and also the
     quickest way to end up somewhere no camera ever stood, where the geometry
-    was never constrained and everything smears. The tour keeps the camera on
-    the spline through the standpoints, which is the part of the space the
-    panoramas actually observed.
+    was never constrained and everything smears. The tour holds the camera to
+    the straight line fitted through the standpoints — the same path the
+    rendered walkthrough takes, so the two agree.
     """
-    from render_video import capture_path, catmull_rom
+    from render_video import capture_path, straight_path
 
     model = scene / "undistorted" / "sparse" / "0"
     if not model.exists():
@@ -68,7 +68,7 @@ def add_tour(server, scene: Path) -> None:
     centres, up = capture_path(model)
     if len(centres) < 2:
         return
-    path = catmull_rom(centres, 600)
+    path, _ = straight_path(centres, 600)
 
     with server.gui.add_folder("tour"):
         follow = server.gui.add_checkbox("stay on capture path", False)

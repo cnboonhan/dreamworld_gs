@@ -1,12 +1,13 @@
 """Render a walkthrough video of a reconstructed world.
 
-The camera follows the capture path — a smooth spline through the standpoints
-the panoramas were shot from — because that is where the scene was actually
-observed. Straying far from it is what makes gaussian splats look bad: those
-regions were never constrained by any view.
+The camera follows the capture path, because that is where the scene was
+actually observed — straying from it is what makes gaussian splats look bad,
+since those regions were never constrained by any view. By default the path
+is the straight line fitted through the standpoints; --path spline visits
+each one exactly, at the cost of weaving off that line.
 
     python render_video.py <scene-dir> [--seconds 20] [--fps 30]
-                           [--path capture|line|orbit] [--fov 75]
+                           [--path line|spline|orbit] [--fov 75]
 
 Writes <scene>/walkthrough.mp4.
 """
@@ -80,6 +81,23 @@ def catmull_rom(points: np.ndarray, n: int, loop: bool = True) -> np.ndarray:
     return np.stack(out)
 
 
+def straight_path(centres: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Points along the least-squares line through the standpoints.
+
+    Straight is usually the honest path: a capture walk is roughly a line,
+    and a spline detours off it to hit every standpoint exactly — off the
+    line is where the reconstruction has least support. Returns the points
+    and the direction of travel, in capture order.
+    """
+    centred = centres - centres.mean(0)
+    axis = np.linalg.svd(centred, full_matrices=False)[2][0]
+    t = centred @ axis
+    if t[0] > t[-1]:                      # travel the way the walk went
+        axis, t = -axis, -t
+    mid = centres.mean(0)
+    return np.linspace(mid + axis * t.min(), mid + axis * t.max(), n), axis
+
+
 def look_at(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
     """World->camera matrix, OpenCV convention (x right, y down, z forward)."""
     fwd = target - eye
@@ -102,10 +120,10 @@ def main() -> None:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fov", type=float, default=75.0)
-    ap.add_argument("--path", choices=("capture", "line", "orbit"),
-                    default="capture",
-                    help="capture: spline through the standpoints (default); "
-                         "line: straight, along their best-fit axis; "
+    ap.add_argument("--path", choices=("line", "spline", "orbit"),
+                    default="line",
+                    help="line: straight along the standpoints' best-fit axis "
+                         "(default); spline: through each standpoint exactly; "
                          "orbit: circle the centre (expect off-path artifacts)")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
@@ -127,22 +145,14 @@ def main() -> None:
         eyes = mid + radius * (np.outer(np.cos(ang), basis[0])
                                + np.outer(np.sin(ang), basis[1]))
         targets = np.repeat(mid[None], n_frames, 0)
-    elif args.path == "line":
-        # straight walk along the standpoints' principal axis: the least-
-        # squares line through where the panoramas were actually shot, so the
-        # camera stays as close to observed space as a straight path can
-        centred = centres - centres.mean(0)
-        axis = np.linalg.svd(centred, full_matrices=False)[2][0]
-        t = centred @ axis
-        if t[0] > t[-1]:            # travel in capture order
-            axis, t = -axis, -t
-        mid = centres.mean(0)
-        eyes = np.linspace(mid + axis * t.min(), mid + axis * t.max(), n_frames)
-        targets = eyes + axis * max(1.0, float(t.max() - t.min()) * 0.3)
-    else:
+    elif args.path == "spline":
         eyes = catmull_rom(centres, n_frames)
         # aim a little ahead along the path so the motion reads as walking
         targets = np.roll(eyes, -max(2, n_frames // 60), axis=0)
+    else:
+        eyes, axis = straight_path(centres, n_frames)
+        span = float(np.linalg.norm(eyes[-1] - eyes[0]))
+        targets = eyes + axis * max(1.0, span * 0.3)
 
     f = 0.5 * args.width / np.tan(np.radians(args.fov) * 0.5)
     K = torch.tensor([[[f, 0, args.width / 2], [0, f, args.height / 2], [0, 0, 1]]],
