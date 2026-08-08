@@ -346,33 +346,18 @@ def run_sfm(scene: str, spacing: float = 0.0, angles=None,
     _sys.path.insert(0, str(Path(__file__).parent / "tools"))
     import known_poses as kp
 
-    recorded = kp.load(Path(panos)) if panos else None
+    recorded = kp.load_poses(Path(panos)) if panos else None
     if recorded and not require_sfm:
-        # A simulated capture knows where it stood. Inferring it again from an
-        # empty corridor of flat planes is the hardest case there is, and it is
-        # a question we do not have to ask.
-        logger.info("poses.json found: using the %d recorded standpoint(s) "
-                    "instead of solving for them", len(recorded))
-        model = sparse / "0"
-        n = kp.build(work, db, images, recorded, angles or [], size, fov,
-                     model, logger)
-        rec = pycolmap.Reconstruction(str(model))
-        logger.info("triangulated %d points across %d placed view(s)",
-                    rec.num_points3D(), n)
-        undist = work / "undistorted"
-        shutil.rmtree(undist, ignore_errors=True)
-        pycolmap.undistort_images(undist, model, images)
-        out = undist / "sparse" / "0"
-        out.mkdir(parents=True, exist_ok=True)
-        for f in ("cameras.bin", "images.bin", "points3D.bin",
-                  "rigs.bin", "frames.bin"):
-            src = undist / "sparse" / f
-            if src.exists():
-                src.rename(out / f)
-        shutil.rmtree(undist / "stereo", ignore_errors=True)
-        # already in building metres, so nothing to rescale and nothing to align
-        return {"registered": n, "total": n, "points": rec.num_points3D(),
-                "metric_scale": 1.0, "models": 1, "poses": "recorded"}
+        # Nothing to solve and nothing to build: the poses go straight to
+        # training. No reconstruction, so no rigs, frames, sensors or database
+        # consistency to satisfy — all of which existed only to carry poses we
+        # already had.
+        logger.info("poses.json found: %d standpoint(s) recorded, so no "
+                    "reconstruction is needed", len(recorded))
+        return {"registered": len(recorded) * len(angles or []),
+                "total": len(recorded) * len(angles or []),
+                "points": 0, "metric_scale": 1.0, "models": 1,
+                "poses": "recorded", "skip_colmap": True}
 
     logger.info("incremental mapping (no output until it finishes)")
     opts = pycolmap.IncrementalPipelineOptions()
@@ -498,7 +483,8 @@ def save_ply(params, path: Path) -> int:
 
 @task(name="3. gaussian splatting")
 def train(scene: str, iters: int, downscale: int,
-          aniso_weight: float = 0.0) -> dict:
+          aniso_weight: float = 0.0, panos: str = "", angles=None,
+          size: int = 1024, fov: float = 100.0) -> dict:
     """Optimise gaussians against the posed views.
 
     Classic rasterization (not antialiased): AA-trained opacities only render
@@ -511,8 +497,20 @@ def train(scene: str, iters: int, downscale: int,
 
     logger = get_run_logger()
     dev = "cuda:0"
-    data = Path(scene) / "undistorted"
-    Ks, viewmats, images, pts, rgb, scale = load_colmap(data, downscale, dev)
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).parent / "tools"))
+    import known_poses as kp
+
+    if panos and kp.load_poses(Path(panos)):
+        # the capture recorded where it stood, so the poses go straight in and
+        # no reconstruction is read
+        Ks, viewmats, images, pts, rgb, scale = kp.load(
+            Path(panos), Path(scene) / "images", angles or [], size, fov,
+            downscale, dev, logger)
+    else:
+        data = Path(scene) / "undistorted"
+        Ks, viewmats, images, pts, rgb, scale = load_colmap(data, downscale, dev)
     n_views = len(images)
     holdout = set(range(0, n_views, 8))
     train_ids = [i for i in range(n_views) if i not in holdout]
@@ -647,18 +645,41 @@ def align(scene: str, panos: str) -> dict:
 
 
 @task(name="5. export")
-def export(scene: str) -> dict:
+def export(scene: str, panos: str = "", angles=None) -> dict:
     """Isaac Sim USDZ, plus the spawn camera the viewer opens at."""
     logger = get_run_logger()
     world = Path(scene) / "world.ply"
 
     def sh(cmd):
         logger.info("$ %s", " ".join(str(c) for c in cmd))
-        subprocess.run([str(c) for c in cmd], check=True)
+        import sys as _sys
 
+        _sys.path.insert(0, str(Path(__file__).parent / "tools"))
+        import known_poses as kp
+
+        if panos and kp.load_poses(Path(panos)):
+            # the walk is recorded, so the spawn pose and the tour path come
+            # from it directly rather than out of a reconstruction
+            got = kp.write_sidecars(Path(panos), Path(scene) / "world.ply",
+                                    angles or [])
+            logger.info("sidecars from the recorded walk: %d standpoints, "
+                        "%d path points", got["standpoints"], got["points"])
+        else:
+                    subprocess.run([str(c) for c in cmd], check=True)
+        
     sh(["python", TOOLS / "ply_to_isaac.py", world, f"{scene}/world.usdz"])
-    sh(["python", TOOLS / "make_spawn_cam.py", "--colmap",
-        f"{scene}/undistorted/sparse/0", world])
+    import sys as _sys
+
+    _sys.path.insert(0, str(TOOLS))
+    import known_poses as kp
+
+    if panos and kp.load_poses(Path(panos)):
+        # the walk is recorded, so the spawn pose and the tour path come
+        # straight from it rather than out of a reconstruction
+        kp.write_sidecars(Path(panos), Path(scene) / "world.ply", angles or [])
+    else:
+        sh(["python", TOOLS / "make_spawn_cam.py", "--colmap",
+            f"{scene}/undistorted/sparse/0", world])
     return {"ply": str(world), "usdz": f"{scene}/world.usdz"}
 
 
@@ -712,11 +733,12 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     shot = reproject(scene, panos, views, size, fov)
     sfm = run_sfm(scene, spacing, shot["angles"], panos, size, fov,
                   require_sfm=spacing > 0)
-    stats = train(scene, iters, downscale, aniso_weight)
+    stats = train(scene, iters, downscale, aniso_weight,
+                  panos, shot["angles"], size, fov)
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building
     placed = align(scene, panos)
-    out = export(scene)
+    out = export(scene, panos, shot["angles"])
 
     # Everything worth judging the result by, written next to it. These numbers
     # were only ever in the run log before, which made two splats impossible to
