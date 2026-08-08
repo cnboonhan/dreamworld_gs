@@ -73,6 +73,11 @@ PY
 # leaves the real one alive holding the pipe — and a caller reading our output
 # then waits forever for an EOF that never comes. Redirecting means the pipe
 # closes when this script does, whatever survives.
+# Anything left over from a capture that died without running its trap. Two
+# captures never run at once by design, so whatever is here is a corpse.
+pkill -f "ros_gz_bridge/parameter_bridge" 2>/dev/null || true
+pkill -f "ruby.*gz sim" 2>/dev/null || true
+
 gz sim -s -r --headless-rendering "$ceil_world" >/tmp/gz.log 2>&1 &
 GZ_PID=$!
 ros2 run ros_gz_bridge parameter_bridge \
@@ -83,11 +88,16 @@ ros2 run ros_gz_bridge parameter_bridge \
 BRIDGE_PID=$!
 
 cleanup() {
-    # the whole tree, not just the pids we spawned: the wrapper's child would
-    # otherwise outlive us and hold a partition open for the next capture
+    # The whole tree, not just the pids we spawned. Both of these are launchers
+    # that exec a *child*: `gz sim` through ruby, and `ros2 run` through the
+    # binary under lib/. Killing the pid we know about leaves the real process
+    # alive — which for the bridge meant one survivor per capture, each still
+    # spinning on a CPU. Nine of them accumulated over a batch and starved the
+    # run that followed until it made two panoramas in six hours.
     kill "${BRIDGE_PID}" "${GZ_PID}" 2>/dev/null || true
     pkill -f "gz sim -s -r --headless-rendering ${ceil_world}" 2>/dev/null || true
     pkill -f "ruby.*gz sim" 2>/dev/null || true
+    pkill -f "ros_gz_bridge/parameter_bridge" 2>/dev/null || true
 }
 trap cleanup EXIT
 

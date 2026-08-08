@@ -236,15 +236,32 @@ def _capture_name() -> str:
     return f"{p.get('project', '?')}/{p.get('edge', '?')}"
 
 
+# A corridor takes about four minutes. This is the ceiling before the run is
+# called stuck rather than slow — generous, because a long corridor with close
+# spacing is legitimately several times the typical one, and because the retry
+# above gets a clean sim to try again in.
+CAPTURE_TIMEOUT_S = 20 * 60
+
+
 @task(name="capture", retries=1)
 def photograph(project: str, map_name: str, edge: str, spacing: float,
                zigzag: float = 0.0) -> dict:
     """Walk the corridor in sim, writing panoramas and nothing else."""
     logger = get_run_logger()
-    proc = subprocess.run(
-        ["/app/capture.sh", project, map_name, edge, str(spacing)]
-        + ([str(zigzag)] if zigzag else []),
-        capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            ["/app/capture.sh", project, map_name, edge, str(spacing)]
+            + ([str(zigzag)] if zigzag else []),
+            capture_output=True, text=True, timeout=CAPTURE_TIMEOUT_S)
+    except subprocess.TimeoutExpired as err:
+        # capture.sh's own trap does not run when it is killed from outside, so
+        # clear the sim and the bridge here — otherwise the survivors spin on a
+        # CPU and starve every capture that follows.
+        subprocess.run(["pkill", "-f", "ruby.*gz sim"], check=False)
+        subprocess.run(["pkill", "-f", "ros_gz_bridge/parameter_bridge"], check=False)
+        raise RuntimeError(
+            f"capture of {project}/{edge} still running after "
+            f"{CAPTURE_TIMEOUT_S // 60} min — killed") from err
     walked = spacing
     for line in (proc.stdout + proc.stderr).splitlines():
         if line.startswith("SPACING "):
