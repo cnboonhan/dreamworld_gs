@@ -200,17 +200,23 @@ def panorama(node, x, y, a, out, label):
 
 # How far the walk weaves across the corridor, in metres.
 #
-# Walking a corridor in a straight line is the worst baseline for the surfaces
-# you are walking toward: consecutive standpoints move *along* the line of
-# sight, so the far wall barely shifts between them and its depth is weakly
-# constrained. Measured on a straight 2.2 m walk, COLMAP scattered the twelve
-# views of a single panorama by 0.62 m — more than the 0.549 m between
-# standpoints — and the recovered walk folded to 0.28 m.
+# This was 0.35 m, for structure from motion. Walking a straight line is the
+# worst baseline for the surfaces you walk toward — consecutive standpoints
+# move *along* the line of sight, so the far wall barely shifts and its depth
+# is weakly constrained. On a straight 2.2 m walk COLMAP scattered the twelve
+# views of one panorama by 0.62 m, more than the 0.549 m between standpoints,
+# and the recovered walk folded to 0.28 m. Weaving broke that.
 #
-# Weaving side to side gives lateral baseline, which is what triangulates
-# depth, and breaks the collinear configuration that makes bundle adjustment
-# rank-deficient. It is also how photogrammetry is done by hand.
-ZIGZAG_M = 0.35
+# A simulated capture no longer runs structure from motion: its poses are
+# recorded and its geometry is seeded from the depth camera, so the workaround
+# outlived its reason — and it had costs. Swaying 0.7 m across every 0.5 m
+# forward makes the walked path 1.7x the corridor, which is nobody's gait, and
+# it is the path the viewer rides, since that is the only line the splat was
+# observed from. So this is now the sway of ordinary walking.
+#
+# It stays a parameter: a real 360 capture still goes through SfM, and if one
+# is ever simulated for that path it wants the wide weave back.
+ZIGZAG_M = 0.10
 # and on top of that, a little untidiness: nobody's stride is exact
 JITTER_M = 0.06
 

@@ -257,12 +257,19 @@ world map="" proj=project: up
 # follows from the corridor's length. It is also what makes the reconstruction
 # metric, so `just generate` should be given the interval the run reports.
 #
-#   just capture L11.cafe--v7        stop every half metre
-#   just capture L11.cafe--v7 0.3    closer together
-capture edge spacing="0.5" proj=project: up
+# zigzag is how far the walk sways across the corridor. The default is the
+# sway of ordinary walking; a wide weave gives structure from motion the
+# lateral baseline it needs, at the cost of a path 1.7x the corridor's length —
+# and that path is what the viewer rides, since it is the only line the splat
+# was ever observed from.
+#
+#   just capture L11.cafe--v7            stop every half metre
+#   just capture L11.cafe--v7 0.3        closer together
+#   just capture L11.cafe--v7 0.5 0.35   weave wide, for an SfM test
+capture edge spacing="0.5" zigzag="0" proj=project: up
     docker compose exec -T generator python submit.py \
         capture-edge/dreamworld \
-        project={{proj}} edge={{edge}} spacing={{spacing}}
+        project={{proj}} edge={{edge}} spacing={{spacing}} zigzag={{zigzag}}
     @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
@@ -283,7 +290,7 @@ capture-all spacing="0.5" proj=project: up
     ")
     n=$(printf '%s' "$todo" | grep -c . || true)
     echo "$n corridor(s) to photograph"
-    for e in $todo; do just capture "$e" {{spacing}} {{proj}}; done
+    for e in $todo; do just capture "$e" {{spacing}} 0 {{proj}}; done
 
 # Plan the walk between two waypoints, as a route the viewer streams along.
 #

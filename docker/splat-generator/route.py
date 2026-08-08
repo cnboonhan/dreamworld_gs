@@ -158,77 +158,101 @@ def resolve(project: str, plan: dict) -> dict:
     return plan
 
 
-def walk_height(project: str, edge: str) -> float:
-    """The height the camera actually walked this corridor at.
+def walk_of(project: str, edge: str, reverse: bool) -> np.ndarray:
+    """The corridor's recorded walk, in the direction this route travels it.
 
-    A nav graph is a floorplan: its vertices carry x and y, and the level's
-    elevation is not in it at all. The splat's own path is, because it was
-    written from where the capture stood — so the route takes its height from
-    the very thing it is about to show. Without this the polyline sits on z=0
-    and the camera rides along under the floor of every upper level.
+    Not the lane. A lane is a routing abstraction — a straight line between two
+    nav-graph vertices, with no height, that nobody walked. The splat was built
+    around the walk, and the walk is the only place its geometry was ever
+    observed: a camera a third of a metre to the side is looking at surfaces
+    from a viewpoint no panorama covered, which is exactly where a gaussian
+    splat frays. Measured on the sample building, riding the lane put the
+    camera 0.35 m on average from the nearest place a panorama was shot, and
+    never closer than 0.30 m.
     """
     f = PROJECTS / project / "splats" / edge / "world.path.json"
-    pts = json.loads(f.read_text())["points"]
-    return float(np.median([p[2] for p in pts]))
+    pts = np.asarray(json.loads(f.read_text())["points"], dtype=np.float64)
+    return pts[::-1] if reverse else pts
+
+
+def resample(poly: np.ndarray, spacing: float):
+    """Evenly spaced points along a polyline, plus each input point's arc.
+
+    The viewer walks its path uniformly in point *index*, so the points have to
+    be uniform in distance — otherwise the camera races through a finely
+    sampled stretch and crawls over a coarse one.
+    """
+    step = np.linalg.norm(np.diff(poly, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(step)])
+    n = max(2, int(round(float(s[-1]) / spacing)) + 1)
+    u = np.linspace(0.0, float(s[-1]), n)
+    return np.stack([np.interp(u, s, poly[:, i]) for i in range(3)], 1), s
 
 
 @task(name="3. write")
 def write(project: str, plan: dict, out: str) -> dict:
     """The polyline, and which splat covers which span of the tour."""
     logger = get_run_logger()
-    pos = {k: np.array(v) for k, v in plan["pos"].items()}
-    hops, total = plan["hops"], sum(h["length_m"] for h in plan["hops"]) or 1.0
+    hops = plan["hops"]
 
-    # a waypoint sits at the height of the corridors meeting it, so a route
-    # that does change level ramps between them rather than stepping
-    heights: dict[str, list[float]] = {}
+    walks = []
     for h in hops:
         try:
-            z = walk_height(project, h["edge"])
+            walks.append(walk_of(project, h["edge"], h["reverse"]))
         except (OSError, ValueError, KeyError) as err:
             raise RuntimeError(
-                f"{h['edge']} has no walk to take its height from ({err}). "
+                f"{h['edge']} has no recorded walk ({err}). "
                 f"Rebuild it: `just generate {h['edge']}`.") from err
-        heights.setdefault(h["from"], []).append(z)
-        heights.setdefault(h["to"], []).append(z)
-    z_of = {k: sum(v) / len(v) for k, v in heights.items()}
 
-    points: list[list[float]] = []
-    segments = []
-    doors = []
-    travelled = 0.0
-    for h in hops:
-        a, b = pos[h["from"]].copy(), pos[h["to"]].copy()
-        a[2], b[2] = z_of[h["from"]], z_of[h["to"]]
-        t0 = travelled / total
-        travelled += h["length_m"]
-        t1 = travelled / total
-        n = max(2, int(round(h["length_m"] / POINT_SPACING_M)))
-        # skip the first point after the first hop: it is the previous hop's
-        # last, and a duplicate would stall the camera for a frame
-        for i in range(0 if not points else 1, n + 1):
-            p = a + (b - a) * (i / n)
-            points.append([round(float(v), 4) for v in p])
+    # One polyline through every walk in turn. Consecutive walks do not meet:
+    # each ends wherever that capture's last stop happened to be, and stops
+    # weave across the lane rather than landing on the vertex. So a short
+    # straight bridge crosses each junction — the only stretch of a route no
+    # camera stood on, which is why its length is reported.
+    poly = np.concatenate(walks)
+    full, arc = resample(poly, POINT_SPACING_M)
+    at = np.cumsum([0] + [len(w) for w in walks])
+    bounds = [(float(arc[at[i]]), float(arc[at[i + 1] - 1])) for i in range(len(walks))]
+    total = float(arc[-1]) or 1.0
+    gaps = [float(np.linalg.norm(walks[i + 1][0] - walks[i][-1]))
+            for i in range(len(walks) - 1)]
+
+    segments, doors = [], []
+    for h, (s0, s1) in zip(hops, bounds):
         segments.append({"edge": h["edge"],
                          "splat": f"splats/{h['edge']}/world.ply",
                          "from": h["from"], "to": h["to"],
                          "reverse": h["reverse"],
-                         "t_start": round(t0, 6), "t_end": round(t1, 6)})
+                         "t_start": round(s0 / total, 6),
+                         "t_end": round(s1 / total, 6)})
         if h["door"]:
-            doors.append({"name": h["door"], "t": round((t0 + t1) / 2, 6)})
+            doors.append({"name": h["door"],
+                          "t": round((s0 + s1) / 2 / total, 6)})
 
+    # Each bridge is split between the splats on either side, so the spans
+    # tile [0, 1] with no gap for the viewer to fall into.
+    segments[0]["t_start"] = 0.0
+    segments[-1]["t_end"] = 1.0
+    for i in range(len(segments) - 1):
+        mid = round((segments[i]["t_end"] + segments[i + 1]["t_start"]) / 2, 6)
+        segments[i]["t_end"] = segments[i + 1]["t_start"] = mid
+
+    metres = round(total, 2)
     doc = {"project": project, "waypoints": plan["path"],
-           "metres": plan["metres"],
+           "metres": metres,
            # the building's up; splats are placed in this frame
            "up": [0.0, 0.0, 1.0],
-           "points": points, "segments": segments, "doors": doors}
+           "points": [[round(float(v), 4) for v in p] for p in full],
+           "segments": segments, "doors": doors}
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(json.dumps(doc, indent=1))
-    logger.info("%d point(s) over %d segment(s), %d door(s), eye height "
-                "%.2f-%.2f m -> %s", len(points), len(segments), len(doors),
-                min(z_of.values()), max(z_of.values()), out)
-    return {"route": out, "points": len(points), "segments": len(segments),
-            "metres": plan["metres"], "waypoints": plan["path"]}
+    logger.info("%d point(s) over %d segment(s), %d door(s); %.2f m walked, "
+                "%.2f m of it bridging %d junction(s) -> %s",
+                len(full), len(segments), len(doors), metres, sum(gaps),
+                len(gaps), out)
+    return {"route": out, "points": len(full), "segments": len(segments),
+            "metres": metres, "bridged_m": round(sum(gaps), 2),
+            "waypoints": plan["path"]}
 
 
 def _run_name() -> str:
