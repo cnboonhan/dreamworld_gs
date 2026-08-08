@@ -119,9 +119,9 @@ def _run_name() -> str:
     from prefect.runtime import flow_run
 
     parts = Path(flow_run.parameters.get("scene", "?")).parts
-    # .../<project>/splats/<kind>/<id>
-    if len(parts) >= 4 and parts[-3] == "splats":
-        return f"{parts[-4]}/{parts[-2]}/{parts[-1]}"
+    # .../<project>/splats/<id>
+    if len(parts) >= 3 and parts[-2] == "splats":
+        return f"{parts[-3]}/{parts[-1]}"
     return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 

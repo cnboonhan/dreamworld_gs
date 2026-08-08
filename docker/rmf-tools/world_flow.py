@@ -17,6 +17,11 @@ nav graph is the contract the splat side keys against, so what it holds — and
 what still needs photographing — is worth recording per run.
 
   python submit.py build-world/dreamworld project=<p> [map=<m>]
+
+Also serves capture-edge: photograph one corridor of the simulated building, so
+the splat pipeline can be exercised end to end without anyone walking it.
+
+  python submit.py capture-edge/dreamworld project=<p> edge=<id> [standpoints=5]
 """
 
 from __future__ import annotations
@@ -147,9 +152,7 @@ def plan(project: str, map_name: str, rows: list[dict]) -> dict:
                      "lift": bool(props.get("lift") or props.get("lift_cabin"))}
             levels.setdefault(level, {"vertices": [], "edges": []})
             levels[level]["vertices"].append(entry)
-            capture.append({"kind": "vertex", "id": vid, "level": level,
-                            "panos": f"panos/vertices/{vid}",
-                            "splat": f"splats/vertices/{vid}"})
+
 
         seen = set()
         for lane in (data.get("lanes") or []):
@@ -168,9 +171,12 @@ def plan(project: str, map_name: str, rows: list[dict]) -> dict:
                 "length_m": round(((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5, 2),
                 "door": props.get("door_name") or "",
             })
+            # Only edges are captured. A corridor walk starts and ends on its
+            # two vertices, so the vertex views are already in it — and the
+            # capture burden halves. Vertices stay above as routing nodes.
             capture.append({"kind": "edge", "id": eid, "level": level,
-                            "panos": f"panos/edges/{eid}",
-                            "splat": f"splats/edges/{eid}"})
+                            "panos": f"panos/{eid}",
+                            "splat": f"splats/{eid}"})
 
     doc = {"project": project, "map": map_name, "levels": levels,
            "capture": capture}
@@ -222,7 +228,51 @@ def build_world(project: str, map: str = "") -> dict:
     return plan(project, resolved, rows)
 
 
+def _capture_name() -> str:
+    """One run, one corridor — named for it."""
+    from prefect.runtime import flow_run
+
+    p = flow_run.parameters
+    return f"{p.get('project', '?')}/{p.get('edge', '?')}"
+
+
+@task(name="capture", retries=1)
+def photograph(project: str, map_name: str, edge: str, standpoints: int) -> dict:
+    """Walk the corridor in sim, writing panoramas and nothing else."""
+    logger = get_run_logger()
+    proc = subprocess.run(
+        ["/app/capture.sh", project, map_name, edge, str(standpoints)],
+        capture_output=True, text=True)
+    for line in (proc.stdout + proc.stderr).splitlines():
+        logger.info("%s", line)
+    if proc.returncode != 0:
+        raise RuntimeError(f"capture failed for {project}/{edge}")
+    out = PROJECTS / project / "panos" / edge
+    shots = sorted(p.name for p in out.glob("*.png"))
+    if len(shots) < standpoints:
+        raise RuntimeError(
+            f"expected {standpoints} panoramas, got {len(shots)} in {out}")
+    return {"panos": f"{project}/panos/{edge}", "count": len(shots),
+            "first": shots[0], "last": shots[-1]}
+
+
+@flow(name="capture-edge", log_prints=True, flow_run_name=_capture_name)
+def capture_edge(project: str, edge: str, standpoints: int = 5,
+                 map: str = "") -> dict:
+    """Photograph one corridor. One run, one corridor, one folder of images.
+
+    The output is a folder of numbered equirectangular panoramas — the same
+    thing a person hands over after walking it with a 360 camera. Nothing about
+    where the camera stood is written down, so the pipeline downstream gets no
+    help it would not have from a real capture.
+    """
+    resolved = resolve_map(project, map)
+    return photograph(project, resolved, edge, standpoints)
+
+
 if __name__ == "__main__":
-    # one at a time: the generator rewrites the world directory in place
+    # one at a time apiece: build-world rewrites the world directory in place,
+    # and a capture boots its own Gazebo
     serve(build_world.to_deployment(name="dreamworld", concurrency_limit=1),
+          capture_edge.to_deployment(name="dreamworld", concurrency_limit=1),
           limit=1)

@@ -70,6 +70,9 @@ ros2 run rmf_building_map_tools building_map_generator gazebo \
     "$IN" "$OUT/${MAP}.world" "$OUT/models"
 
 python3 /app/postprocess_world.py "$OUT/${MAP}.world" "$IN"
+# The generator bakes near-flat paint onto the walls, which no feature detector
+# can match — and this world gets photographed, not just driven through.
+python3 /app/texturize.py "$OUT/models"
 
 ros2 run rmf_building_map_tools building_map_generator nav "$IN" "$OUT/nav_graphs"
 

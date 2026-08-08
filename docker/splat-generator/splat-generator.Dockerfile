@@ -49,7 +49,7 @@ COPY build_env.sh /tmp/build_env.sh
 RUN bash /tmp/build_env.sh
 
 COPY tools/ /opt/tools/
-COPY flow.py reconstruct.py video.py serve.py submit.py /opt/
+COPY flow.py reconstruct.py video.py route.py serve.py submit.py /opt/
 
 # Prefect orchestrates the six stages: per-stage logs/timing in its UI, and a
 # failed run can be retried from the stage that broke.

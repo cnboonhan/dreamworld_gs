@@ -61,31 +61,38 @@ def fmt(v, spec="", dash="—"):
 
 
 def coverage(doc: dict, root: Path, only_missing: bool) -> tuple[list, int, int]:
+    """One row per place the map defines: what has been shot, whether it has
+    been reconstructed, and whether a walkthrough has been rendered from it."""
     rows, have = [], 0
     for c in doc["capture"]:
         panos = root / c["panos"]
+        splat = root / c["splat"]
         n = len(list(panos.glob("*"))) if panos.is_dir() else 0
-        built = (root / c["splat"] / "world.ply").is_file()
+        built = (splat / "world.ply").is_file()
+        video = (splat / "walkthrough.mp4").is_file()
         if n:
             have += 1
         if only_missing and n:
             continue
-        rows.append((c["kind"], c["level"], c["id"],
-                     "built" if built else (f"{n} panos" if n else "—")))
+        if built:
+            state = "built + video" if video else "built"
+        else:
+            state = f"{n} panos" if n else "—"
+        rows.append((c["kind"], c["level"], c["id"], state))
     return rows, have, len(doc["capture"])
 
 
 def quality_table(root: Path) -> list[dict]:
     """Every built splat in the project, with what is known about each."""
     out = []
-    for kind in ("vertices", "edges"):
-        for splat in sorted((root / "splats" / kind).glob("*")):
-            if not (splat / "world.ply").is_file():
-                continue
-            m = splat_metrics(splat)
-            m["kind"] = kind[:-1] if kind.endswith("s") else kind
-            m["id"] = splat.name
-            out.append(m)
+    for splat in sorted((root / "splats").glob("*")):
+        if not (splat / "world.ply").is_file():
+            continue
+        m = splat_metrics(splat)
+        # an edge id joins two vertices; a vertex id does not
+        m["kind"] = "edge" if "--" in splat.name else "vertex"
+        m["id"] = splat.name
+        out.append(m)
     return out
 
 

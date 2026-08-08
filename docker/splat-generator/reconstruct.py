@@ -466,7 +466,48 @@ def train(scene: str, iters: int, downscale: int,
 
 # --------------------------------------------------------------------- export
 
-@task(name="4. export")
+@task(name="4. align")
+def align(scene: str, panos: str) -> dict:
+    """Place the splat where it belongs in the building.
+
+    Only for a corridor: the id has to name a lane, because the lane is what
+    supplies the direction and position. A capture of a room has neither, so it
+    stays in its own frame and says so.
+    """
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).parent / "tools"))
+    import align as al
+
+    logger = get_run_logger()
+    scene_p = Path(scene)
+    edge_id = scene_p.name
+    project = scene_p.parent.parent                 # .../<project>/splats/<id>
+    plans = sorted((project / "worlds").glob("*/capture_plan.json"))
+    if not plans:
+        logger.info("no capture plan for %s; leaving the splat in its own frame",
+                    project.name)
+        return {"aligned": False, "why": "no capture plan"}
+
+    plan = json.loads(plans[0].read_text())
+    R, t, report = al.solve(scene_p, plan, edge_id, Path(panos))
+    if not report.get("aligned"):
+        logger.info("not aligned: %s", report.get("why"))
+        return report
+
+    n = al.apply_to_ply(scene_p / "world.ply", R, t)
+    logger.info("placed %s in building coordinates: walked from %s, "
+                "%.2f m of walk onto a %.2f m lane, endpoints off by %.2f m",
+                edge_id, report["walked_from"], report["walk_span_m"],
+                report["lane_length_m"], report["align_residual_m"])
+    if report["align_residual_m"] > 0.5:
+        logger.warning("that is a large residual — the capture may not be the "
+                       "corridor this id names, or it was walked the other way")
+    logger.info("moved %d gaussians", n)
+    return report
+
+
+@task(name="5. export")
 def export(scene: str) -> dict:
     """Isaac Sim USDZ, plus the spawn camera the viewer opens at."""
     logger = get_run_logger()
@@ -489,9 +530,9 @@ def _run_name() -> str:
     from prefect.runtime import flow_run
 
     parts = Path(flow_run.parameters.get("scene", "?")).parts
-    # .../<project>/splats/<kind>/<id>
-    if len(parts) >= 4 and parts[-3] == "splats":
-        return f"{parts[-4]}/{parts[-2]}/{parts[-1]}"
+    # .../<project>/splats/<id>
+    if len(parts) >= 3 and parts[-2] == "splats":
+        return f"{parts[-3]}/{parts[-1]}"
     return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 
@@ -510,6 +551,9 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     shot = reproject(scene, panos, views, size, fov)
     sfm = run_sfm(scene, spacing)
     stats = train(scene, iters, downscale, aniso_weight)
+    # align before export, so the sidecars and the Isaac USDZ describe the
+    # splat where it actually sits in the building
+    placed = align(scene, panos)
     out = export(scene)
 
     # Everything worth judging the result by, written next to it. These numbers
@@ -525,7 +569,10 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
         "points": sfm["points"],
         "gaussians": stats["gaussians"],
         "psnr_db": stats["psnr"],
+        **{k: v for k, v in placed.items() if k != "transform"},
     }
+    if placed.get("transform"):
+        info["transform"] = placed["transform"]
     if "models" in sfm:
         info["sfm_models"] = sfm["models"]
     Path(scene, "world.info.json").write_text(json.dumps(info, indent=2))

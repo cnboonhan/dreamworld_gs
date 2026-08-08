@@ -70,9 +70,7 @@ _env:
     done
     for p in {{assets}}/projects/*/; do
         [ -d "$p" ] || continue
-        mkdir -p "$p"maps "$p"worlds \
-                 "$p"panos/vertices "$p"panos/edges \
-                 "$p"splats/vertices "$p"splats/edges
+        mkdir -p "$p"maps "$p"worlds "$p"panos "$p"splats
     done
 
 # Download all models into assets/ (idempotent; list in scripts/models.txt).
@@ -154,34 +152,21 @@ generate id spacing="0.5" proj=project: up
         just projects >&2
         exit 1
     fi
-    # an id names a vertex or an edge; find which
-    src=""; kind=""
-    for k in vertices edges; do
-        for c in "$dir/panos/$k/{{id}}" "$dir"/panos/$k/{{id}}.*; do
-            [ -e "$c" ] || continue
-            if [ -n "$src" ] && [ "$kind" != "$k" ]; then
-                echo "'{{id}}' exists under both vertices/ and edges/ — rename one" >&2
-                exit 1
-            fi
-            src="$c"; kind="$k"
-        done
-    done
+    src=$(ls -d "$dir"/panos/{{id}} "$dir"/panos/{{id}}.* 2>/dev/null | head -1 || true)
     if [ -z "$src" ]; then
         echo "nothing to reconstruct for '{{id}}' in {{proj}}" >&2
         echo "captured so far:" >&2
-        for k in vertices edges; do
-            find "$dir/panos/$k" -mindepth 1 -maxdepth 1 2>/dev/null \
-                | sed "s|$dir/panos/|  |" >&2
-        done
+        find "$dir/panos" -mindepth 1 -maxdepth 1 2>/dev/null \
+            | sed "s|$dir/panos/|  |" >&2
         echo "run 'just plan' for the ids this project's map defines" >&2
         exit 1
     fi
     # ids contain dots (L11.cafe), so strip an extension only from a file
     if [ -d "$src" ]; then id=$(basename "$src"); else id=$(basename "${src%.*}"); fi
-    out="$dir/splats/$kind/$id"
+    out="$dir/splats/$id"
     if [ -f "$out/world.ply" ]; then
-        echo "{{proj}} $kind/$id: already built, skipping"
-        echo "   (delete assets/projects/{{proj}}/splats/$kind/$id to rebuild)"
+        echo "{{proj}} $id: already built, skipping"
+        echo "   (delete assets/projects/{{proj}}/splats/$id to rebuild)"
         exit 0
     fi
     mkdir -p "$out"
@@ -189,11 +174,11 @@ generate id spacing="0.5" proj=project: up
 
     if [ -d "$src" ]; then
         n=$(ls "$src" | wc -l)
-        echo "reconstructing {{proj}} $kind/$id from $n panoramas"
+        echo "reconstructing {{proj}} $id from $n panoramas"
         docker compose exec -T generator python submit.py \
             reconstruct-world/dreamworld \
-            scene="$win/splats/$kind/$id" \
-            panos="$win/panos/$kind/$id" \
+            scene="$win/splats/$id" \
+            panos="$win/panos/$id" \
             spacing={{spacing}}
     else
         cp "$src" "$out/_input.${src##*.}"
@@ -202,17 +187,17 @@ generate id spacing="0.5" proj=project: up
         from pathlib import Path
         from PIL import Image
         Image.MAX_IMAGE_PIXELS = None
-        d = Path('$win/splats/$kind/$id')
+        d = Path('$win/splats/$id')
         src = next(p for p in d.iterdir() if p.stem == '_input')
         Image.open(src).convert('RGB').save(d / 'panorama.png')
         src.unlink()"
         docker compose exec -T generator python submit.py \
             generate-world/dreamworld \
-            scene="$win/splats/$kind/$id" \
+            scene="$win/splats/$id" \
             gpus={{gpus}} steps={{steps}}
     fi
-    echo "-> assets/projects/{{proj}}/splats/$kind/$id/world.ply (+ .usdz, .cam.json, .path.json)"
-    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$kind/$id/world.ply"
+    echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .path.json)"
+    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
 
 #   just video cafe 40           longer
 #   just video cafe 20 spline    weave through each standpoint exactly
@@ -223,19 +208,15 @@ video id seconds="20" path="line" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
-    kind=""
-    for k in vertices edges; do
-        [ -f "$dir/splats/$k/{{id}}/world.ply" ] && kind="$k"
-    done
-    if [ -z "$kind" ]; then
+    if [ ! -f "$dir/splats/{{id}}/world.ply" ]; then
         echo "no splat built for '{{id}}' in {{proj}} — run: just generate {{id}}" >&2
         exit 1
     fi
     docker compose exec -T generator python submit.py \
         render-video/dreamworld \
-        scene=/workspace/projects/{{proj}}/splats/$kind/{{id}} \
+        scene=/workspace/projects/{{proj}}/splats/{{id}} \
         seconds={{seconds}} path={{path}}
-    echo "-> assets/projects/{{proj}}/splats/$kind/{{id}}/walkthrough.mp4"
+    echo "-> assets/projects/{{proj}}/splats/{{id}}/walkthrough.mp4"
 
 # Build the Gazebo world + nav graph from a project's building map.
 #
@@ -251,6 +232,55 @@ world map="" proj=project: up
     docker compose exec -T generator python submit.py \
         build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
+
+# Photograph one corridor of the simulated building.
+#
+# Stands a camera at points along the lane and captures a 360 panorama at each,
+# writing panos/<edge>/000.png ... — a folder of numbered images, and nothing
+# else. That is exactly what someone hands over after walking a corridor, so
+# everything downstream is exercised on the same input it will get for real.
+#
+#   just capture L11.cafe--v7        five standpoints
+#   just capture L11.cafe--v7 9      denser
+capture edge standpoints="5" proj=project: up
+    docker compose exec -T generator python submit.py \
+        capture-edge/dreamworld \
+        project={{proj}} edge={{edge}} standpoints={{standpoints}}
+    @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
+
+# Photograph every corridor that has no panoramas yet — one job each, so a bad
+# one is a single re-run rather than a lost batch.
+capture-all standpoints="5" proj=project: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan=$(find {{assets}}/projects/{{proj}}/worlds -name capture_plan.json | head -1)
+    [ -n "$plan" ] || { echo "no capture plan — run: just world" >&2; exit 1; }
+    todo=$(python3 -c "
+    import json, sys
+    from pathlib import Path
+    root = Path('{{assets}}/projects/{{proj}}')
+    doc = json.load(open('$plan'))
+    for c in doc['capture']:
+        if not any((root / c['panos']).glob('*')):
+            print(c['id'])
+    ")
+    n=$(printf '%s' "$todo" | grep -c . || true)
+    echo "$n corridor(s) to photograph"
+    for e in $todo; do just capture "$e" {{standpoints}} {{proj}}; done
+
+# Plan the walk between two waypoints, as a route the viewer streams along.
+#
+# Writes traversals/<from>__<to>.route.json: the path through the building in
+# metres, and which splat covers which stretch of it. Nothing is rendered — the
+# viewer follows the polyline with its tour parameter and loads each splat as it
+# reaches it.
+#
+#   just route cafe playpen
+#   just route L11.cafe L11.apex_lab
+route start goal proj=project: up
+    docker compose exec -T generator python submit.py \
+        plan-route/dreamworld project={{proj}} start={{start}} goal={{goal}}
+    @echo "-> assets/projects/{{proj}}/traversals/"
 
 # Package a project into one tarball, to carry to another node.
 #
@@ -331,8 +361,8 @@ projects:
             "$mark" "$n" \
             "$(count "$p/maps" '-name *.building.yaml')" \
             "$(count "$p/worlds" '-type d')" \
-            "$(count "$p/panos" '-type d' 2 2)" \
-            "$(count "$p/splats" '-name world.ply' 3 3)"
+            "$(count "$p/panos" '-type d')" \
+            "$(count "$p/splats" '-name world.ply' 2 2)"
     done
     [ "$found" = 1 ] || echo "  none yet — run: just _env   (seeds samples/)"
     echo

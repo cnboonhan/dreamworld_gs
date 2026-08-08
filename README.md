@@ -13,13 +13,12 @@ One project is one building, and one directory:
 
 ```
 assets/projects/<project>/
-  maps/                   <map>.building.yaml + floorplans      (you author)
-  worlds/<map>/           <map>.world, models/, nav_graphs/0.yaml,
-                          capture_plan.json                     (generated)
-  panos/vertices/<id>/    360 captures taken at a waypoint      (you shoot)
-  panos/edges/<id>/       ...taken along a corridor             (you shoot)
-  splats/vertices/<id>/   world.ply, world.usdz, world.cam.json,
-  splats/edges/<id>/      world.path.json, walkthrough.mp4      (generated)
+  maps/            <map>.building.yaml + floorplans             (you author)
+  worlds/<map>/    <map>.world, models/, nav_graphs/0.yaml,
+                   capture_plan.json                            (generated)
+  panos/<id>/      360 captures of one corridor                 (you shoot)
+  splats/<id>/     world.ply, world.usdz, world.cam.json,
+                   world.path.json, walkthrough.mp4             (generated)
 ```
 
 Panoramas live under the place they photograph, so a splat is addressed by
@@ -98,10 +97,12 @@ list of splats and worlds rather than random adjectives:
 
 | Job | Runs in | Stages | Produces |
 | --- | --- | --- | --- |
-| `build-world` | `worldjobs` | generate → inspect → publish | one world + nav graph |
+| `build-world` | `worldjobs` | generate → inspect → plan | one world + nav graph + capture plan |
+| `capture-edge` | `worldjobs` | capture | one corridor's panoramas |
 | `reconstruct-world` | `generator` | reproject → SfM → gaussian splatting → export | one splat, measured |
 | `generate-world` | `generator` | 6 HY-World stages | one splat, imagined |
 | `render-video` | `generator` | plan path → render → encode | one walkthrough |
+| `plan-route` | `generator` | route → resolve → write | one route through the building |
 
 Two workers, because the work needs different machines: world generation wants
 Gazebo and `rmf_building_map_tools`, the splat flows want CUDA. Each is served
@@ -131,11 +132,25 @@ just world
 `sim.launch.xml`, and `nav_graphs/0.yaml`. The sim also generates it on first
 start if it is missing, so a fresh checkout comes up with something to look at.
 
-**A splat**, from panoramas of one space:
+**Panoramas of a corridor, without walking it.** The simulated building can be
+photographed, so the whole pipeline runs with no camera:
 
 ```bash
-just generate cafe          # panos/cafe/ -> splats/cafe/
-just generate cafe 1.5      # 1.5m between standpoints (default 0.5)
+just capture L11.cafe--v7        # -> panos/L11.cafe--v7/000.png ...
+just capture L11.cafe--v7 9      # denser
+just capture-all                 # every corridor not yet shot, one job each
+```
+
+A camera stands at points along the lane and takes a full 360 at each. It
+writes **panoramas and nothing else** — no poses, no positions, no marker that
+it came from a simulator — because a synthetic run that leaked what a real
+capture cannot would be testing the pipeline under conditions it never faces.
+
+**A splat**, from panoramas of one corridor:
+
+```bash
+just generate L11.cafe--v7       # panos/<id>/ -> splats/<id>/
+just generate L11.cafe--v7 1.5   # 1.5m between standpoints (default 0.5)
 ```
 
 A *folder* of panoramas is reconstructed together — reproject → COLMAP →
@@ -183,23 +198,27 @@ Every part of the building gets an id, and its panoramas go in the folder of
 that name. `build-world` computes them and writes
 `worlds/<map>/capture_plan.json`; `just plan` reads it back.
 
+**Corridors are what you capture.** A walk from `a` to `b` starts and ends on
+the two vertices, so the vertex views are already in it — and the capture
+burden halves, 26 walks instead of 53 places. Junctions come out better than a
+dedicated capture would: `L11.lift_lobby` has four corridors meeting it, so
+four walks each contribute a standpoint there from a different direction.
+
 | | id | goes in |
 | --- | --- | --- |
-| a named waypoint | `<level>.<name>` | `panos/vertices/L11.cafe/` |
-| an unnamed vertex | `<level>.v<index>` | `panos/vertices/L11.v7/` |
-| the corridor between two | `<level>.<a>--<b>` | `panos/edges/L11.cafe--v7/` |
+| a corridor between two waypoints | `<level>.<a>--<b>` | `panos/L11.cafe--v7/` |
+| its endpoints, named | `<level>.<name>` | — already in the corridor |
+| its endpoints, unnamed | `<level>.v<index>` | — already in the corridor |
 
 Three decisions worth knowing:
 
-**The level is always part of the id**, even for named waypoints. Waypoint
-names are not unique across a building — the sample map has a `lift_lobby` on
-L1 and another on L11, one directly above the other. Two different places must
-not share a folder.
+**The level is always part of the id.** Waypoint names are not unique across a
+building — the sample map has a `lift_lobby` on L1 and another on L11, one
+directly above the other. Two different places must not share a folder.
 
 **Unnamed vertices fall back to their index.** Most vertices are unnamed
 corners with no other handle. The index comes from the nav graph, so it can
-shift if you insert vertices in the traffic editor — `just plan` will show the
-drift as a folder that no longer matches any id.
+shift if you insert vertices in the traffic editor.
 
 **An edge is one corridor, not two.** Every lane in these graphs is
 bidirectional, so the endpoints are sorted and the edge gets one name whichever
@@ -208,8 +227,8 @@ way you walked it. The level is written once, since lanes never cross levels.
 ```bash
 just plan            # every id, what is captured for it, and how good it came out
 just plan missing    # only what still needs photographing
-just generate L11.cafe        # panos/vertices/L11.cafe -> splats/vertices/L11.cafe
-just generate L11.cafe--v7    # the corridor between them
+just capture L11.cafe--v7     # photograph it in sim
+just generate L11.cafe--v7    # panos/<id>/ -> splats/<id>/
 ```
 
 `just plan` ends with a table of every splat already built, so two of them can
@@ -227,26 +246,41 @@ was trained; **PSNR** is measured on held-out views, so it says the splat
 matches the photographs — not that the room is covered, which is what the
 capture count tells you; **scale** is the multiplier that put it in metres.
 
-`generate` finds the id under `vertices/` or `edges/` and puts the splat in the
-matching place, so you never say which kind it is.
+`generate` reads `panos/<id>/` and writes `splats/<id>/`, so the id is the only
+name you ever type.
 
-## The goal: a splat per vertex, a traversal per lane
+## Walking the building
 
-The naming above is the first half of joining the two sides. What it does not
-do yet: a splat still carries a straight tour path fitted through wherever its
-panoramas happened to be shot, rather than the lane polyline it belongs to.
+Reconstructing a corridor now places it where it belongs. A COLMAP solve is
+metric in scale but arbitrary in origin and orientation, so the `align` stage
+solves the rigid transform that puts it in the building's frame and rewrites
+`world.ply` there. Three constraints, all from the capture itself:
 
-| nav graph | capture | splat |
-| --- | --- | --- |
-| **vertex** — somewhere you can stand | panoramas shot there | one splat of that place |
-| **lane** — a way between two vertices | the walk along it | one splat of that traversal |
-| **lane with a `door_name`** | the door you open partway | where a traversal is gated |
+| | |
+| --- | --- |
+| the walk axis | → the lane's direction |
+| the camera up | → the building's up |
+| the walk centre | → the lane's midpoint |
 
-Once `world.path.json` follows the lane instead of a fitted line, a route
-planned in RMF — Dijkstra over the lanes, opening the doors it crosses — can be
-rendered from the splats end to end, because both sides agree on what a place
-is and what connects it. That also recovers a real loss today: a curved walk
-projected onto a straight axis gives up about a third of its length.
+`world.info.json` records the transform and `align_residual_m`, how far the
+walk's own endpoints land from the lane's. What the capture *cannot* say is
+which end you started from — the axis fits the lane just as well backwards — so
+that comes from the id by convention (`L11.cafe--v7` means walked cafe → v7),
+overridable with a `capture.json` next to the panoramas.
+
+With every corridor in one frame, a route is just data:
+
+```bash
+just route cafe playpen      # -> traversals/L11.cafe__L11.playpen.route.json
+```
+
+That holds the path through the building in metres and which splat covers which
+stretch of it. Nothing is rendered: the viewer follows the polyline with its
+tour parameter and loads each splat as it reaches it, dropping the one behind.
+
+**Not finished yet.** The viewer still opens one splat at a time; streaming
+along a route is the remaining piece.
+
 
 ## Notes
 

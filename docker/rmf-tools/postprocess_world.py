@@ -73,6 +73,32 @@ def strip_lift_plugin(text):
     return text
 
 
+def inject_rec_cam(text):
+    """Add the capture camera the panorama stage drives.
+
+    It has to exist when the world loads: a sensor spawned at runtime never
+    renders in server-only mode, so there is no way to add it later. It sits
+    idle until `capture.py` teleports it, and publishes on /rec_cam. The
+    horizontal FOV must match what capture.py reprojects with (2.2 rad)."""
+    if 'name="rec_cam"' in text:
+        return text
+    cam = """
+    <model name="rec_cam"><pose>0 0 2 0 0 0</pose>
+      <link name="link"><gravity>false</gravity>
+        <sensor name="rec_cam_sensor" type="camera">
+          <camera><horizontal_fov>2.2</horizontal_fov>
+            <image><width>640</width><height>480</height></image>
+            <clip><near>0.1</near><far>500</far></clip></camera>
+          <always_on>1</always_on><update_rate>30</update_rate>
+          <topic>rec_cam</topic>
+        </sensor></link>
+    </model>
+"""
+    text = text.replace("</world>", cam + "  </world>", 1)
+    print("  injected the capture camera (rec_cam)")
+    return text
+
+
 def make_doors_opaque(text):
     """The generator gives doors alpha 0.6. Half-transparent doors read as open
     when they are shut, which is exactly the state you are watching for here."""
@@ -103,6 +129,7 @@ def main():
     text = inject_sensors_plugin(text)
     if not building.get("lifts"):
         text = strip_lift_plugin(text)
+    text = inject_rec_cam(text)
     text = make_doors_opaque(text)
 
     open(path, "w").write(text)

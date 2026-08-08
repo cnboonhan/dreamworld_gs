@@ -33,6 +33,12 @@ The world generation and its SDF fixups (`generate_world.sh`,
 `dreamworld` pipeline, trimmed to what a simulated — rather than generatively
 rendered — building needs.
 
+The panorama capture (`capture.py`, `capture.sh`) and the shared helpers in
+`docker/rmf-tools/common/` (`geometry.py`, `png_io.py`) are ported from that
+pipeline's `panorama_gz` stage. The depth output is dropped — a 360 camera does
+not produce depth — and capture is extended from nav-graph vertices to points
+along a lane.
+
 `samples/multilevel_office/` is the `multilevel_office` map from that same
 pipeline (its robot meshes are not included, since no robot is simulated here).
 
