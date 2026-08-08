@@ -10,17 +10,18 @@ Three stages:
   1. generate   building.yaml -> world + models + nav graph  (shells the
                 generator, which is a ROS entrypoint, not a library)
   2. inspect    read the nav graph back: levels, waypoints, lanes, doors
-  3. publish    a Prefect artifact table of what the building actually contains
+  3. plan       name every vertex and edge, and write the capture plan
 
-Stage 2 is the point of running this as a job rather than a script: the nav
-graph is the contract the splat side keys against, so what it holds is worth
-recording per run.
+Stages 2 and 3 are the point of running this as a job rather than a script: the
+nav graph is the contract the splat side keys against, so what it holds — and
+what still needs photographing — is worth recording per run.
 
   python submit.py build-world/dreamworld project=<p> [map=<m>]
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -91,19 +92,113 @@ def inspect(project: str, map_name: str) -> list[dict]:
     return rows
 
 
-@task(name="3. publish")
-def publish(project: str, map_name: str, rows: list[dict]) -> dict:
+def local_id(index: int, name: str) -> str:
+    """A vertex's handle within its level: its name, or its index if unnamed.
+
+    Most vertices are unnamed corners, and an index is the only thing that
+    distinguishes them."""
+    return name if name else f"v{index}"
+
+
+def vertex_id(level: str, local: str) -> str:
+    """The full id: always level-qualified.
+
+    Waypoint names are not unique across a building — the sample map has a
+    `lift_lobby` on L1 and another on L11, one directly above the other. Two
+    different places must not share a folder, so the level is always part of
+    the address, named or not."""
+    return f"{level}.{local}"
+
+
+def edge_id(level: str, a: str, b: str) -> str:
+    """One corridor, one id.
+
+    Every lane in these graphs is bidirectional, so sorting the endpoints names
+    the edge the same whichever way you walked it. Lanes never cross levels, so
+    the level is written once rather than on both ends."""
+    return f"{level}.{'--'.join(sorted((a, b)))}"
+
+
+@task(name="3. plan")
+def plan(project: str, map_name: str, rows: list[dict]) -> dict:
+    """Name every vertex and edge, and record what to photograph where.
+
+    This is the join between the two halves: a capture belongs to a place in
+    the building, and this file says which places exist and what each is
+    called."""
+    logger = get_run_logger()
+    nav = PROJECTS / project / "worlds" / map_name / "nav_graphs" / "0.yaml"
+    graph = yaml.safe_load(nav.read_text())
+
+    levels: dict = {}
+    capture: list[dict] = []
+    for level, data in (graph.get("levels") or {}).items():
+        verts = data.get("vertices") or []
+        locals_, ids = [], []
+        for i, v in enumerate(verts):
+            props = v[2] if len(v) > 2 and isinstance(v[2], dict) else {}
+            loc = local_id(i, props.get("name") or "")
+            vid = vertex_id(level, loc)
+            locals_.append(loc)
+            ids.append(vid)
+            entry = {"id": vid, "level": level, "index": i,
+                     "x": round(float(v[0]), 3), "y": round(float(v[1]), 3),
+                     "named": bool(props.get("name")),
+                     "lift": bool(props.get("lift") or props.get("lift_cabin"))}
+            levels.setdefault(level, {"vertices": [], "edges": []})
+            levels[level]["vertices"].append(entry)
+            capture.append({"kind": "vertex", "id": vid, "level": level,
+                            "panos": f"panos/vertices/{vid}",
+                            "splat": f"splats/vertices/{vid}"})
+
+        seen = set()
+        for lane in (data.get("lanes") or []):
+            u, w = int(lane[0]), int(lane[1])
+            if u == w or not (0 <= u < len(ids) and 0 <= w < len(ids)):
+                continue
+            eid = edge_id(level, locals_[u], locals_[w])
+            if eid in seen:
+                continue
+            seen.add(eid)
+            props = lane[2] if len(lane) > 2 and isinstance(lane[2], dict) else {}
+            ax, ay = float(verts[u][0]), float(verts[u][1])
+            bx, by = float(verts[w][0]), float(verts[w][1])
+            levels[level]["edges"].append({
+                "id": eid, "level": level, "a": ids[u], "b": ids[w],
+                "length_m": round(((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5, 2),
+                "door": props.get("door_name") or "",
+            })
+            capture.append({"kind": "edge", "id": eid, "level": level,
+                            "panos": f"panos/edges/{eid}",
+                            "splat": f"splats/edges/{eid}"})
+
+    doc = {"project": project, "map": map_name, "levels": levels,
+           "capture": capture}
+    out = PROJECTS / project / "worlds" / map_name / "capture_plan.json"
+    out.write_text(json.dumps(doc, indent=1))
+
+    nv = sum(len(l["vertices"]) for l in levels.values())
+    ne = sum(len(l["edges"]) for l in levels.values())
+    logger.info("capture plan: %d vertices, %d edges -> %s", nv, ne, out)
+
     create_table_artifact(
         key=f"nav-graph-{project}-{map_name}".lower().replace("_", "-"),
         table=rows,
         description=f"Nav graph for {project}/{map_name} — the waypoints and "
                     f"lanes a capture is indexed against",
     )
+    create_table_artifact(
+        key=f"capture-plan-{project}-{map_name}".lower().replace("_", "-"),
+        table=[{"kind": c["kind"], "id": c["id"], "level": c["level"],
+                "panoramas go in": c["panos"]} for c in capture],
+        description=f"Where to photograph {project}/{map_name}: one folder per "
+                    f"vertex and per edge",
+    )
     return {"world": f"{project}/worlds/{map_name}/{map_name}.world",
             "nav_graph": f"{project}/worlds/{map_name}/nav_graphs/0.yaml",
+            "capture_plan": f"{project}/worlds/{map_name}/capture_plan.json",
             "levels": [r["level"] for r in rows],
-            "waypoints": sum(r["waypoints"] for r in rows),
-            "lanes": sum(r["lanes"] for r in rows)}
+            "vertices": nv, "edges": ne}
 
 
 def _run_name() -> str:
@@ -124,7 +219,7 @@ def build_world(project: str, map: str = "") -> dict:
     resolved = resolve_map(project, map)
     generate(project, resolved)
     rows = inspect(project, resolved)
-    return publish(project, resolved, rows)
+    return plan(project, resolved, rows)
 
 
 if __name__ == "__main__":

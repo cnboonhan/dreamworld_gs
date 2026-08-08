@@ -52,18 +52,28 @@ _default:
 setup: _env fetch-assets build
 
 _env:
-    @mkdir -p {{assets}}/prefect {{assets}}/projects
-    @printf 'DW_UID=%s\nDW_GID=%s\nDW_PROJECT=%s\n' \
-        "$(id -u)" "$(id -g)" "{{project}}" > {{repo}}/.env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{assets}}/prefect {{assets}}/projects
+    # Keep whatever .env already says the active project is. `project` may be a
+    # one-command override (DW_PROJECT=x just ...), and an override must not
+    # quietly become the new default — only `just use` switches.
+    active=$(sed -n 's/^DW_PROJECT=//p' {{repo}}/.env 2>/dev/null | tail -1)
+    printf 'DW_UID=%s\nDW_GID=%s\nDW_PROJECT=%s\n' \
+        "$(id -u)" "$(id -g)" "${active:-{{project}}}" > {{repo}}/.env
     # Seed the sample project, so the RMF sim has a building to open. Copies
     # only what is missing (-n), so an existing project — or an edited map — is
-    # never overwritten.
-    @for m in {{repo}}/samples/*/; do \
-        n=$(basename "$m"); \
-        mkdir -p {{assets}}/projects/"$n"/maps {{assets}}/projects/"$n"/worlds \
-                 {{assets}}/projects/"$n"/panos {{assets}}/projects/"$n"/splats; \
-        cp -rn "$m." {{assets}}/projects/"$n"/ 2>/dev/null || true; \
-     done
+    # never overwritten. Every project gets the same four drawers.
+    for m in {{repo}}/samples/*/; do
+        n=$(basename "$m")
+        cp -rn "$m." {{assets}}/projects/"$n"/ 2>/dev/null || true
+    done
+    for p in {{assets}}/projects/*/; do
+        [ -d "$p" ] || continue
+        mkdir -p "$p"maps "$p"worlds \
+                 "$p"panos/vertices "$p"panos/edges \
+                 "$p"splats/vertices "$p"splats/edges
+    done
 
 # Download all models into assets/ (idempotent; list in scripts/models.txt).
 fetch-assets:
@@ -117,85 +127,115 @@ use PROJECT:
 down:
     docker compose down
 
-# A folder of panoramas of one space is reconstructed together (reproject ->
-# SfM -> gaussian splatting). A single image file takes the generative
-# HY-World path instead: one vantage point, the rest imagined.
+# Reconstruct one part of the building from its panoramas.
+#
+# Panoramas live under the place they photograph:
+#
+#   panos/vertices/<id>/   a standpoint — one room, one junction, one waypoint
+#   panos/edges/<a>--<b>/  the corridor between two of them
+#
+# and the splat lands in splats/vertices/<id>/ or splats/edges/<a>--<b>/.
+# `just plan` lists the ids this project's map defines.
+#
+# A folder of panoramas is reconstructed together (reproject -> SfM -> gaussian
+# splatting). A single image file takes the generative HY-World path instead:
+# one vantage point, the rest imagined.
 #
 # spacing: metres between consecutive standpoints, default 0.5. SfM is
 # scale-free, so this is what puts the world in metres, which a simulator
 # needs; pass 0 to leave it unitless. ^C stops following, the job keeps
 # running (watch it at :4200).
-#
-# Build assets/projects/<project>/splats/<scene> from its panos/<scene>.
-generate scene spacing="0.5" proj=project: up
+generate id spacing="0.5" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
     if [ ! -d "$dir" ]; then
         echo "no such project: {{proj}}" >&2
-        ls {{assets}}/projects 2>/dev/null | sed 's/^/  /' >&2
+        just projects >&2
         exit 1
     fi
-    src=$(ls -d "$dir"/panos/{{scene}} "$dir"/panos/{{scene}}.* 2>/dev/null | head -1 || true)
+    # an id names a vertex or an edge; find which
+    src=""; kind=""
+    for k in vertices edges; do
+        for c in "$dir/panos/$k/{{id}}" "$dir"/panos/$k/{{id}}.*; do
+            [ -e "$c" ] || continue
+            if [ -n "$src" ] && [ "$kind" != "$k" ]; then
+                echo "'{{id}}' exists under both vertices/ and edges/ — rename one" >&2
+                exit 1
+            fi
+            src="$c"; kind="$k"
+        done
+    done
     if [ -z "$src" ]; then
-        echo "no such panorama or folder: {{proj}}/{{scene}}" >&2
-        echo "available in {{proj}}/panos:" >&2
-        ls "$dir"/panos 2>/dev/null | sed 's/^/  /' >&2
+        echo "nothing to reconstruct for '{{id}}' in {{proj}}" >&2
+        echo "captured so far:" >&2
+        for k in vertices edges; do
+            find "$dir/panos/$k" -mindepth 1 -maxdepth 1 2>/dev/null \
+                | sed "s|$dir/panos/|  |" >&2
+        done
+        echo "run 'just plan' for the ids this project's map defines" >&2
         exit 1
     fi
-    scene=$(basename "${src%.*}")
-    if [ -f "$dir"/splats/"$scene"/world.ply ]; then
-        echo "{{proj}}/$scene: already built, skipping"
-        echo "   (delete assets/projects/{{proj}}/splats/$scene to rebuild)"
+    # ids contain dots (L11.cafe), so strip an extension only from a file
+    if [ -d "$src" ]; then id=$(basename "$src"); else id=$(basename "${src%.*}"); fi
+    out="$dir/splats/$kind/$id"
+    if [ -f "$out/world.ply" ]; then
+        echo "{{proj}} $kind/$id: already built, skipping"
+        echo "   (delete assets/projects/{{proj}}/splats/$kind/$id to rebuild)"
         exit 0
     fi
-    mkdir -p "$dir"/splats/"$scene"
+    mkdir -p "$out"
     win=/workspace/projects/{{proj}}
 
     if [ -d "$src" ]; then
         n=$(ls "$src" | wc -l)
-        echo "reconstructing {{proj}}/$scene from $n panoramas"
+        echo "reconstructing {{proj}} $kind/$id from $n panoramas"
         docker compose exec -T generator python submit.py \
             reconstruct-world/dreamworld \
-            scene="$win"/splats/"$scene" \
-            panos="$win"/panos/"$(basename "$src")" \
+            scene="$win/splats/$kind/$id" \
+            panos="$win/panos/$kind/$id" \
             spacing={{spacing}}
     else
-        cp "$src" "$dir"/splats/"$scene"/_input.${src##*.}
+        cp "$src" "$out/_input.${src##*.}"
         # the generative pipeline reads panorama.png
         docker compose exec -T generator python -c "
         from pathlib import Path
         from PIL import Image
         Image.MAX_IMAGE_PIXELS = None
-        d = Path('$win/splats/$scene')
+        d = Path('$win/splats/$kind/$id')
         src = next(p for p in d.iterdir() if p.stem == '_input')
         Image.open(src).convert('RGB').save(d / 'panorama.png')
         src.unlink()"
         docker compose exec -T generator python submit.py \
             generate-world/dreamworld \
-            scene="$win"/splats/"$scene" \
+            scene="$win/splats/$kind/$id" \
             gpus={{gpus}} steps={{steps}}
     fi
-    echo "-> assets/projects/{{proj}}/splats/$scene/world.ply (+ .usdz, .cam.json, .path.json)"
-    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$scene/world.ply"
+    echo "-> assets/projects/{{proj}}/splats/$kind/$id/world.ply (+ .usdz, .cam.json, .path.json)"
+    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$kind/$id/world.ply"
 
-# Render a walkthrough video following the capture path.
+#   just video cafe 40           longer
+#   just video cafe 20 spline    weave through each standpoint exactly
+#   just video cafe 20 orbit     circle the centre (expect artifacts)
 #
-# The camera travels the straight line fitted through the standpoints the
-# panoramas were shot from, because that is where the scene was observed.
-# The viewer's tour uses the same path.
-#
-#   just video h2rc 40           longer
-#   just video h2rc 20 spline    weave through each standpoint exactly
-#   just video h2rc 20 orbit     circle the centre (expect artifacts)
-#
-# Render a walkthrough video following the capture path.
-video scene seconds="20" path="line" proj=project: up
+# Render a walkthrough of one vertex or edge, along its capture path.
+video id seconds="20" path="line" proj=project: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir={{assets}}/projects/{{proj}}
+    kind=""
+    for k in vertices edges; do
+        [ -f "$dir/splats/$k/{{id}}/world.ply" ] && kind="$k"
+    done
+    if [ -z "$kind" ]; then
+        echo "no splat built for '{{id}}' in {{proj}} — run: just generate {{id}}" >&2
+        exit 1
+    fi
     docker compose exec -T generator python submit.py \
         render-video/dreamworld \
-        scene=/workspace/projects/{{proj}}/splats/{{scene}} \
+        scene=/workspace/projects/{{proj}}/splats/$kind/{{id}} \
         seconds={{seconds}} path={{path}}
-    @echo "-> assets/projects/{{proj}}/splats/{{scene}}/walkthrough.mp4"
+    echo "-> assets/projects/{{proj}}/splats/$kind/{{id}}/walkthrough.mp4"
 
 # Build the Gazebo world + nav graph from a project's building map.
 #
@@ -211,6 +251,18 @@ world map="" proj=project: up
     docker compose exec -T generator python submit.py \
         build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
+
+# What this project's map says exists, and how much of it you have.
+#
+# build-world writes worlds/<map>/capture_plan.json: one entry per vertex and
+# per edge, with the id its panoramas belong under. This reads it back against
+# what is on disk, so the gap between the building and the captures is a list
+# rather than a guess.
+#
+#   just plan            everything
+#   just plan missing    only what still needs photographing
+plan filter="" proj=project:
+    @python3 {{repo}}/scripts/plan_report.py {{assets}}/projects/{{proj}} {{filter}}
 
 # What's in assets/projects, and what each project has.
 projects:

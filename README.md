@@ -13,12 +13,18 @@ One project is one building, and one directory:
 
 ```
 assets/projects/<project>/
-  maps/            <map>.building.yaml + its floorplan images   (you author)
-  worlds/<map>/    <map>.world, models/, nav_graphs/0.yaml      (generated)
-  panos/<scene>/   360 captures of one space                    (you shoot)
-  splats/<scene>/  world.ply, world.usdz, world.cam.json,
-                   world.path.json, walkthrough.mp4             (generated)
+  maps/                   <map>.building.yaml + floorplans      (you author)
+  worlds/<map>/           <map>.world, models/, nav_graphs/0.yaml,
+                          capture_plan.json                     (generated)
+  panos/vertices/<id>/    360 captures taken at a waypoint      (you shoot)
+  panos/edges/<id>/       ...taken along a corridor             (you shoot)
+  splats/vertices/<id>/   world.ply, world.usdz, world.cam.json,
+  splats/edges/<id>/      world.path.json, walkthrough.mp4      (generated)
 ```
+
+Panoramas live under the place they photograph, so a splat is addressed by
+where it is in the building rather than by a name someone invented. See
+[naming](#naming) for the ids.
 
 The rest of the repo:
 
@@ -108,6 +114,7 @@ there: levels, waypoints, lanes, and which lanes cross a door.
 
 ```bash
 just jobs                  # recent runs and their state
+just plan                  # what the map defines vs what has been captured
 ```
 
 Ctrl-C stops following; the job keeps running.
@@ -154,41 +161,61 @@ just video cafe 20 spline   # visit each standpoint exactly
 One scene per job — build them one at a time and each gets its own run to
 inspect, retry or compare.
 
-## The goal: a splat per vertex, a traversal per lane
+## Naming
 
-This is where the two halves join, and it is **not built yet** — today a scene
-is named whatever you call it, and its tour path is a straight line fitted
-through wherever the panoramas happened to be shot.
+Every part of the building gets an id, and its panoramas go in the folder of
+that name. `build-world` computes them and writes
+`worlds/<map>/capture_plan.json`; `just plan` reads it back.
 
-The nav graph already has the structure to key against. Vertices carry names,
-and lanes know which door they cross:
+| | id | goes in |
+| --- | --- | --- |
+| a named waypoint | `<level>.<name>` | `panos/vertices/L11.cafe/` |
+| an unnamed vertex | `<level>.v<index>` | `panos/vertices/L11.v7/` |
+| the corridor between two | `<level>.<a>--<b>` | `panos/edges/L11.cafe--v7/` |
 
-```yaml
-vertices: [28.52, -13.59, {name: cafe}]        # a place you can stand
-lanes:    [0, 1, {door_name: lift_lobby_north_door}]  # a way between two
+Three decisions worth knowing:
+
+**The level is always part of the id**, even for named waypoints. Waypoint
+names are not unique across a building — the sample map has a `lift_lobby` on
+L1 and another on L11, one directly above the other. Two different places must
+not share a folder.
+
+**Unnamed vertices fall back to their index.** Most vertices are unnamed
+corners with no other handle. The index comes from the nav graph, so it can
+shift if you insert vertices in the traffic editor — `just plan` will show the
+drift as a folder that no longer matches any id.
+
+**An edge is one corridor, not two.** Every lane in these graphs is
+bidirectional, so the endpoints are sorted and the edge gets one name whichever
+way you walked it. The level is written once, since lanes never cross levels.
+
+```bash
+just plan            # every id, and what has been captured for it
+just plan missing    # only what still needs photographing
+just generate L11.cafe        # panos/vertices/L11.cafe -> splats/vertices/L11.cafe
+just generate L11.cafe--v7    # the corridor between them
 ```
 
-On the sample building those named vertices are `cafe`, `playpen`,
-`apex_lab`, `lift_lobby_north`, `lift_lobby_south`, `gantry_entrance` — the
-same places the existing captures cover.
+`generate` finds the id under `vertices/` or `edges/` and puts the splat in the
+matching place, so you never say which kind it is.
 
-The intended correspondence:
+## The goal: a splat per vertex, a traversal per lane
+
+The naming above is the first half of joining the two sides. What it does not
+do yet: a splat still carries a straight tour path fitted through wherever its
+panoramas happened to be shot, rather than the lane polyline it belongs to.
 
 | nav graph | capture | splat |
 | --- | --- | --- |
-| **vertex** — somewhere you can stand | one 360 panorama, shot there | contributes a standpoint |
-| **lane** — a way between two vertices | the walk along it | the segment the tour plays |
+| **vertex** — somewhere you can stand | panoramas shot there | one splat of that place |
+| **lane** — a way between two vertices | the walk along it | one splat of that traversal |
 | **lane with a `door_name`** | the door you open partway | where a traversal is gated |
 
-So: shoot one panorama per named vertex, name it after that vertex, and a
-scene becomes a set of vertices rather than an unlabelled point cloud. Then
-`world.path.json` follows the actual lane polyline instead of a fitted line —
-which also fixes a real loss today, where a curved walk projected onto a
-straight axis gives up about a third of its length.
-
-What that buys: a route planned in RMF (Dijkstra over the lanes, opening the
-doors it crosses) can be rendered from the splats, because both sides agree on
-what a place is and what connects it.
+Once `world.path.json` follows the lane instead of a fitted line, a route
+planned in RMF — Dijkstra over the lanes, opening the doors it crosses — can be
+rendered from the splats end to end, because both sides agree on what a place
+is and what connects it. That also recovers a real loss today: a curved walk
+projected onto a straight axis gives up about a third of its length.
 
 ## Notes
 

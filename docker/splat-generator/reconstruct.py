@@ -484,13 +484,15 @@ def export(scene: str) -> dict:
 
 def _run_name() -> str:
     """Name the run after the one thing it produces, so the queue at :4200 reads
-    as a list of splats and worlds rather than a list of random adjectives.
+    as a list of places in a building rather than a list of random adjectives.
     One run, one artifact — that is the tracking unit."""
     from prefect.runtime import flow_run
 
-    scene = Path(flow_run.parameters.get("scene", "?"))
-    # .../<project>/splats/<scene>
-    return f"{scene.parent.parent.name}/{scene.name}"
+    parts = Path(flow_run.parameters.get("scene", "?")).parts
+    # .../<project>/splats/<kind>/<id>
+    if len(parts) >= 4 and parts[-3] == "splats":
+        return f"{parts[-4]}/{parts[-2]}/{parts[-1]}"
+    return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 
 @flow(name="reconstruct-world", log_prints=True,
