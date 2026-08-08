@@ -40,6 +40,45 @@ def load_splat(ply: Path, device: str):
     }
 
 
+def load_splats(plys: list[Path], device: str):
+    """Several splats as one, which is all "several splats" ever means here.
+
+    They were each placed in the building's frame by the poses their capture
+    recorded, so the union is a scene: concatenating the gaussians is the whole
+    operation. Nothing is merged or blended, and the rasteriser cannot tell.
+    """
+    parts = [load_splat(p, device) for p in plys]
+    return {k: torch.cat([p[k] for p in parts]) for k in parts[0]}
+
+
+def route_path(doc: dict, n_frames: int):
+    """(eyes, targets, up) along a planned route, one per frame.
+
+    Parameterised by arc length rather than by point index, so the pace is
+    even however the polyline happens to be sampled, and each frame looks the
+    way the path goes *here* — a route turns corners.
+    """
+    pts = np.asarray(doc["points"], dtype=np.float64)
+    up = np.asarray(doc.get("up") or [0.0, 0.0, 1.0], dtype=np.float64)
+    up = up / max(np.linalg.norm(up), 1e-9)
+
+    step = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(step)])
+    at = lambda u: np.stack([np.interp(np.clip(u, 0, s[-1]), s, pts[:, i])
+                             for i in range(3)], 1)
+    u = np.linspace(0, s[-1], n_frames)
+    eyes = at(u)
+
+    # a centred difference over a metre: defined at both ends, and it rounds a
+    # corner rather than snapping at the waypoint
+    look = max(1.0, s[-1] * 0.02)
+    d = at(u + look) - at(u - look)
+    d -= up[None] * (d @ up)[:, None]                    # keep it level
+    n = np.linalg.norm(d, axis=1, keepdims=True)
+    d = np.where(n > 1e-9, d / np.maximum(n, 1e-9), np.array([1.0, 0.0, 0.0]))
+    return eyes, eyes + d * look, up
+
+
 def capture_path(model: Path) -> tuple[np.ndarray, np.ndarray]:
     """Standpoint centres in capture order, plus the scene's up direction.
 
@@ -184,13 +223,14 @@ def plan_path(scene: Path, kind: str, n_frames: int):
 
 
 def render_frames(scene: Path, eyes, targets, up, out: Path,
-                  width: int, height: int, fov: float, fps: int) -> Path:
+                  width: int, height: int, fov: float, fps: int,
+                  plys: list[Path] | None = None) -> Path:
     """Rasterise every frame of the path into a raw mp4; returns its path."""
     import cv2
     from gsplat import rasterization
 
     dev = "cuda:0"
-    splat = load_splat(scene / "world.ply", dev)
+    splat = load_splats(plys or [scene / "world.ply"], dev)
     f = 0.5 * width / np.tan(np.radians(fov) * 0.5)
     K = torch.tensor([[[f, 0, width / 2], [0, f, height / 2], [0, 0, 1]]],
                      dtype=torch.float32, device=dev)

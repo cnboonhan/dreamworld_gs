@@ -298,6 +298,30 @@ route start goal proj=project: up
     docker compose exec -T generator python submit.py \
         plan-route/dreamworld project={{proj}} start={{start}} goal={{goal}}
     @echo "-> assets/projects/{{proj}}/traversals/"
+    @echo "   walk it: http://localhost:8081/?route={{proj}}/<from>__<to>"
+
+# Render a planned route to an mp4, for showing someone not at this machine.
+#
+# The viewer walks a route live and needs no render — this is the same walk
+# written to a file. It is also the check that the corridors meet without a
+# step at each vertex, since every frame is rasterised from the union of their
+# gaussians.
+#
+#   just route-video L11.cafe L11.v3          the pace of a walk
+#   just route-video L11.cafe L11.v3 30       thirty seconds
+route-video start goal seconds="0" proj=project: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    f={{assets}}/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json
+    if [ ! -f "$f" ]; then
+        echo "no route {{start}} -> {{goal}} — run: just route {{start}} {{goal}}" >&2
+        exit 1
+    fi
+    docker compose exec -T generator python submit.py \
+        render-route/dreamworld \
+        route=/workspace/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json \
+        seconds={{seconds}}
+    echo "-> assets/projects/{{proj}}/traversals/{{start}}__{{goal}}.mp4"
 
 # Package a project into one tarball, to carry to another node.
 #

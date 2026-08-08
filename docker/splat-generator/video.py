@@ -42,10 +42,12 @@ def render(scene: str, plan: dict, out: str, width: int, height: int,
     import numpy as np
 
     logger = get_run_logger()
+    plys = [Path(p) for p in plan.get("plys", [])]
     tmp = rv.render_frames(Path(scene), np.array(plan["eyes"]),
                            np.array(plan["targets"]), np.array(plan["up"]),
-                           Path(out), width, height, fov, fps)
-    logger.info("rasterised %d frames at %dx%d", len(plan["eyes"]), width, height)
+                           Path(out), width, height, fov, fps, plys=plys or None)
+    logger.info("rasterised %d frames at %dx%d from %d splat(s)",
+                len(plan["eyes"]), width, height, len(plys) or 1)
     return str(tmp)
 
 
@@ -88,5 +90,65 @@ def render_walkthrough(scene: str, seconds: float = 20.0, fps: int = 30,
     tmp = render(scene, p, out, width, height, fov, fps)
     result = encode(tmp, out)
     result["standpoints"] = p["standpoints"]
+    result["frames"] = n_frames
+    return result
+
+
+@task(name="1. plan route")
+def plan_route_path(route: str, n_frames: int) -> dict:
+    """The route's polyline, as camera poses — and the splats it crosses."""
+    import json
+
+    logger = get_run_logger()
+    doc = json.loads(Path(route).read_text())
+    eyes, targets, up = rv.route_path(doc, n_frames)
+    # .../<project>/traversals/<name>.route.json -> .../<project>
+    root = Path(route).parent.parent
+    plys, seen = [], set()
+    for s in doc["segments"]:                       # a route may revisit one
+        if s["splat"] not in seen:
+            seen.add(s["splat"])
+            plys.append(str(root / s["splat"]))
+    missing = [p for p in plys if not Path(p).is_file()]
+    if missing:
+        raise SystemExit("no splat at " + ", ".join(missing))
+    logger.info("%s: %.1f m over %d splat(s), %d frames",
+                " -> ".join(doc["waypoints"]), doc["metres"], len(plys), n_frames)
+    return {"eyes": eyes.tolist(), "targets": targets.tolist(),
+            "up": up.tolist(), "plys": plys, "standpoints": len(doc["segments"])}
+
+
+def _route_run_name() -> str:
+    from prefect.runtime import flow_run
+
+    return Path(flow_run.parameters.get("route", "?")).name.replace(".route.json", "")
+
+
+@flow(name="render-route", log_prints=True, flow_run_name=_route_run_name)
+def render_route(route: str, seconds: float = 0.0, fps: int = 30,
+                 width: int = 1280, height: int = 720, fov: float = 75.0,
+                 out: str = "") -> dict:
+    """A walkthrough of a whole route, the way the viewer streams it.
+
+    The viewer is the live version of this and needs no render; this is the
+    same walk written to a file, for showing someone who is not at the machine
+    — and, because it is rasterised from the union of the corridors' gaussians,
+    it is also the check that they meet without a step at the vertex.
+    """
+    import json
+
+    logger = get_run_logger()
+    doc = json.loads(Path(route).read_text())
+    out = out or str(Path(route).with_suffix("").with_suffix("") ) + ".mp4"
+    # a walking pace, so a long route is not a sprint
+    seconds = seconds or max(5.0, doc.get("metres", 10) * 1.5)
+    n_frames = int(seconds * fps)
+    logger.info("rendering %s -> %s (%.0f s)", route, out, seconds)
+
+    p = plan_route_path(route, n_frames)
+    tmp = render(str(Path(route).parent), p, out, width, height, fov, fps)
+    result = encode(tmp, out)
+    result["waypoints"] = doc["waypoints"]
+    result["splats"] = len(p["plys"])
     result["frames"] = n_frames
     return result
