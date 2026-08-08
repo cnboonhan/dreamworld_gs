@@ -15,6 +15,7 @@ Writes <scene>/walkthrough.mp4.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from pathlib import Path
 
@@ -137,9 +138,31 @@ def look_at(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
     return m
 
 
+def walked_path(scene: Path) -> tuple[np.ndarray, np.ndarray, int]:
+    """(points, up, standpoints) for this scene's walk, however it was obtained.
+
+    `world.path.json` is the walk itself — written by whichever stage knew it.
+    A simulated capture recorded its standpoints and has no reconstruction to
+    read them back out of, so this is the only place they exist; a real one is
+    reconstructed first and the sidecar is derived from that. Preferring the
+    sidecar means one path source for both, and the COLMAP read below is the
+    fallback for splats built before it was written.
+    """
+    sidecar = scene / "world.path.json"
+    if sidecar.is_file():
+        doc = json.loads(sidecar.read_text())
+        pts = np.asarray(doc.get("points") or [], dtype=np.float64)
+        if len(pts) > 1:
+            up = np.asarray(doc.get("up") or [0.0, 0.0, 1.0], dtype=np.float64)
+            return (pts, up / max(np.linalg.norm(up), 1e-9),
+                    int(doc.get("standpoints") or len(pts)))
+    centres, up = capture_path(scene / "undistorted" / "sparse" / "0")
+    return centres, up, len(centres)
+
+
 def plan_path(scene: Path, kind: str, n_frames: int):
     """(eyes, targets, up) for the camera, one entry per frame."""
-    centres, up = capture_path(scene / "undistorted" / "sparse" / "0")
+    centres, up, n_stand = walked_path(scene)
 
     if kind == "orbit":
         mid = centres.mean(0)
@@ -157,7 +180,7 @@ def plan_path(scene: Path, kind: str, n_frames: int):
         eyes, axis = straight_path(centres, n_frames)
         span = float(np.linalg.norm(eyes[-1] - eyes[0]))
         targets = eyes + axis * max(1.0, span * 0.3)
-    return eyes, targets, up, len(centres)
+    return eyes, targets, up, n_stand
 
 
 def render_frames(scene: Path, eyes, targets, up, out: Path,
