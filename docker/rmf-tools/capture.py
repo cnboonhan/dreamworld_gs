@@ -195,15 +195,17 @@ def standpoints(plan, edge_id, spacing, seed=0, zigzag=ZIGZAG_M):
             for i in range(n):
                 f = i / (n - 1)
                 x, y = ax + dx * f, ay + dy * f
-                # The endpoints stay on their vertices: they are where this
-                # corridor joins the next, and the alignment residual measures
-                # exactly how far they land from the lane's ends.
-                if 0 < i < n - 1:
-                    weave = zigzag * (1 if i % 2 else -1)
-                    along = rng.uniform(-JITTER_M, JITTER_M)
-                    across = weave + rng.uniform(-JITTER_M, JITTER_M)
-                    x += dx / length * along + nx * across
-                    y += dy / length * along + ny * across
+                # Every stop weaves, the endpoints included. Pinning them to
+                # the lane was a mistake: measured, the standpoints that weave
+                # collapse their twelve views onto a common centre to within
+                # 3 mm, and the two pinned endpoints scattered by 0.67 m — so
+                # the stops alignment depends on most were the least
+                # constrained. Nobody stops on a mathematical vertex anyway.
+                weave = zigzag * (1 if i % 2 else -1)
+                along = rng.uniform(-JITTER_M, JITTER_M)
+                across = weave + rng.uniform(-JITTER_M, JITTER_M)
+                x += dx / length * along + nx * across
+                y += dy / length * along + ny * across
                 out.append((x, y))
             # The interval that matters is the one actually walked, corner to
             # corner — the weave makes each step longer than the along-lane

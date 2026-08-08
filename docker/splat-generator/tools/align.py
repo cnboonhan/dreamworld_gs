@@ -100,8 +100,13 @@ def solve(scene: Path, plan: dict, edge_id: str, panos_dir: Path | None = None):
 
     placed = centres @ R.T + t
     span = float(np.linalg.norm(placed[-1] - placed[0]))
-    residual = max(float(np.linalg.norm(placed[0] - pa)),
-                   float(np.linalg.norm(placed[-1] - pb)))
+    # Measured along the lane, not straight-line to its ends. A capture weaves
+    # across the corridor on purpose, so it is laterally offset from the
+    # centreline by design; what would mean the splat is misplaced is arriving
+    # at the wrong point *along* the corridor.
+    proj = (placed - pa) @ lane_dir
+    residual = max(abs(float(proj[0])),
+                   abs(float(proj[-1]) - info["length_m"]))
     return R, t, {
         "aligned": True,
         "edge": edge_id,
