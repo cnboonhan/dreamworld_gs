@@ -541,9 +541,15 @@ def train(scene: str, iters: int, downscale: int,
                 len(pts), scale)
 
     means = torch.tensor(pts, device=dev)
+    # Chunk by the size of the distance matrix, not by a fixed row count: it is
+    # rows x all points, so a fixed 8192 rows quietly grew from a 2 GB
+    # allocation to 6.5 GB when the seed cloud went from noise to surfaces —
+    # which segfaulted the process rather than raising.
+    n_seed = means.shape[0]
+    rows = int(min(8192, max(256, 64_000_000 // max(n_seed, 1))))
     knn = []
-    for i in range(0, means.shape[0], 8192):
-        d = torch.cdist(means[i:i + 8192], means)
+    for i in range(0, n_seed, rows):
+        d = torch.cdist(means[i:i + rows], means)
         knn.append(d.topk(4, largest=False).values[:, 1:].mean(1))
     params = torch.nn.ParameterDict({
         "means": torch.nn.Parameter(means),

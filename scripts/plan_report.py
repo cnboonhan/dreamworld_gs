@@ -123,10 +123,14 @@ def print_quality(rows: list[dict]) -> None:
               f"{fmt(r.get('mb'), '>7.1f'):>7}  "
               f"{'yes' if r['video'] else '—'}"
               + (f"   ({'; '.join(flags)})" if flags else ""))
-    print(f"  -- {len(rows)} splat(s). PSNR is on held-out views: it says the "
-          f"splat matches the photos,")
-    print(f"     not that the room is fully covered — that is what the capture "
-          f"count above tells you.")
+    print(f"  -- {len(rows)} splat(s). PSNR is on held-out *viewpoints* — a "
+          f"whole standpoint the")
+    print(f"     training never saw, so it tests depth and not just direction. "
+          f"'—' means the walk")
+    print(f"     was too short to spare one. It says the splat matches the "
+          f"photographs, not that")
+    print(f"     the room is covered — that is what the capture count above "
+          f"tells you.")
 
 
 def report(project_dir: Path, only_missing: bool = False) -> int:
