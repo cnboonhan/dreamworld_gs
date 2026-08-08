@@ -295,7 +295,9 @@ def apply_rig(db, angles, logger):
 
 
 @task(name="2. structure from motion")
-def run_sfm(scene: str, spacing: float = 0.0, angles=None) -> dict:
+def run_sfm(scene: str, spacing: float = 0.0, angles=None,
+            panos: str = "", size: int = 1024, fov: float = 100.0,
+            require_sfm: bool = False) -> dict:
     """COLMAP poses across every view from every panorama.
 
     Exhaustive matching: the views come from a handful of standpoints rather
@@ -337,22 +339,58 @@ def run_sfm(scene: str, spacing: float = 0.0, angles=None) -> dict:
     apply_rig(db, angles, logger)
     # mapping is one long call with no output of its own; say so, otherwise
     # the run looks hung for minutes
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).parent / "tools"))
+    import known_poses as kp
+
+    recorded = kp.load(Path(panos)) if panos else None
+    if recorded and not require_sfm:
+        # A simulated capture knows where it stood. Inferring it again from an
+        # empty corridor of flat planes is the hardest case there is, and it is
+        # a question we do not have to ask.
+        logger.info("poses.json found: using the %d recorded standpoint(s) "
+                    "instead of solving for them", len(recorded))
+        model = sparse / "0"
+        n = kp.build(work, db, images, recorded, angles or [], size, fov,
+                     model, logger)
+        rec = pycolmap.Reconstruction(str(model))
+        logger.info("triangulated %d points across %d placed view(s)",
+                    rec.num_points3D(), n)
+        undist = work / "undistorted"
+        shutil.rmtree(undist, ignore_errors=True)
+        pycolmap.undistort_images(undist, model, images)
+        out = undist / "sparse" / "0"
+        out.mkdir(parents=True, exist_ok=True)
+        for f in ("cameras.bin", "images.bin", "points3D.bin",
+                  "rigs.bin", "frames.bin"):
+            src = undist / "sparse" / f
+            if src.exists():
+                src.rename(out / f)
+        shutil.rmtree(undist / "stereo", ignore_errors=True)
+        # already in building metres, so nothing to rescale and nothing to align
+        return {"registered": n, "total": n, "points": rec.num_points3D(),
+                "metric_scale": 1.0, "models": 1, "poses": "recorded"}
+
     logger.info("incremental mapping (no output until it finishes)")
-    # The rig's relative poses are left refinable, which is not where this
-    # should end up. We generate the reprojection, so we know each view's
-    # rotation off the panorama and that they share a centre exactly; left
-    # free, bundle adjustment drifts the sensors 0.49 m from the zero
-    # translation they were given — identically in every frame, which is the
-    # ambiguity reappearing once per rig instead of once per view.
-    #
-    # But pinning them (ba_refine_sensor_from_rig = False) stops COLMAP
-    # building any reconstruction at all: it discards its initial pair and
-    # registers nothing in 80 minutes, against 38 with them free. That points
-    # at the rotations handed to the rig disagreeing with the images — most
-    # likely a frame-convention error in rig_config() — rather than at the
-    # constraint being wrong in principle. Worth fixing: pinned, the scatter
-    # should go to zero by construction.
-    recs = pycolmap.incremental_mapping(db, images, sparse)
+    opts = pycolmap.IncrementalPipelineOptions()
+    # Pin the rig. Its relative poses are not estimates: we generate the
+    # reprojection, so we know each view's rotation off the panorama and that
+    # they share a centre exactly. Verified numerically — cam_from_rig
+    # reproduces the reprojection's own geometry to 1e-12. Left free, bundle
+    # adjustment drifts the sensors 0.49 m apart, identically in every frame,
+    # which is the depth ambiguity reappearing once per rig.
+    opts.ba_refine_sensor_from_rig = False
+    # Pinning leaves only one place to find a baseline: between panoramas.
+    # Two views of the same one now have a genuinely zero triangulation angle,
+    # so the initial pair must span standpoints — and standpoints are 0.9 m
+    # apart looking at walls a few metres away, which is a modest angle. The
+    # 16-degree default rejects those honest pairs along with the impossible
+    # ones, and only two attempts are made before giving up; COLMAP registered
+    # nothing in 80 minutes. Accept a smaller angle, and let it look harder.
+    opts.mapper.init_min_tri_angle = 4.0
+    opts.mapper.init_max_reg_trials = 20
+    recs = pycolmap.incremental_mapping(db, images, sparse, options=opts)
     if not recs:
         raise RuntimeError(
             "SfM found no reconstruction — the panoramas probably do not "
@@ -575,6 +613,12 @@ def align(scene: str, panos: str) -> dict:
     logger = get_run_logger()
     scene_p = Path(scene)
     edge_id = scene_p.name
+    if (Path(panos) / "poses.json").is_file():
+        # built at poses recorded in building metres, so it is already where it
+        # belongs — there is nothing to solve, and no residual to report
+        logger.info("built from recorded poses: already in building coordinates")
+        return {"aligned": True, "edge": edge_id, "align_residual_m": 0.0,
+                "placed_by": "recorded poses"}
     project = scene_p.parent.parent                 # .../<project>/splats/<id>
     plans = sorted((project / "worlds").glob("*/capture_plan.json"))
     if not plans:
@@ -629,6 +673,28 @@ def _run_name() -> str:
     return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 
+@flow(name="reconstruct-simulated", log_prints=True, flow_run_name=_run_name)
+def reconstruct_simulated(scene: str, panos: str, views: int = 8,
+                          size: int = 1024, iters: int = 15000,
+                          downscale: int = 1, aniso_weight: float = 0.0,
+                          fov: float = 100.0) -> dict:
+    """A capture from the simulator, which recorded where it stood.
+
+    Separate from reconstruct-world on purpose. A real 360 capture cannot tell
+    you its poses, so that one has to infer them and then work out where the
+    result belongs in the building. This one is handed both, so it skips the
+    solve and the alignment entirely — different work, different job, and the
+    queue says which ran rather than leaving it to a file's presence.
+    """
+    if not (Path(panos) / "poses.json").is_file():
+        raise RuntimeError(
+            f"no poses.json in {panos}. Captures from the simulator record "
+            f"one; a real capture cannot, and belongs in reconstruct-world.")
+    return reconstruct_world(scene=scene, panos=panos, views=views, size=size,
+                             iters=iters, downscale=downscale,
+                             aniso_weight=aniso_weight, spacing=0.0, fov=fov)
+
+
 @flow(name="reconstruct-world", log_prints=True,
       flow_run_name=_run_name)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
@@ -642,7 +708,8 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     is what makes the export metric, which is what a simulator needs.
     """
     shot = reproject(scene, panos, views, size, fov)
-    sfm = run_sfm(scene, spacing, shot["angles"])
+    sfm = run_sfm(scene, spacing, shot["angles"], panos, size, fov,
+                  require_sfm=spacing > 0)
     stats = train(scene, iters, downscale, aniso_weight)
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building

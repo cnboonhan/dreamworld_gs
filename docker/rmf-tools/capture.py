@@ -10,10 +10,14 @@ pitch, reprojected into an equirectangular canvas using the camera's known pose
 and intrinsics. Because the poses are exact this needs no feature matching, so
 it works on flat sim walls that no feature detector would survive.
 
-**Only images are written.** No poses, no positions, no marker that this came
-from a simulator — the output is a folder of numbered equirectangular PNGs,
-which is exactly what a person hands over after walking a corridor. Everything
-downstream must work from that alone, or it has not been tested at all.
+Alongside the panoramas it writes `poses.json`: where the camera actually
+stood, in building metres. A real 360 capture cannot supply that, so the splat
+pipeline still runs structure-from-motion when it is absent — but when a
+simulated walk is the input there is no reason to re-derive by inference what
+we already know exactly, and an empty corridor of flat planes is close to the
+worst case for inferring it. Known poses make a simulated capture reconstruct
+correctly by construction, which is what makes it useful for developing
+everything downstream.
 
 Needs a running sim with the rec_cam model, its image topic, and the
 world's set_pose service bridged into ROS. capture.sh arranges that.
@@ -260,9 +264,11 @@ def main():
     print(f"walking {a.edge}: {len(points)} standpoints "
           f"{actual:.3f} m apart", flush=True)
     rng = np.random.default_rng(seed ^ 0x9E37)
+    heights = []
     for i, (x, y) in enumerate(points):
         # and nobody holds a 360 camera at exactly one height
         a.height = base_height + float(rng.uniform(-0.05, 0.05))
+        heights.append(a.height)
         # zero-padded, so lexicographic order is walk order — the pipeline reads
         # direction of travel from filename order and nothing else
         out = os.path.join(a.out_dir, f"{i:03d}.png")
@@ -270,7 +276,16 @@ def main():
 
     # the interval actually walked, which is what makes the reconstruction
     # metric — reconstruct with: just generate <edge> <spacing>
-    print(f"wrote {len(points)} panoramas to {a.out_dir}", flush=True)
+    # where the camera stood, for the pipeline to use instead of inferring it
+    poses = {
+        "frame": "gz",           # +X forward, +Y left, +Z up; metres
+        "note": "camera centres in building coordinates, one per panorama",
+        "standpoints": [{"image": f"{i:03d}.png",
+                         "xyz": [round(x, 6), round(y, 6), round(h, 6)]}
+                        for i, ((x, y), h) in enumerate(zip(points, heights))],
+    }
+    Path(a.out_dir, "poses.json").write_text(json.dumps(poses, indent=1))
+    print(f"wrote {len(points)} panoramas + poses.json to {a.out_dir}", flush=True)
     print(f"SPACING {actual:.4f}", flush=True)
     # hard-exit past rclpy's static-destructor teardown, which can abort with a
     # non-zero code and fail the stage

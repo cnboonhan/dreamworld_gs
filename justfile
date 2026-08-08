@@ -173,13 +173,24 @@ generate id spacing="0.5" proj=project: up
     win=/workspace/projects/{{proj}}
 
     if [ -d "$src" ]; then
-        n=$(ls "$src" | wc -l)
+        n=$(ls "$src"/*.png "$src"/*.jpg "$src"/*.JPG 2>/dev/null | wc -l)
+        # Two different jobs, because they are two different pieces of work: a
+        # simulated capture recorded where it stood, a real one cannot. The
+        # choice is made here, at submission, so the queue names which ran.
+        if [ -f "$src/poses.json" ]; then
+            echo "reconstructing {{proj}} $id from $n simulated panoramas (poses recorded)"
+            docker compose exec -T generator python submit.py \
+                reconstruct-simulated/dreamworld \
+                scene="$win/splats/$id" \
+                panos="$win/panos/$id"
+        else
         echo "reconstructing {{proj}} $id from $n panoramas"
         docker compose exec -T generator python submit.py \
             reconstruct-world/dreamworld \
             scene="$win/splats/$id" \
             panos="$win/panos/$id" \
             spacing={{spacing}}
+        fi
     else
         cp "$src" "$out/_input.${src##*.}"
         # the generative pipeline reads panorama.png
