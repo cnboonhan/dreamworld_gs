@@ -19,3 +19,24 @@ Fetched at build or run time, not vendored:
 Model weights are downloaded by `just fetch-assets` into `assets/`, which is
 not tracked here. Review the individual model licenses before any deployment
 beyond evaluation — several are non-commercial or otherwise restricted.
+
+## Open-RMF
+
+The `rmf-tools` image is built `FROM ghcr.io/open-rmf/rmf/rmf_demos`, which
+ships [Open-RMF](https://github.com/open-rmf) — `rmf_traffic`, `rmf_task`,
+`rmf_fleet_adapter`, `rmf_building_map_tools` and `rmf_traffic_editor` — under
+the **Apache License 2.0**, together with [Gazebo](https://gazebo.org/)
+(Apache-2.0) and ROS 2 Jazzy (Apache-2.0).
+
+The world generation and its SDF fixups (`generate_world.sh`,
+`postprocess_world.py`, `sim.launch.xml.template`) are ported from the internal
+`dreamworld` pipeline, trimmed to what a simulated — rather than generatively
+rendered — building needs.
+
+`samples/office/` is the `office` demo map from that same pipeline, itself
+derived from the Open-RMF demo maps (Apache-2.0).
+
+The browser view of both Qt applications uses
+[noVNC](https://github.com/novnc/noVNC) (MPL-2.0) and
+[websockify](https://github.com/novnc/websockify) (LGPL-3.0), installed from
+Ubuntu packages inside the image and not modified.

@@ -4,6 +4,7 @@
 #   just up                          start everything, print the URLs
 #   just generate office             assets/panos/office/ -> a world
 #   just video office                walkthrough mp4 along the capture path
+#   just world office                assets/maps/office/ -> a Gazebo world + nav graph
 #
 # Services live in compose.yaml; these recipes drive them.
 
@@ -26,8 +27,14 @@ _default:
 setup: _env fetch-assets build
 
 _env:
-    @mkdir -p {{assets}}/prefect {{assets}}/scenes {{assets}}/panos
+    @mkdir -p {{assets}}/prefect {{assets}}/scenes {{assets}}/panos \
+              {{assets}}/maps {{assets}}/worlds
     @printf 'DW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" > {{repo}}/.env
+    # seed the sample building map, so the RMF sim has something to open
+    @for m in {{repo}}/samples/*/; do \
+        n=$(basename "$m"); \
+        [ -d {{assets}}/maps/"$n" ] || cp -r "$m" {{assets}}/maps/"$n"; \
+     done
 
 # Download all models into assets/ (idempotent; list in scripts/models.txt).
 fetch-assets:
@@ -49,9 +56,12 @@ up: _env
     @echo "  jobs + logs   http://localhost:4200"
     @echo "  worlds        http://localhost:8081/?url=files/<scene>/world.ply"
     @echo "  panoramas     http://localhost:8082"
+    @echo "  rmf sim       http://localhost:8083"
+    @echo "  traffic ed    http://localhost:8084"
     @echo
     @echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
-    @echo "              -L 8082:localhost:8082 <this-host>"
+    @echo "              -L 8082:localhost:8082 -L 8083:localhost:8083 \\"
+    @echo "              -L 8084:localhost:8084 <this-host>"
 
 # Stop everything.
 down:
@@ -127,6 +137,22 @@ video scene seconds="20" path="line":
     docker compose exec -T generator python tools/render_video.py \
         /workspace/scenes/{{scene}} --seconds {{seconds}} --path {{path}}
     @echo "-> assets/scenes/{{scene}}/walkthrough.mp4"
+
+# Build the Gazebo world + nav graph for a building map in assets/maps.
+#
+# The nav graph (nav_graphs/0.yaml) is the output that outlives the simulation:
+# named waypoints, the lanes between them, and which lanes cross a door. That is
+# the building's traversal semantics, and what a captured walkthrough is indexed
+# against. The sim service generates this on first start too — this recipe is for
+# rebuilding after you have edited the map.
+world map="office": _env
+    docker compose run --rm --no-deps rmfsim world {{map}}
+    @echo "-> assets/worlds/{{map}}/ (world, models, nav_graphs, sim.launch.xml)"
+    docker compose restart rmfsim 2>/dev/null || true
+
+# List the building maps available to simulate.
+maps:
+    @ls {{assets}}/maps 2>/dev/null || echo "none yet — drop a <name>/<name>.building.yaml in assets/maps/"
 
 # List the panoramas available to generate from.
 panos:

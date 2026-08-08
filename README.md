@@ -1,7 +1,21 @@
 # dreamworld_gs
 
 Turn 360° panoramas into a navigable 3D Gaussian Splatting world, exported for
-both **web viewing** (`.ply`) and **NVIDIA Isaac Sim** (`.usdz`, NuRec).
+both **web viewing** (`.ply`) and **NVIDIA Isaac Sim** (`.usdz`, NuRec) — and
+simulate the same building under [Open-RMF](https://www.open-rmf.org/), so the
+splats can be indexed against the building's own traversal semantics.
+
+Two halves that meet at the nav graph:
+
+| | Built from | Gives you |
+| --- | --- | --- |
+| **RMF side** | an annotated floorplan (`assets/maps/`) | the building simulated — doors, lifts, waypoints, the lanes between them |
+| **splat side** | 360 photos of the real place (`assets/panos/`) | what those places actually look like, as gaussians |
+
+The nav graph is the contract between them: RMF says *where you can go and what
+you have to open to get there*; the splats say *what it looks like when you do*.
+
+## The splat side
 
 Two ways in, chosen by what you put in `assets/panos/`:
 
@@ -48,7 +62,7 @@ copied into an image lives there, nothing is pulled from the repo root.
 
 ```
 justfile                       all workflows (just --list)
-compose.yaml                   the five services
+compose.yaml                   the seven services
 docker/
   splat-generator/             pipeline image (GPU) — build context
     splat-generator.Dockerfile clones HY-World at a pinned commit + patches it
@@ -71,6 +85,15 @@ docker/
     pano-viewer.Dockerfile
     nginx.conf
     www/                       equirect viewer for the input panoramas
+  rmf-tools/                   RMF + Gazebo + traffic editor — build context
+    rmf-tools.Dockerfile       FROM open-rmf/rmf_demos, plus a virtual display
+    entrypoint.sh              one image, three roles: world / sim / editor
+    with_display.sh            Xvfb -> x11vnc -> websockify -> noVNC
+    generate_world.sh          building.yaml -> world + models + nav graph
+    postprocess_world.py       SDF fixups the generator leaves behind
+    sim.launch.xml.template    Gazebo (headless) + the RMF core nodes
+samples/                       small in-repo building maps, seeded into assets/
+  office/                      one level, three doors, no lifts
 scripts/                       host-side only (see scripts/README.md)
   fetch_assets.py              downloads everything in models.txt
   extract_sam3_image.py        derive SAM3 image model from video packaging
@@ -78,8 +101,10 @@ assets/                        gitignored, all large files
   models/                      SAM 3 weights (image + video packaging)
   hf/                          HuggingFace cache (HY-World, Qwen, WorldStereo)
   panos/<name>/                input: the panoramas of one space
+  maps/<name>/                 input: <name>.building.yaml + its floorplan
   scenes/<name>/               output: world.ply, world.usdz, world.cam.json,
                                world.path.json, walkthrough.mp4
+  worlds/<name>/               output: <name>.world, models/, nav_graphs/
   prefect/                     job history database
 ```
 
@@ -89,7 +114,7 @@ override it at build time with
 
 ## Usage
 
-`just up` starts five services (see `compose.yaml`) and leaves them running —
+`just up` starts seven services (see `compose.yaml`) and leaves them running —
 nothing else needs launching by hand:
 
 | Service | Role |
@@ -99,8 +124,12 @@ nothing else needs launching by hand:
 | `generator` | waits for jobs, runs the pipeline on the remaining GPUs |
 | `viewer` | WebGL splat viewer, every world at once, on :8081 |
 | `panoviewer` | 360 viewer for the input panoramas in `assets/panos/`, on :8082 |
+| `rmfsim` | the building simulated under RMF, viewable on :8083 |
+| `editor` | the traffic editor — author the map — on :8084 |
 
 ```bash
+just maps                      # building maps available to simulate
+just world office              # assets/maps/office/ -> world + nav graph
 just panos                     # what's available to build from
 just generate office           # assets/panos/office/ -> assets/scenes/office
 just generate office lobby_v2  # ...into a differently named scene
@@ -121,7 +150,8 @@ or retry the run in the Prefect UI.
 Viewing remotely:
 
 ```bash
-ssh -L 4200:localhost:4200 -L 8081:localhost:8081 -L 8082:localhost:8082 <host>
+ssh -L 4200:localhost:4200 -L 8081:localhost:8081 -L 8082:localhost:8082 \
+    -L 8083:localhost:8083 -L 8084:localhost:8084 <host>
 ```
 
 Then open `http://localhost:8081/?url=files/office/world.ply` in a **real
@@ -152,6 +182,52 @@ control back to free flight, as does the **free** button.
 
 The tour follows exactly the line `just video` renders, to within rounding — so
 what you see gliding is what the walkthrough shows.
+
+## The RMF side
+
+`assets/maps/<name>/<name>.building.yaml` is an [RMF building
+map](https://github.com/open-rmf/rmf_traffic_editor): a floorplan image with
+walls, doors, lifts and a nav graph drawn on top of it. `just setup` seeds
+`office` from `samples/` so there is something to open.
+
+```bash
+just maps                      # what's there
+just world office              # -> assets/worlds/office/
+```
+
+That produces the Gazebo world, its models, `sim.launch.xml`, and —
+the piece that matters beyond the simulation — `nav_graphs/0.yaml`.
+
+**Simulate it** at `http://localhost:8083`. The simulation itself runs
+headless; what you see is the Gazebo GUI attached to it as a viewer, so closing
+the tab costs nothing. Alongside Gazebo it runs the RMF core: the traffic
+schedule, blockade and mutex-group supervisors, the task dispatcher, and the
+building map server. That is what makes doors and lifts *addressable* rather
+than merely present:
+
+```bash
+docker compose exec rmfsim bash -lc '. /rmf_demos_ws/install/setup.bash
+  ros2 topic pub --once /door_requests rmf_door_msgs/msg/DoorRequest \
+    "{requester_id: me, door_name: main_door, requested_mode: {value: 2}}"
+  ros2 topic echo /door_states'
+```
+
+**Edit it** at `http://localhost:8084` — the traffic editor, on the same map
+directory, so a save there is picked up by the next `just world`.
+
+Both are Qt applications with no headless mode, so each runs on a private X
+server inside its container and publishes that screen as a web page
+(Xvfb → x11vnc → websockify → noVNC). Rendering is software: passing a GPU to a
+GLX application in a container needs a real X server on the host, and these are
+floorplan-scale scenes.
+
+### Why both halves
+
+A gaussian splat knows what a corridor looks like but nothing about it — where
+one room ends, which opening is a door, what is on the other side. The nav graph
+knows exactly that and nothing about appearance. Capturing panoramas at the nav
+graph's own waypoints, and walking its lanes, gives every splat a place in the
+building rather than a private coordinate frame.
 
 ## Notes on the pipeline
 
