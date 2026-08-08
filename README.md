@@ -9,20 +9,44 @@ Two halves that meet at the nav graph:
 
 | | Built from | Gives you |
 | --- | --- | --- |
-| **RMF side** | an annotated floorplan (`assets/maps/`) | the building simulated — doors, lifts, waypoints, the lanes between them |
-| **splat side** | 360 photos of the real place (`assets/panos/`) | what those places actually look like, as gaussians |
+| **RMF side** | an annotated floorplan (`maps/`) | the building simulated — doors, lifts, waypoints, the lanes between them |
+| **splat side** | 360 photos of the real place (`panos/`) | what those places actually look like, as gaussians |
 
 The nav graph is the contract between them: RMF says *where you can go and what
 you have to open to get there*; the splats say *what it looks like when you do*.
 
+## Projects
+
+Everything about one building lives in `assets/projects/<project>/`:
+
+```
+maps/      the authored floorplan — <map>.building.yaml + its images
+worlds/    generated from it: Gazebo world, models, nav_graphs/0.yaml
+panos/     360 captures of the real place, one folder per scene
+splats/    what those captures reconstruct into
+```
+
+So a project is one directory to copy, back up or hand over, and every service
+mounts the same tree. One project is **active** at a time — `DW_PROJECT` in
+`.env` selects it, and both `just` and a bare `docker compose up` read it:
+
+```bash
+just projects              # what's there; * marks the active one
+just use multilevel_office # switch the stack
+DW_PROJECT=htx just world  # or override for a single command
+```
+
+`just setup` seeds `multilevel_office` from `samples/` — a two-level building
+with lifts — so there is something to open on a fresh checkout.
+
 ## The splat side
 
-Two ways in, chosen by what you put in `assets/panos/`:
+Two ways in, chosen by what you put in the project's `panos/`:
 
 | Input | Pipeline | Geometry |
 | --- | --- | --- |
-| `<name>/` — a folder of panoramas of one space | **reconstruct**: reproject → SfM → gaussian splatting | **measured** from the parallax between standpoints |
-| `<name>.jpg` — a single panorama | **generate**: [HY-World 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (WorldNav → WorldStereo → 3DGS) | **imagined** beyond the one vantage point |
+| `panos/<scene>/` — a folder of panoramas of one space | **reconstruct**: reproject → SfM → gaussian splatting | **measured** from the parallax between standpoints |
+| `panos/<scene>.jpg` — a single panorama | **generate**: [HY-World 2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) (WorldNav → WorldStereo → 3DGS) | **imagined** beyond the one vantage point |
 
 Reconstruction is faithful to the real room but only knows what the cameras
 saw — its quality tracks how many standpoints you capture. Generation fills a
@@ -36,12 +60,19 @@ plausible invention. Isaac export in both cases uses
 just setup                # one-time: model weights + images (~500GB, needs network)
 just up                   # start the stack, prints the URLs
 
-mkdir -p assets/panos/office && cp *.jpg assets/panos/office/
-just generate office      # -> assets/scenes/office/{world.ply,world.usdz}
-just video office         # -> assets/scenes/office/walkthrough.mp4
+# the RMF side: the sample project already has a map
+just world                # -> worlds/multilevel_office/ (world + nav graph)
+
+# the splat side: drop captures in, reconstruct them
+mkdir -p assets/projects/multilevel_office/panos/cafe
+cp *.jpg assets/projects/multilevel_office/panos/cafe/
+just generate cafe        # -> splats/cafe/{world.ply,world.usdz}
+just video cafe           # -> splats/cafe/walkthrough.mp4
 ```
 
-Then open `http://localhost:8081/?url=files/office/world.ply`.
+Then open
+`http://localhost:8081/?url=files/multilevel_office/splats/cafe/world.ply`,
+and the simulated building at `http://localhost:8083`.
 
 Everything after `just setup` runs **fully offline** — containers mount model
 weights from `assets/` and never reach the network.
@@ -62,7 +93,7 @@ copied into an image lives there, nothing is pulled from the repo root.
 
 ```
 justfile                       all workflows (just --list)
-compose.yaml                   the seven services
+compose.yaml                   the seven services; reads DW_PROJECT
 docker/
   splat-generator/             pipeline image (GPU) — build context
     splat-generator.Dockerfile clones HY-World at a pinned commit + patches it
@@ -92,20 +123,21 @@ docker/
     generate_world.sh          building.yaml -> world + models + nav graph
     postprocess_world.py       SDF fixups the generator leaves behind
     sim.launch.xml.template    Gazebo (headless) + the RMF core nodes
-samples/                       small in-repo building maps, seeded into assets/
-  office/                      one level, three doors, no lifts
+samples/                       in-repo starter projects, seeded into assets/
+  multilevel_office/maps/      two levels, two lifts, many doors
 scripts/                       host-side only (see scripts/README.md)
   fetch_assets.py              downloads everything in models.txt
   extract_sam3_image.py        derive SAM3 image model from video packaging
 assets/                        gitignored, all large files
   models/                      SAM 3 weights (image + video packaging)
   hf/                          HuggingFace cache (HY-World, Qwen, WorldStereo)
-  panos/<name>/                input: the panoramas of one space
-  maps/<name>/                 input: <name>.building.yaml + its floorplan
-  scenes/<name>/               output: world.ply, world.usdz, world.cam.json,
-                               world.path.json, walkthrough.mp4
-  worlds/<name>/               output: <name>.world, models/, nav_graphs/
   prefect/                     job history database
+  projects/<project>/          one building, everything about it
+    maps/                      <map>.building.yaml + its floorplan images
+    worlds/<map>/              <map>.world, models/, nav_graphs/, sim.launch.xml
+    panos/<scene>/             input: the panoramas of one space
+    splats/<scene>/            output: world.ply, world.usdz, world.cam.json,
+                               world.path.json, walkthrough.mp4
 ```
 
 The HY-World commit is pinned as `HYWORLD_REF` in the generator Dockerfile;
@@ -123,21 +155,23 @@ nothing else needs launching by hand:
 | `vlm` | Qwen3-VL on GPU 0: picks navigation targets, captions rendered views |
 | `generator` | waits for jobs, runs the pipeline on the remaining GPUs |
 | `viewer` | WebGL splat viewer, every world at once, on :8081 |
-| `panoviewer` | 360 viewer for the input panoramas in `assets/panos/`, on :8082 |
-| `rmfsim` | the building simulated under RMF, viewable on :8083 |
-| `editor` | the traffic editor — author the map — on :8084 |
+| `panoviewer` | 360 viewer for every project's input panoramas, on :8082 |
+| `rmfsim` | the active project's building simulated under RMF, on :8083 |
+| `editor` | the traffic editor — author that map — on :8084 |
 
 ```bash
-just maps                      # building maps available to simulate
-just world office              # assets/maps/office/ -> world + nav graph
-just panos                     # what's available to build from
-just generate office           # assets/panos/office/ -> assets/scenes/office
-just generate office lobby_v2  # ...into a differently named scene
-just generate office "" 1.5    # ...with 1.5m between standpoints
-just video office              # walkthrough mp4 along the capture path
+just projects                  # what's there; * marks the active project
+just use htx                   # point the whole stack at another project
+just world                     # maps/ -> worlds/ (world + nav graph)
+just generate cafe             # panos/cafe/ -> splats/cafe/
+just generate cafe 1.5         # ...with 1.5m between standpoints
+just video cafe                # walkthrough mp4 along the capture path
 just jobs                      # recent runs and their state
 just down                      # stop everything
 ```
+
+Every recipe defaults to the active project; pass `proj=<name>` (or set
+`DW_PROJECT`) to target another one for a single command.
 
 `generate` skips a scene that already has a `world.ply`; delete the scene
 directory to rebuild it.
@@ -154,8 +188,9 @@ ssh -L 4200:localhost:4200 -L 8081:localhost:8081 -L 8082:localhost:8082 \
     -L 8083:localhost:8083 -L 8084:localhost:8084 <host>
 ```
 
-Then open `http://localhost:8081/?url=files/office/world.ply` in a **real
-browser tab** (embedded IDE browsers abort large downloads).
+Then open
+`http://localhost:8081/?url=files/<project>/splats/<scene>/world.ply` in a
+**real browser tab** (embedded IDE browsers abort large downloads).
 
 ## The tour
 
@@ -185,14 +220,12 @@ what you see gliding is what the walkthrough shows.
 
 ## The RMF side
 
-`assets/maps/<name>/<name>.building.yaml` is an [RMF building
+`maps/<map>.building.yaml` is an [RMF building
 map](https://github.com/open-rmf/rmf_traffic_editor): a floorplan image with
-walls, doors, lifts and a nav graph drawn on top of it. `just setup` seeds
-`office` from `samples/` so there is something to open.
+walls, doors, lifts and a nav graph drawn on top of it.
 
 ```bash
-just maps                      # what's there
-just world office              # -> assets/worlds/office/
+just world                     # -> worlds/<map>/
 ```
 
 That produces the Gazebo world, its models, `sim.launch.xml`, and —
@@ -210,6 +243,16 @@ docker compose exec rmfsim bash -lc '. /rmf_demos_ws/install/setup.bash
   ros2 topic pub --once /door_requests rmf_door_msgs/msg/DoorRequest \
     "{requester_id: me, door_name: main_door, requested_mode: {value: 2}}"
   ros2 topic echo /door_states'
+```
+
+On the sample map that includes the lifts:
+
+```bash
+docker compose exec rmfsim bash -lc '. /rmf_demos_ws/install/setup.bash
+  ros2 topic pub --once /lift_requests rmf_lift_msgs/msg/LiftRequest \
+    "{lift_name: lift1, session_id: me, request_type: 1,
+      destination_floor: L11, door_state: 2}"
+  ros2 topic echo /lift_states'
 ```
 
 **Edit it** at `http://localhost:8084` — the traffic editor, on the same map

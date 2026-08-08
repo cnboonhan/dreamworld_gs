@@ -1,9 +1,12 @@
 #!/bin/bash
 # A traffic-editor building.yaml -> Gazebo world + models + nav graph.
 #
-#   generate_world.sh <map>
-#     reads  /maps/<map>/<map>.building.yaml
-#     writes /worlds/<map>/{<map>.world, models/, nav_graphs/, sim.launch.xml}
+#   generate_world.sh <project> [map]
+#     reads  /projects/<project>/maps/<map>.building.yaml
+#     writes /projects/<project>/worlds/<map>/
+#              <map>.world, models/, nav_graphs/, sim.launch.xml
+#
+#   map defaults to the project's own name, or to the only map in maps/.
 #
 # nav_graphs/0.yaml is the artifact that matters beyond the simulation: it is
 # the building's traversal semantics — named waypoints, the lanes between them,
@@ -14,14 +17,47 @@ set -eo pipefail
 
 . /rmf_demos_ws/install/setup.bash
 
-MAP="${1:?usage: generate_world.sh <map>}"
-IN="/maps/${MAP}/${MAP}.building.yaml"
-OUT="/worlds/${MAP}"
+PROJECT="${1:?usage: generate_world.sh <project> [map]}"
+MAP="${2:-}"
+MAPS="/projects/${PROJECT}/maps"
+
+if [ ! -d "$MAPS" ]; then
+    echo "no maps/ in project '${PROJECT}'" >&2
+    echo "projects available:" >&2
+    ls /projects 2>/dev/null | sed 's/^/  /' >&2
+    exit 1
+fi
+
+# one map per project is the common case, so name it only when there is a choice
+if [ -z "$MAP" ]; then
+    if [ -f "${MAPS}/${PROJECT}.building.yaml" ]; then
+        MAP="$PROJECT"
+    else
+        # `|| true`: under `set -e` a failing glob inside $(...) exits the
+        # shell before any of this can be reported
+        found=$(find "$MAPS" -maxdepth 1 -name '*.building.yaml' 2>/dev/null | sort || true)
+        n=$(printf '%s' "$found" | grep -c . || true)
+        if [ "$n" = 0 ]; then
+            echo "project '${PROJECT}' has no map: ${MAPS} is empty." >&2
+            echo "Add a <name>.building.yaml there (author one at :8084), or" >&2
+            echo "generate for a project that has one." >&2
+            exit 1
+        fi
+        if [ "$n" -ne 1 ]; then
+            echo "which map? ${MAPS} holds:" >&2
+            printf '%s\n' "$found" | xargs -n1 basename 2>/dev/null \
+                | sed 's/\.building\.yaml$//' | sed 's/^/  /' >&2
+            exit 1
+        fi
+        MAP=$(basename "$(printf '%s' "$found" | head -1)" .building.yaml)
+    fi
+fi
+
+IN="${MAPS}/${MAP}.building.yaml"
+OUT="/projects/${PROJECT}/worlds/${MAP}"
 
 if [ ! -f "$IN" ]; then
     echo "no such map: $IN" >&2
-    echo "available in assets/maps:" >&2
-    ls /maps 2>/dev/null | sed 's/^/  /' >&2
     exit 1
 fi
 
@@ -37,7 +73,8 @@ python3 /app/postprocess_world.py "$OUT/${MAP}.world" "$IN"
 
 ros2 run rmf_building_map_tools building_map_generator nav "$IN" "$OUT/nav_graphs"
 
-sed -e "s|__MAP__|${MAP}|g" /app/sim.launch.xml.template > "$OUT/sim.launch.xml"
+sed -e "s|__PROJECT__|${PROJECT}|g" -e "s|__MAP__|${MAP}|g" \
+    /app/sim.launch.xml.template > "$OUT/sim.launch.xml"
 
 echo
 echo "generated $OUT:"

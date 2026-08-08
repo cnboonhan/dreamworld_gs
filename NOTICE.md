@@ -33,8 +33,8 @@ The world generation and its SDF fixups (`generate_world.sh`,
 `dreamworld` pipeline, trimmed to what a simulated — rather than generatively
 rendered — building needs.
 
-`samples/office/` is the `office` demo map from that same pipeline, itself
-derived from the Open-RMF demo maps (Apache-2.0).
+`samples/multilevel_office/` is the `multilevel_office` map from that same
+pipeline (its robot meshes are not included, since no robot is simulated here).
 
 The browser view of both Qt applications uses
 [noVNC](https://github.com/novnc/noVNC) (MPL-2.0) and

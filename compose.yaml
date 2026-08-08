@@ -9,6 +9,11 @@
 #   rmfsim     long-running: the building simulated under RMF, over noVNC
 #   editor     long-running: the traffic editor (map authoring), over noVNC
 #
+# Everything about one building lives under assets/projects/<project>/ —
+# maps/ (authored), worlds/ (generated), panos/ (captured), splats/ (built) —
+# and every service mounts that one tree, so a project is a single directory to
+# copy, back up or hand over.
+#
 # Nothing here reaches the network at runtime: model weights are mounted from
 # assets/ and the containers run with HuggingFace offline mode set.
 
@@ -92,7 +97,7 @@ services:
     ports:
       - "${DW_VIEWER_PORT:-8081}:80"
     volumes:
-      - ./assets/scenes:/usr/share/nginx/html/files:ro
+      - ./assets/projects:/usr/share/nginx/html/files:ro
     restart: unless-stopped
 
   panoviewer:
@@ -104,13 +109,13 @@ services:
     ports:
       - "${DW_PANO_PORT:-8082}:80"
     volumes:
-      - ./assets/panos:/usr/share/nginx/html/files:ro
+      - ./assets/projects:/usr/share/nginx/html/files:ro
     restart: unless-stopped
 
   # The RMF side: the building as a simulation, and the editor that authors it.
   # Both are Qt apps with no headless mode, so each publishes its own screen as
   # a web page (see docker/rmf-tools/with_display.sh). They share one image and
-  # differ only by role. DW_MAP picks which map in assets/maps they open.
+  # differ only by role. DW_PROJECT picks which project they open.
   rmfsim:
     <<: *as-caller
     build:
@@ -118,13 +123,12 @@ services:
       dockerfile: rmf-tools/rmf-tools.Dockerfile
     image: dreamworld/rmf-tools:latest
     container_name: dreamworld-rmfsim
-    command: ["sim", "${DW_MAP:-office}"]
+    command: ["sim", "${DW_PROJECT:-multilevel_office}"]
     ports:
       - "${DW_RMF_PORT:-8083}:8080"
     volumes:
       - /etc/passwd:/etc/passwd:ro
-      - ./assets/maps:/maps
-      - ./assets/worlds:/worlds
+      - ./assets/projects:/projects
     environment:
       HOME: /tmp
       DISPLAY: ":99"
@@ -138,13 +142,13 @@ services:
     <<: *as-caller
     image: dreamworld/rmf-tools:latest
     container_name: dreamworld-editor
-    command: ["editor", "${DW_MAP:-office}"]
+    command: ["editor", "${DW_PROJECT:-multilevel_office}"]
     ports:
       - "${DW_EDITOR_PORT:-8084}:8080"
     volumes:
       - /etc/passwd:/etc/passwd:ro
       # writable: editing a map is the point
-      - ./assets/maps:/maps
+      - ./assets/projects:/projects
     environment:
       HOME: /tmp
       DISPLAY: ":99"
@@ -164,8 +168,7 @@ services:
       - /etc/passwd:/etc/passwd:ro
       - ./assets/models:/assets/models:ro
       - ./assets/hf:/assets/hf:ro
-      - ./assets/scenes:/workspace/scenes
-      - ./assets/panos:/workspace/panos:ro
+      - ./assets/projects:/workspace/projects
     environment:
       HOME: /tmp
       # must match the GPUs reserved below: the renderer sizes its work by

@@ -116,7 +116,7 @@ def export_world(scene: str) -> dict:
 def generate_world(scene: str, gpus: int = 4, steps: int = 2000,
                    llm_addr: str = "127.0.0.1", llm_port: str = "8000",
                    llm_name: str = "Qwen/Qwen3-VL-8B-Instruct") -> dict:
-    """scene: directory under /workspace/scenes containing panorama.png."""
+    """scene: a splats/<name> directory under /workspace/projects, holding panorama.png."""
     if not Path(scene, "panorama.png").exists():
         raise FileNotFoundError(f"{scene}/panorama.png missing")
     llm = {"addr": llm_addr, "port": llm_port, "name": llm_name}

@@ -124,7 +124,8 @@ function load(name){
     reset();
   };
   img.onerror = () => { $("meta").textContent = "failed to load"; };
-  img.src = "files/" + encodeURIComponent(name);
+  // `name` is a path now, so encode the segments but keep the slashes
+  img.src = "files/" + name.split("/").map(encodeURIComponent).join("/");
 }
 
 let drag = false;
@@ -153,16 +154,38 @@ $("pick").onchange = e => {
   history.replaceState(null, "", "?pano=" + encodeURIComponent(e.target.value));
 };
 
-// nginx serves the mounted directory with autoindex_format json
-fetch("files/").then(r => r.json()).then(entries => {
-  const names = entries.filter(e => e.type === "file")
-                       .map(e => e.name)
-                       .filter(n => /\.(png|jpe?g|webp)$/i.test(n))
-                       .sort();
+// nginx serves the mounted tree with autoindex_format json. Panoramas sit at
+// <project>/panos/<scene>/<file>, so walk down to them rather than listing one
+// directory — the interesting name is the whole path.
+const IMG = /\.(png|jpe?g|webp)$/i;
+
+async function ls(path) {
+  try {
+    const r = await fetch("files/" + path);
+    return r.ok ? await r.json() : [];
+  } catch (err) { return []; }
+}
+
+async function findPanos() {
+  const out = [];
+  for (const proj of (await ls("")).filter(e => e.type === "directory")) {
+    for (const scene of (await ls(`${proj.name}/panos/`))
+                          .filter(e => e.type === "directory")) {
+      const dir = `${proj.name}/panos/${scene.name}`;
+      for (const f of (await ls(dir + "/"))) {
+        if (f.type === "file" && IMG.test(f.name)) out.push(`${dir}/${f.name}`);
+      }
+    }
+  }
+  return out.sort();
+}
+
+findPanos().then(names => {
   const sel = $("pick");
-  if (!names.length){
+  if (!names.length) {
     sel.innerHTML = "<option>no panoramas found</option>";
-    $("meta").textContent = "drop equirectangular images into assets/panos/";
+    $("meta").textContent =
+      "drop equirectangular images into assets/projects/<project>/panos/<scene>/";
     return;
   }
   sel.innerHTML = names.map(n => `<option>${n}</option>`).join("");
