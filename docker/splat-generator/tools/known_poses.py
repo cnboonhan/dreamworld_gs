@@ -73,44 +73,109 @@ def cam_from_world(centre_gz, yaw: float, pitch: float):
 
 def build(scene: Path, db, images: Path, standpoints, angles, size: int,
           fov: float, sparse_out: Path, logger) -> int:
-    """Write a reconstruction at the known poses and triangulate points into it."""
+    """Write a reconstruction at the recorded poses, then triangulate into it.
+
+    UNFINISHED — this segfaults inside pycolmap (exit -11) at the triangulation
+    step. The construction below is the right shape and the API calls are the
+    3.12 ones, but something about the reconstruction handed to
+    triangulate_points is invalid in a way the bindings do not check. Next
+    thing to try: write the model to disk with rec.write() and read it back
+    before triangulating, which turns a segfault into a readable error; or use
+    the CLI (`colmap point_triangulator`) against a text model, which validates
+    its input properly.
+
+    Four API differences were found the hard way getting here, all consequences
+    of the same 3.12 rigs-and-frames refactor: Image.cam_from_world is
+    read-only (a Frame owns the pose), sensor_t takes kwargs, a frame must be
+    added before its images, and register_image is gone (a frame with a pose
+    is registered). Reading the frame model once would have been quicker than
+    four rejections.
+
+    Built as a rig of one sensor per view direction and one frame per
+    standpoint, which is how COLMAP 3.12 models this and also the honest shape
+    of the thing: a panorama IS a rig of views at one instant. The twelve views
+    of a standpoint then share an optical centre exactly, by construction —
+    the property three rounds of solving could not be made to hold.
+    """
     import pycolmap
 
-    f = 0.5 * size / math.tan(math.radians(fov) * 0.5)
     rec = pycolmap.Reconstruction()
-    cam = pycolmap.Camera.create(1, "PINHOLE", f, size, size)
-    cam.camera_id = 1
-    rec.add_camera(cam)
-
     database = pycolmap.Database(str(db))
-    by_name = {im.name: im.image_id for im in database.read_all_images()}
-    database.close()
 
-    # In COLMAP 3.12 an Image no longer owns its pose — a Frame does. That is
-    # the same rigs-and-frames refactor this repo upgraded for, and here it is
-    # a gift: one frame per standpoint, twelve sensors hanging off it, means
-    # the views of a panorama share a centre exactly by construction rather
-    # than by anything anyone has to enforce.
+    # Take the cameras the database already has rather than inventing them.
+    # Feature extraction wrote one per view-direction folder, with whatever
+    # model it chose; making our own PINHOLE ones collides on import
+    # ("kPinhole vs. kSimpleRadial") because triangulation reads them back.
+    db_cams = {c.camera_id: c for c in database.read_all_cameras()}
+    by_name = {im.name: im for im in database.read_all_images()}
+    database.close()
+    for cam in db_cams.values():
+        rec.add_camera(cam)
+    # a view's camera is the one its own image was extracted with
+    cam_of = {name: im.camera_id for name, im in by_name.items()}
+    sensors = {cid: pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=cid)
+               for cid in db_cams}
+
+    # the rig: sensor 0 defines its frame, the rest sit at fixed rotations off
+    # it and share its centre (zero translation)
+    stem0 = Path(standpoints[0]["image"]).stem
+    cam_for_view = {}
+    for k in range(len(angles)):
+        n = f"view_{k:03d}/{stem0}.jpg"
+        if n in cam_of:
+            cam_for_view[k] = cam_of[n]
+
+    rig = pycolmap.Rig()
+    rig.rig_id = 1
+    R0 = view_rotation(*angles[0])
+    rig.add_ref_sensor(sensors[cam_for_view[0]])
+    for k, (yaw, pitch) in enumerate(angles):
+        if k == 0 or k not in cam_for_view:
+            continue
+        rig.add_sensor(sensors[cam_for_view[k]], pycolmap.Rigid3d(
+            pycolmap.Rotation3d(view_rotation(yaw, pitch).T @ R0), np.zeros(3)))
+    rec.add_rig(rig)
+
     placed = 0
     for s_i, sp in enumerate(standpoints):
-        centre = sp["xyz"]
         stem = Path(sp["image"]).stem
-        for k, (yaw, pitch) in enumerate(angles):
-            name = f"view_{k:03d}/{stem}.jpg"
-            if name not in by_name:
+        names = {k: f"view_{k:03d}/{stem}.jpg" for k in range(len(angles))}
+        if not any(n in by_name for n in names.values()):
+            continue
+
+        # the frame's pose is sensor 0's pose: the rig frame is its camera
+        R, t = cam_from_world(sp["xyz"], *angles[0])
+        frame = pycolmap.Frame()
+        frame.frame_id = s_i + 1
+        frame.rig_id = 1
+        frame.rig_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d(R), t)
+
+        # The frame has to exist before its images: adding an image validates
+        # the frame it names, so the other order fails with "Frame with ID 1
+        # does not exist".
+        added = []
+        for k, name in names.items():
+            if name not in by_name or k not in cam_for_view:
                 continue
-            R, t = cam_from_world(centre, yaw, pitch)
-            im = pycolmap.Image(
-                name=name, camera_id=1, image_id=by_name[name],
-                cam_from_world=pycolmap.Rigid3d(pycolmap.Rotation3d(R), t))
+            im = pycolmap.Image(name=name, camera_id=cam_of[name],
+                                image_id=by_name[name].image_id)
+            im.frame_id = frame.frame_id
+            frame.add_data_id(im.data_id)
+            added.append(im)
+        rec.add_frame(frame)
+        for im in added:
+            # no register_image in 3.12: a frame with a pose is registered, and
+            # its images with it — registration became a property of the frame
+            # in the same refactor that moved the pose there
             rec.add_image(im)
-            rec.register_image(im.image_id)
             placed += 1
-    logger.info("placed %d view(s) at the poses the capture recorded, "
-                "over %d standpoint(s)", placed, len(standpoints))
+
+    logger.info("placed %d view(s) as %d rig frame(s) at the recorded poses; "
+                "each standpoint's views share a centre exactly",
+                placed, len(standpoints))
 
     sparse_out.mkdir(parents=True, exist_ok=True)
-    # poses are fixed, so this only has to find where the rays meet
+    # poses are given, so this only has to find where the rays meet
     pycolmap.triangulate_points(rec, str(db), str(images), str(sparse_out),
                                 refine_intrinsics=False)
     return placed
