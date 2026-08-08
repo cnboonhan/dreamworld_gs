@@ -27,10 +27,10 @@ justfile                 every workflow — just --list
 compose.yaml             the seven services; reads DW_PROJECT from .env
 samples/                 starter projects, seeded into assets/ by `just setup`
 docker/
-  splat-generator/       the reconstruct + generate pipelines (GPU)
+  splat-generator/       reconstruct + generate + render-video flows (GPU)
   splat-viewer/          WebGL splat viewer
   pano-viewer/           360 viewer for the input panoramas
-  rmf-tools/             RMF + Gazebo + traffic editor, over noVNC
+  rmf-tools/             RMF + Gazebo + traffic editor + the build-world flow
 scripts/                 host-side model downloads
 assets/                  gitignored: model weights, job history, projects/
 ```
@@ -51,6 +51,8 @@ Seven services come up and stay up:
 | http://localhost:8082 | 360 viewer for input panoramas |
 | http://localhost:8083 | the building simulated under RMF (Gazebo, over noVNC) |
 | http://localhost:8084 | the traffic editor — author the map (over noVNC) |
+
+(Eight services: those five plus the VLM and the two job workers.)
 
 Remotely:
 
@@ -76,6 +78,40 @@ Requirements: NVIDIA GPUs (4+, ~60GB VRAM for generation) with CUDA 12.8, the
 NVIDIA container runtime, [just](https://github.com/casey/just),
 [uv](https://docs.astral.sh/uv/), ~350GB disk.
 
+## The pipeline
+
+Every operation is a Prefect job. Nothing does real work outside one, and the
+justfile is only a wrapper — it submits and follows:
+
+```
+just <recipe>  ->  submit.py  ->  Prefect (:4200)  ->  the worker that can do it
+```
+
+**One run produces one thing**, and is named for it, so the queue reads as a
+list of splats and worlds rather than random adjectives:
+
+| Job | Runs in | Stages | Produces |
+| --- | --- | --- | --- |
+| `build-world` | `worldjobs` | generate → inspect → publish | one world + nav graph |
+| `reconstruct-world` | `generator` | reproject → SfM → gaussian splatting → export | one splat, measured |
+| `generate-world` | `generator` | 6 HY-World stages | one splat, imagined |
+| `render-video` | `generator` | plan path → render → encode | one walkthrough |
+
+Two workers, because the work needs different machines: world generation wants
+Gazebo and `rmf_building_map_tools`, the splat flows want CUDA. Each is served
+from the image that has what it needs, and both register with the same Prefect
+server — so it is still one queue.
+
+At :4200 you get per-stage timing and logs, retries, and the parameters a run
+was submitted with. `build-world` also publishes its nav graph as a table
+there: levels, waypoints, lanes, and which lanes cross a door.
+
+```bash
+just jobs                  # recent runs and their state
+```
+
+Ctrl-C stops following; the job keeps running.
+
 ## Making things
 
 **A world**, from the project's map:
@@ -85,8 +121,8 @@ just world
 ```
 
 `maps/<map>.building.yaml` → `worlds/<map>/`: the Gazebo world, its models,
-`sim.launch.xml`, and `nav_graphs/0.yaml`. The sim generates this on first
-start too, so this is for rebuilding after you edit the map at :8084.
+`sim.launch.xml`, and `nav_graphs/0.yaml`. The sim also generates it on first
+start if it is missing, so a fresh checkout comes up with something to look at.
 
 **A splat**, from panoramas of one space:
 
@@ -115,8 +151,8 @@ just video cafe 40          # longer
 just video cafe 20 spline   # visit each standpoint exactly
 ```
 
-Watch progress at :4200. `just jobs` lists recent runs; Ctrl-C detaches
-without cancelling.
+One scene per job — build them one at a time and each gets its own run to
+inspect, retry or compare.
 
 ## The goal: a splat per vertex, a traversal per lane
 

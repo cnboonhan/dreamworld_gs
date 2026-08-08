@@ -112,7 +112,19 @@ def export_world(scene: str) -> dict:
     return {"ply": str(world), "usdz": f"{scene}/world.usdz"}
 
 
-@flow(name="generate-world", log_prints=True)
+def _run_name() -> str:
+    """Name the run after the one thing it produces, so the queue at :4200 reads
+    as a list of splats and worlds rather than a list of random adjectives.
+    One run, one artifact — that is the tracking unit."""
+    from prefect.runtime import flow_run
+
+    scene = Path(flow_run.parameters.get("scene", "?"))
+    # .../<project>/splats/<scene>
+    return f"{scene.parent.parent.name}/{scene.name}"
+
+
+@flow(name="generate-world", log_prints=True,
+      flow_run_name=_run_name)
 def generate_world(scene: str, gpus: int = 4, steps: int = 2000,
                    llm_addr: str = "127.0.0.1", llm_port: str = "8000",
                    llm_name: str = "Qwen/Qwen3-VL-8B-Instruct") -> dict:

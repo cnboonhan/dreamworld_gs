@@ -11,6 +11,10 @@
 # stack reads it, and every recipe below defaults to it:
 #
 #   just use htx                     switch the stack to assets/projects/htx
+# Every operation is a job: submitted to Prefect, logged and retryable at
+# :4200. These recipes only submit and follow — ^C stops following, the job
+# keeps running.
+#
 #   just setup                       one-time: fetch weights + build images
 #   just up                          start everything, print the URLs
 #   just projects                    what's there, and which one is active
@@ -181,29 +185,31 @@ generate scene spacing="0.5" proj=project: up
 # panoramas were shot from, because that is where the scene was observed.
 # The viewer's tour uses the same path.
 #
-#   just video htx h2rc 40           longer
-#   just video htx h2rc 20 spline    weave through each standpoint exactly
-#   just video htx h2rc 20 orbit     circle the centre (expect artifacts)
+#   just video h2rc 40           longer
+#   just video h2rc 20 spline    weave through each standpoint exactly
+#   just video h2rc 20 orbit     circle the centre (expect artifacts)
 #
 # Render a walkthrough video following the capture path.
-video scene seconds="20" path="line" proj=project:
-    docker compose exec -T generator python tools/render_video.py \
-        /workspace/projects/{{proj}}/splats/{{scene}} \
-        --seconds {{seconds}} --path {{path}}
+video scene seconds="20" path="line" proj=project: up
+    docker compose exec -T generator python submit.py \
+        render-video/dreamworld \
+        scene=/workspace/projects/{{proj}}/splats/{{scene}} \
+        seconds={{seconds}} path={{path}}
     @echo "-> assets/projects/{{proj}}/splats/{{scene}}/walkthrough.mp4"
 
 # Build the Gazebo world + nav graph from a project's building map.
 #
-# The nav graph (worlds/<map>/nav_graphs/0.yaml) is the output that outlives the
-# simulation: named waypoints, the lanes between them, and which lanes cross a
-# door. That is the building's traversal semantics, and what a captured
-# walkthrough is indexed against. The sim service generates this on first start
-# too — this recipe is for rebuilding after you have edited the map.
+# Submitted as the build-world job. The nav graph it produces
+# (worlds/<map>/nav_graphs/0.yaml) is the output that outlives the simulation:
+# named waypoints, the lanes between them, and which lanes cross a door — the
+# building's traversal semantics, and what a capture is indexed against. The
+# run publishes that as a table in the Prefect UI.
 #
 # map defaults to the project's own name, or to the only map in its maps/.
 # proj defaults to the active project (just use <name>).
-world map="" proj=project: _env
-    docker compose run --rm --no-deps rmfsim world {{proj}} {{map}}
+world map="" proj=project: up
+    docker compose exec -T generator python submit.py \
+        build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
 
 # What's in assets/projects, and what each project has.

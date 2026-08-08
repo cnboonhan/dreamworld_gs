@@ -1,6 +1,7 @@
 #!/bin/bash
 # rmf-tools — one image, three roles, one mount.
 #
+#   entrypoint.sh jobs                     serve build-world to the job queue
 #   entrypoint.sh world  <project> [map]   building.yaml -> world + nav graph
 #   entrypoint.sh sim    <project> [map]   run it headless under RMF, over noVNC
 #   entrypoint.sh editor <project> [map]   the traffic editor, over noVNC
@@ -60,6 +61,14 @@ idle_without_map() {
 }
 
 case "$ROLE" in
+
+jobs)
+    # The normal way world generation happens: submitted, logged and retryable
+    # at :4200 like every other operation. `world` below is the same work run
+    # directly, for when the job server itself is what's broken.
+    cd /app
+    exec /opt/prefect/bin/python /app/world_flow.py
+    ;;
 
 world)
     exec /app/generate_world.sh "$PROJECT" "$MAP"

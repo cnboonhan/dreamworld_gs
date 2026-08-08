@@ -112,6 +112,71 @@ def look_at(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
     return m
 
 
+def plan_path(scene: Path, kind: str, n_frames: int):
+    """(eyes, targets, up) for the camera, one entry per frame."""
+    centres, up = capture_path(scene / "undistorted" / "sparse" / "0")
+
+    if kind == "orbit":
+        mid = centres.mean(0)
+        radius = float(np.linalg.norm(centres - mid, axis=1).max()) * 1.6 + 1e-3
+        ang = np.linspace(0, 2 * np.pi, n_frames, endpoint=False)
+        basis = np.eye(3)[np.argsort(np.abs(up))[:2]]  # two axes most level
+        eyes = mid + radius * (np.outer(np.cos(ang), basis[0])
+                               + np.outer(np.sin(ang), basis[1]))
+        targets = np.repeat(mid[None], n_frames, 0)
+    elif kind == "spline":
+        eyes = catmull_rom(centres, n_frames)
+        # aim a little ahead along the path so the motion reads as walking
+        targets = np.roll(eyes, -max(2, n_frames // 60), axis=0)
+    else:
+        eyes, axis = straight_path(centres, n_frames)
+        span = float(np.linalg.norm(eyes[-1] - eyes[0]))
+        targets = eyes + axis * max(1.0, span * 0.3)
+    return eyes, targets, up, len(centres)
+
+
+def render_frames(scene: Path, eyes, targets, up, out: Path,
+                  width: int, height: int, fov: float, fps: int) -> Path:
+    """Rasterise every frame of the path into a raw mp4; returns its path."""
+    import cv2
+    from gsplat import rasterization
+
+    dev = "cuda:0"
+    splat = load_splat(scene / "world.ply", dev)
+    f = 0.5 * width / np.tan(np.radians(fov) * 0.5)
+    K = torch.tensor([[[f, 0, width / 2], [0, f, height / 2], [0, 0, 1]]],
+                     dtype=torch.float32, device=dev)
+    tmp = out.with_suffix(".raw.mp4")
+    writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"mp4v"),
+                             fps, (width, height))
+    quats = torch.nn.functional.normalize(splat["quats"], dim=1)
+    n = len(eyes)
+    for i, (eye, tgt) in enumerate(zip(eyes, targets)):
+        vm = torch.tensor(look_at(eye, tgt, up), dtype=torch.float32, device=dev)
+        with torch.no_grad():
+            rgb, _, _ = rasterization(
+                splat["means"], quats, splat["scales"], splat["opacities"],
+                splat["colors"], vm[None], K, width, height,
+                near_plane=0.01, rasterize_mode="classic")
+        frame = (rgb[0].clamp(0, 1) * 255).byte().cpu().numpy()
+        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        if i % fps == 0:
+            print(f"  {i}/{n} frames", flush=True)
+    writer.release()
+    return tmp
+
+
+def encode(tmp: Path, out: Path) -> None:
+    """Re-encode to H.264 so browsers and players accept it."""
+    import imageio_ffmpeg
+
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", str(tmp),
+                    "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
+                    str(out)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    tmp.unlink()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("scene", type=Path)
@@ -128,64 +193,14 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
-    import cv2
-    from gsplat import rasterization
-
-    dev = "cuda:0"
-    scene = args.scene
-    splat = load_splat(scene / "world.ply", dev)
-    centres, up = capture_path(scene / "undistorted" / "sparse" / "0")
     n_frames = int(args.seconds * args.fps)
-
-    if args.path == "orbit":
-        mid = centres.mean(0)
-        radius = float(np.linalg.norm(centres - mid, axis=1).max()) * 1.6 + 1e-3
-        ang = np.linspace(0, 2 * np.pi, n_frames, endpoint=False)
-        basis = np.eye(3)[np.argsort(np.abs(up))[:2]]  # two axes most level
-        eyes = mid + radius * (np.outer(np.cos(ang), basis[0])
-                               + np.outer(np.sin(ang), basis[1]))
-        targets = np.repeat(mid[None], n_frames, 0)
-    elif args.path == "spline":
-        eyes = catmull_rom(centres, n_frames)
-        # aim a little ahead along the path so the motion reads as walking
-        targets = np.roll(eyes, -max(2, n_frames // 60), axis=0)
-    else:
-        eyes, axis = straight_path(centres, n_frames)
-        span = float(np.linalg.norm(eyes[-1] - eyes[0]))
-        targets = eyes + axis * max(1.0, span * 0.3)
-
-    f = 0.5 * args.width / np.tan(np.radians(args.fov) * 0.5)
-    K = torch.tensor([[[f, 0, args.width / 2], [0, f, args.height / 2], [0, 0, 1]]],
-                     dtype=torch.float32, device=dev)
-
-    out_path = args.out or scene / "walkthrough.mp4"
-    tmp = out_path.with_suffix(".raw.mp4")
-    writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"mp4v"),
-                             args.fps, (args.width, args.height))
-    quats = torch.nn.functional.normalize(splat["quats"], dim=1)
-    for i, (eye, tgt) in enumerate(zip(eyes, targets)):
-        vm = torch.tensor(look_at(eye, tgt, up), dtype=torch.float32, device=dev)
-        with torch.no_grad():
-            rgb, _, _ = rasterization(
-                splat["means"], quats, splat["scales"], splat["opacities"],
-                splat["colors"], vm[None], K, args.width, args.height,
-                near_plane=0.01, rasterize_mode="classic")
-        frame = (rgb[0].clamp(0, 1) * 255).byte().cpu().numpy()
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        if i % args.fps == 0:
-            print(f"  {i}/{n_frames} frames", flush=True)
-    writer.release()
-
-    # re-encode to H.264 so browsers and players accept it
-    import imageio_ffmpeg
-
-    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", str(tmp),
-                    "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
-                    str(out_path)], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    tmp.unlink()
-    print(f"wrote {out_path} ({out_path.stat().st_size / 1e6:.1f}MB, "
-          f"{n_frames} frames, {len(centres)} standpoints)")
+    out = args.out or args.scene / "walkthrough.mp4"
+    eyes, targets, up, n_stand = plan_path(args.scene, args.path, n_frames)
+    tmp = render_frames(args.scene, eyes, targets, up, out,
+                        args.width, args.height, args.fov, args.fps)
+    encode(tmp, out)
+    print(f"wrote {out} ({out.stat().st_size / 1e6:.1f}MB, "
+          f"{n_frames} frames, {n_stand} standpoints)")
 
 
 if __name__ == "__main__":
