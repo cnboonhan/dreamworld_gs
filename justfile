@@ -217,7 +217,7 @@ generate id spacing="0.5" proj=project: up
 #   just video cafe 20 orbit     circle the centre (expect artifacts)
 #
 # Render a walkthrough of one vertex or edge, along its capture path.
-video id seconds="20" path="line" proj=project: up
+video id seconds="20" path="walk" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}

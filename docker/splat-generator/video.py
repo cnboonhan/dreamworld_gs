@@ -77,7 +77,7 @@ def _run_name() -> str:
       flow_run_name=_run_name)
 def render_walkthrough(scene: str, seconds: float = 20.0, fps: int = 30,
                        width: int = 1280, height: int = 720, fov: float = 75.0,
-                       path: str = "line", out: str = "") -> dict:
+                       path: str = "walk", out: str = "") -> dict:
     """scene: a splats/<name> directory holding world.ply and its COLMAP model."""
     logger = get_run_logger()
     if not (Path(scene) / "world.ply").is_file():
