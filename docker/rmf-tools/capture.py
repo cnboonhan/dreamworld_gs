@@ -145,17 +145,24 @@ def panorama(node, x, y, a, out, label):
     print(f"  -> {os.path.basename(out)} ({Wc}x{Hc})", flush=True)
 
 
-# How far a standpoint wanders from the perfect line, in metres. A person
-# walking a corridor does not stop at exactly even intervals along a
-# mathematically straight line — and that regularity is not merely unrealistic,
-# it is degenerate: perfectly collinear, evenly spaced, identically oriented
-# cameras give bundle adjustment a rank-deficient problem, which COLMAP reports
-# as repeated "unable to perform dense Cholesky factorization". Real captures
-# never hit it because real walking is untidy.
-JITTER_M = 0.12
+# How far the walk weaves across the corridor, in metres.
+#
+# Walking a corridor in a straight line is the worst baseline for the surfaces
+# you are walking toward: consecutive standpoints move *along* the line of
+# sight, so the far wall barely shifts between them and its depth is weakly
+# constrained. Measured on a straight 2.2 m walk, COLMAP scattered the twelve
+# views of a single panorama by 0.62 m — more than the 0.549 m between
+# standpoints — and the recovered walk folded to 0.28 m.
+#
+# Weaving side to side gives lateral baseline, which is what triangulates
+# depth, and breaks the collinear configuration that makes bundle adjustment
+# rank-deficient. It is also how photogrammetry is done by hand.
+ZIGZAG_M = 0.35
+# and on top of that, a little untidiness: nobody's stride is exact
+JITTER_M = 0.06
 
 
-def standpoints(plan, edge_id, spacing, seed=0):
+def standpoints(plan, edge_id, spacing, seed=0, zigzag=ZIGZAG_M):
     """Stops roughly `spacing` metres apart along the lane, endpoints included.
 
     Spacing is chosen, not derived: a person walks a corridor stopping about
@@ -182,20 +189,27 @@ def standpoints(plan, edge_id, spacing, seed=0):
             # land exactly on both vertices, at the interval nearest the one
             # asked for; three stops minimum, or the walk axis is too weak
             n = max(3, int(round(length / spacing)) + 1)
-            actual = length / (n - 1)
             nx, ny = -dy / length, dx / length      # across the corridor
             rng = np.random.default_rng(seed)
             out = []
             for i in range(n):
                 f = i / (n - 1)
                 x, y = ax + dx * f, ay + dy * f
+                # The endpoints stay on their vertices: they are where this
+                # corridor joins the next, and the alignment residual measures
+                # exactly how far they land from the lane's ends.
                 if 0 < i < n - 1:
+                    weave = zigzag * (1 if i % 2 else -1)
                     along = rng.uniform(-JITTER_M, JITTER_M)
-                    across = rng.uniform(-JITTER_M, JITTER_M)
+                    across = weave + rng.uniform(-JITTER_M, JITTER_M)
                     x += dx / length * along + nx * across
                     y += dy / length * along + ny * across
                 out.append((x, y))
-            return out, actual
+            # The interval that matters is the one actually walked, corner to
+            # corner — the weave makes each step longer than the along-lane
+            # spacing, and it is the walked distance that sets metric scale.
+            steps = [math.dist(out[i], out[i + 1]) for i in range(len(out) - 1)]
+            return out, float(np.median(steps))
     raise SystemExit(f"no edge '{edge_id}' in the capture plan")
 
 
@@ -204,6 +218,9 @@ def main():
     ap.add_argument("--plan", required=True, help="capture_plan.json")
     ap.add_argument("--edge", required=True, help="edge id, e.g. L11.cafe--v7")
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--zigzag", type=float, default=ZIGZAG_M,
+                    help="metres the walk weaves either side of the lane; 0 "
+                         "walks straight, which reconstructs poorly")
     ap.add_argument("--spacing", type=float, default=0.5,
                     help="metres between stops; the count follows from the "
                          "corridor's length, as it does when walking")
@@ -223,7 +240,7 @@ def main():
     plan = json.loads(open(a.plan).read())
     # seeded by the corridor, so a re-capture reproduces the same walk
     seed = int(hashlib.sha256(a.edge.encode()).hexdigest()[:8], 16)
-    points, actual = standpoints(plan, a.edge, a.spacing, seed)
+    points, actual = standpoints(plan, a.edge, a.spacing, seed, a.zigzag)
     os.makedirs(a.out_dir, exist_ok=True)
 
     rclpy.init()

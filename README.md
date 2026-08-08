@@ -141,7 +141,12 @@ just capture L11.cafe--v7 0.3    # stop closer together
 just capture-all                 # every corridor not yet shot, one job each
 ```
 
-A camera stands every half metre along the lane and takes a full 360 at each.
+A camera weaves along the lane, stopping every half metre and taking a full
+360 at each. The weave matters: walking a corridor straight is the worst
+baseline for the surfaces you are walking toward, because consecutive
+standpoints move *along* the line of sight and the far wall barely shifts
+between them. Weaving gives lateral baseline, which is what triangulates depth
+— and it is how photogrammetry is done by hand.
 It writes **panoramas and nothing else** — no poses, no positions, no marker
 that it came from a simulator — because a synthetic run that leaked what a real
 capture cannot would be testing the pipeline under conditions it never faces.
