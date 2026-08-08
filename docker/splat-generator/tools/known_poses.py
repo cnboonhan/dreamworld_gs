@@ -86,6 +86,11 @@ def build(scene: Path, db, images: Path, standpoints, angles, size: int,
     by_name = {im.name: im.image_id for im in database.read_all_images()}
     database.close()
 
+    # In COLMAP 3.12 an Image no longer owns its pose — a Frame does. That is
+    # the same rigs-and-frames refactor this repo upgraded for, and here it is
+    # a gift: one frame per standpoint, twelve sensors hanging off it, means
+    # the views of a panorama share a centre exactly by construction rather
+    # than by anything anyone has to enforce.
     placed = 0
     for s_i, sp in enumerate(standpoints):
         centre = sp["xyz"]

@@ -284,7 +284,8 @@ def main():
                          "xyz": [round(x, 6), round(y, 6), round(h, 6)]}
                         for i, ((x, y), h) in enumerate(zip(points, heights))],
     }
-    Path(a.out_dir, "poses.json").write_text(json.dumps(poses, indent=1))
+    with open(os.path.join(a.out_dir, "poses.json"), "w") as fh:
+        json.dump(poses, fh, indent=1)
     print(f"wrote {len(points)} panoramas + poses.json to {a.out_dir}", flush=True)
     print(f"SPACING {actual:.4f}", flush=True)
     # hard-exit past rclpy's static-destructor teardown, which can abort with a
