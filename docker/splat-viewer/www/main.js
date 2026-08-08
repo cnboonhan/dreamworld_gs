@@ -755,6 +755,11 @@ let viewMatrix = defaultViewMatrix;
 const tour = {
     points: null, t: 0, dir: 1, on: false, playing: false, seconds: 10,
     up: null, a: null, b: null, yaw: 0, pitch: 0, release: null,
+    // a route turns corners, so its heading is the path's own direction here
+    // and yaw is an offset from it. A single capture walk is near enough a
+    // straight line that its own weave would only make the camera wobble, so
+    // there the heading stays fixed — which is what it has always been.
+    follow: false, look: 0.05,
 };
 const MOVE_KEYS = new Set([
     "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF",
@@ -771,7 +776,7 @@ function norm3(v) {
     return [v[0] / n, v[1] / n, v[2] / n];
 }
 
-function tourInit(p, facing) {
+function tourInit(p, follow) {
     tour.points = p.points;
     const n = p.points.length;
     const up = norm3(p.up && p.up.length === 3 ? p.up : [0, -1, 0]);
@@ -783,13 +788,20 @@ function tourInit(p, facing) {
     tour.up = up;
     tour.a = a;
     tour.b = norm3(cross3(up, a));
-    // start facing wherever the spawn camera faced: row 3 of the world->camera
-    // rotation is the forward axis. A route has no spawn camera — it spans
-    // several splats, each with its own — so it says where to look instead.
-    const f = facing ? norm3(facing)
-                     : norm3([viewMatrix[2], viewMatrix[6], viewMatrix[10]]);
-    tour.yaw = Math.atan2(dot3(f, tour.b), dot3(f, tour.a));
-    tour.pitch = Math.asin(Math.min(1, Math.max(-1, dot3(f, up))));
+    tour.follow = !!follow;
+    if (tour.follow) {
+        // yaw is measured from the path here, so facing forward is simply zero
+        tour.yaw = tour.pitch = 0;
+        // look a metre ahead: far enough to round a corner smoothly rather
+        // than snap at the waypoint, near enough not to cut it
+        tour.look = Math.min(0.2, Math.max(0.02, 1.0 / (p.metres || 10)));
+    } else {
+        // start facing wherever the spawn camera faced: row 3 of the
+        // world->camera rotation is the forward axis
+        const f = norm3([viewMatrix[2], viewMatrix[6], viewMatrix[10]]);
+        tour.yaw = Math.atan2(dot3(f, tour.b), dot3(f, tour.a));
+        tour.pitch = Math.asin(Math.min(1, Math.max(-1, dot3(f, up))));
+    }
     tour.on = true;
     tour.playing = true;
 }
@@ -802,22 +814,40 @@ function tourLook(dx, dy) {
                           Math.min(PITCH_LIMIT, tour.pitch + dy * s));
 }
 
-function tourPlace(t) {
+/** Where the path is at u, interpolating between its points. */
+function pathAt(u) {
     const pts = tour.points, n = pts.length;
-    // a non-finite t would index the array with NaN and read undefined, so
+    // a non-finite u would index the array with NaN and read undefined, so
     // pin it before it can reach pts[]
-    const u = Number.isFinite(t) ? Math.min(Math.max(t, 0), 1) : 0;
-    const f = u * (n - 1);
+    const f = (Number.isFinite(u) ? Math.min(Math.max(u, 0), 1) : 0) * (n - 1);
     const i = Math.floor(f), k = f - i;
     const A = pts[i], B = pts[Math.min(i + 1, n - 1)];
-    const p = [A[0] + (B[0] - A[0]) * k,
-               A[1] + (B[1] - A[1]) * k,
-               A[2] + (B[2] - A[2]) * k];
+    return [A[0] + (B[0] - A[0]) * k,
+            A[1] + (B[1] - A[1]) * k,
+            A[2] + (B[2] - A[2]) * k];
+}
+
+function tourPlace(t) {
+    const u = Number.isFinite(t) ? Math.min(Math.max(t, 0), 1) : 0;
+    const p = pathAt(u);
+
+    let a = tour.a, b = tour.b;
+    if (tour.follow) {
+        // a centred difference over the look-ahead: always defined, even at
+        // the ends, and it rounds a corner instead of snapping at it
+        const A = pathAt(u - tour.look), B = pathAt(u + tour.look);
+        let d = [0, 1, 2].map((j) => (B[j] - A[j]) * tour.dir);
+        d = [0, 1, 2].map((j) => d[j] - tour.up[j] * dot3(d, tour.up));
+        if (Math.hypot(...d) > 1e-6) {
+            a = norm3(d);
+            b = norm3(cross3(tour.up, a));
+        }
+    }
 
     const cp = Math.cos(tour.pitch), sp = Math.sin(tour.pitch);
     const cy = Math.cos(tour.yaw), sy = Math.sin(tour.yaw);
     const fwd = norm3([0, 1, 2].map((j) =>
-        cp * (cy * tour.a[j] + sy * tour.b[j]) + sp * tour.up[j]));
+        cp * (cy * a[j] + sy * b[j]) + sp * tour.up[j]));
     // OpenCV camera basis, matching render_video.look_at
     const right = norm3(cross3(fwd, tour.up));
     const down = cross3(fwd, right);
@@ -954,9 +984,9 @@ async function main() {
         route.doors = doc.doors || [];
         // splat paths in the route are relative to the project
         route.base = new URL(`files/${doc.project}/`, location.href).href;
-        // face along the first step; there is no single spawn camera for a
-        // route, since every splat it crosses has its own
-        tourInit(doc, [0, 1, 2].map((i) => doc.points[1][i] - doc.points[0][i]));
+        // the heading follows the route; there is no single spawn camera for
+        // one, since every splat it crosses has its own
+        tourInit(doc, true);
         showTourBar();
         // a walking pace, so a long route is not a sprint
         tour.seconds = Math.min(60, Math.max(5, Math.round((doc.metres || 10) * 1.5)));

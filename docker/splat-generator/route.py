@@ -158,6 +158,20 @@ def resolve(project: str, plan: dict) -> dict:
     return plan
 
 
+def walk_height(project: str, edge: str) -> float:
+    """The height the camera actually walked this corridor at.
+
+    A nav graph is a floorplan: its vertices carry x and y, and the level's
+    elevation is not in it at all. The splat's own path is, because it was
+    written from where the capture stood — so the route takes its height from
+    the very thing it is about to show. Without this the polyline sits on z=0
+    and the camera rides along under the floor of every upper level.
+    """
+    f = PROJECTS / project / "splats" / edge / "world.path.json"
+    pts = json.loads(f.read_text())["points"]
+    return float(np.median([p[2] for p in pts]))
+
+
 @task(name="3. write")
 def write(project: str, plan: dict, out: str) -> dict:
     """The polyline, and which splat covers which span of the tour."""
@@ -165,12 +179,27 @@ def write(project: str, plan: dict, out: str) -> dict:
     pos = {k: np.array(v) for k, v in plan["pos"].items()}
     hops, total = plan["hops"], sum(h["length_m"] for h in plan["hops"]) or 1.0
 
+    # a waypoint sits at the height of the corridors meeting it, so a route
+    # that does change level ramps between them rather than stepping
+    heights: dict[str, list[float]] = {}
+    for h in hops:
+        try:
+            z = walk_height(project, h["edge"])
+        except (OSError, ValueError, KeyError) as err:
+            raise RuntimeError(
+                f"{h['edge']} has no walk to take its height from ({err}). "
+                f"Rebuild it: `just generate {h['edge']}`.") from err
+        heights.setdefault(h["from"], []).append(z)
+        heights.setdefault(h["to"], []).append(z)
+    z_of = {k: sum(v) / len(v) for k, v in heights.items()}
+
     points: list[list[float]] = []
     segments = []
     doors = []
     travelled = 0.0
     for h in hops:
-        a, b = pos[h["from"]], pos[h["to"]]
+        a, b = pos[h["from"]].copy(), pos[h["to"]].copy()
+        a[2], b[2] = z_of[h["from"]], z_of[h["to"]]
         t0 = travelled / total
         travelled += h["length_m"]
         t1 = travelled / total
@@ -195,8 +224,9 @@ def write(project: str, plan: dict, out: str) -> dict:
            "points": points, "segments": segments, "doors": doors}
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(json.dumps(doc, indent=1))
-    logger.info("%d point(s) over %d segment(s), %d door(s) -> %s",
-                len(points), len(segments), len(doors), out)
+    logger.info("%d point(s) over %d segment(s), %d door(s), eye height "
+                "%.2f-%.2f m -> %s", len(points), len(segments), len(doors),
+                min(z_of.values()), max(z_of.values()), out)
     return {"route": out, "points": len(points), "segments": len(segments),
             "metres": plan["metres"], "waypoints": plan["path"]}
 

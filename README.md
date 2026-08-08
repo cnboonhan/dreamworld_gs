@@ -286,11 +286,22 @@ just route cafe playpen      # -> traversals/L11.cafe__L11.playpen.route.json
 ```
 
 That holds the path through the building in metres and which splat covers which
-stretch of it. Nothing is rendered: the viewer follows the polyline with its
-tour parameter and loads each splat as it reaches it, dropping the one behind.
+stretch of it. Nothing is rendered — the viewer walks it live:
 
-**Not finished yet.** The viewer still opens one splat at a time; streaming
-along a route is the remaining piece.
+```
+http://localhost:8081/?route=multilevel_office/L11.cafe__L11.v6
+```
+
+The tour parameter now runs 0→1 across the whole route rather than along one
+capture, so play, pause, scrub and speed work over the building unchanged.
+Three splats stay resident — where you are, where you are going, and where you
+were — so a junction is loaded before you reach it and turning round costs
+nothing; what leaves the window is dropped, and memory tracks the window rather
+than the length of the route.
+
+The splats are concatenated into one buffer and depth-sorted together, which
+works only because each was placed in building coordinates. Nothing is merged
+or blended: the renderer never learns there was more than one.
 
 
 ## Notes
