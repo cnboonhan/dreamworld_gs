@@ -324,13 +324,15 @@ def run_sfm(scene: str, spacing: float = 0.0, angles=None,
     sift.domain_size_pooling = True
     logger.info("feature extraction (peak %.4f, up to %d features/view)",
                 sift.peak_threshold, sift.max_num_features)
-    # One camera per view direction, not one for everything: a rig's sensors
-    # each need their own camera, and SINGLE gives them all the same one — the
-    # reconstruction then refuses to load, "Camera 2 from rig 2 not found".
-    # The per-direction folders make PER_FOLDER land exactly one camera per
-    # sensor, which is the layout COLMAP's rig workflow expects.
-    pycolmap.extract_features(db, images, camera_mode=pycolmap.CameraMode.PER_FOLDER,
-                              sift_options=sift)
+    # A rig's sensors each need their own camera, and the per-direction folders
+    # make PER_FOLDER land exactly one per sensor — the layout COLMAP's rig
+    # workflow expects. But the rig only earns its place when poses have to be
+    # solved for. With poses recorded there is nothing to constrain, so one
+    # camera for everything is both simpler and enough.
+    known = bool(panos) and (Path(panos) / "poses.json").is_file() and not require_sfm
+    mode = (pycolmap.CameraMode.SINGLE if known
+            else pycolmap.CameraMode.PER_FOLDER)
+    pycolmap.extract_features(db, images, camera_mode=mode, sift_options=sift)
     n_img = sum(1 for _ in images.rglob("*.jpg"))
     logger.info("exhaustive matching over %d views (%d pairs)",
                 n_img, n_img * (n_img - 1) // 2)
