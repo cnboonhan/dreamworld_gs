@@ -21,7 +21,7 @@ what still needs photographing — is worth recording per run.
 Also serves capture-edge: photograph one corridor of the simulated building, so
 the splat pipeline can be exercised end to end without anyone walking it.
 
-  python submit.py capture-edge/dreamworld project=<p> edge=<id> [standpoints=5]
+  python submit.py capture-edge/dreamworld project=<p> edge=<id> [spacing=0.5]
 """
 
 from __future__ import annotations
@@ -237,27 +237,36 @@ def _capture_name() -> str:
 
 
 @task(name="capture", retries=1)
-def photograph(project: str, map_name: str, edge: str, standpoints: int) -> dict:
+def photograph(project: str, map_name: str, edge: str, spacing: float) -> dict:
     """Walk the corridor in sim, writing panoramas and nothing else."""
     logger = get_run_logger()
     proc = subprocess.run(
-        ["/app/capture.sh", project, map_name, edge, str(standpoints)],
+        ["/app/capture.sh", project, map_name, edge, str(spacing)],
         capture_output=True, text=True)
+    walked = spacing
     for line in (proc.stdout + proc.stderr).splitlines():
+        if line.startswith("SPACING "):
+            walked = float(line.split()[1])
+            continue
         logger.info("%s", line)
     if proc.returncode != 0:
         raise RuntimeError(f"capture failed for {project}/{edge}")
     out = PROJECTS / project / "panos" / edge
     shots = sorted(p.name for p in out.glob("*.png"))
-    if len(shots) < standpoints:
-        raise RuntimeError(
-            f"expected {standpoints} panoramas, got {len(shots)} in {out}")
+    if len(shots) < 3:
+        raise RuntimeError(f"only {len(shots)} panorama(s) in {out}; need 3+")
+    # A corridor's length is rarely a whole number of strides, so the interval
+    # actually walked differs a little from the one asked for. It is what makes
+    # the reconstruction metric, so it is reported rather than assumed.
+    logger.info("%d panoramas, walked %.3f m apart -> "
+                "reconstruct with: just generate %s %.3f",
+                len(shots), walked, edge, walked)
     return {"panos": f"{project}/panos/{edge}", "count": len(shots),
-            "first": shots[0], "last": shots[-1]}
+            "spacing_m": round(walked, 4), "first": shots[0], "last": shots[-1]}
 
 
 @flow(name="capture-edge", log_prints=True, flow_run_name=_capture_name)
-def capture_edge(project: str, edge: str, standpoints: int = 5,
+def capture_edge(project: str, edge: str, spacing: float = 0.5,
                  map: str = "") -> dict:
     """Photograph one corridor. One run, one corridor, one folder of images.
 
@@ -267,7 +276,7 @@ def capture_edge(project: str, edge: str, standpoints: int = 5,
     help it would not have from a real capture.
     """
     resolved = resolve_map(project, map)
-    return photograph(project, resolved, edge, standpoints)
+    return photograph(project, resolved, edge, spacing)
 
 
 if __name__ == "__main__":

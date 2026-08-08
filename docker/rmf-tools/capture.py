@@ -155,8 +155,15 @@ def panorama(node, x, y, a, out, label):
 JITTER_M = 0.12
 
 
-def standpoints(plan, edge_id, n, seed=0):
-    """n points along the lane, first at the id's first endpoint.
+def standpoints(plan, edge_id, spacing, seed=0):
+    """Stops roughly `spacing` metres apart along the lane, endpoints included.
+
+    Spacing is chosen, not derived: a person walks a corridor stopping about
+    every half metre, whatever the corridor's length. Dividing the lane into a
+    fixed number of stops instead would make the interval depend on the lane,
+    and the reconstruction is rescaled to metres using the interval you say you
+    walked — so a capture whose real interval is 0.55 m, reconstructed as 0.5 m,
+    comes out 9% small. Returns (points, actual_spacing).
 
     Endpoints included, so the first and last standpoints sit on the two
     vertices — which is what makes the corridor splat cover them. Interior
@@ -172,6 +179,10 @@ def standpoints(plan, edge_id, n, seed=0):
             bx, by = pos[e["b"]]
             dx, dy = bx - ax, by - ay
             length = math.hypot(dx, dy) or 1.0
+            # land exactly on both vertices, at the interval nearest the one
+            # asked for; three stops minimum, or the walk axis is too weak
+            n = max(3, int(round(length / spacing)) + 1)
+            actual = length / (n - 1)
             nx, ny = -dy / length, dx / length      # across the corridor
             rng = np.random.default_rng(seed)
             out = []
@@ -184,7 +195,7 @@ def standpoints(plan, edge_id, n, seed=0):
                     x += dx / length * along + nx * across
                     y += dy / length * along + ny * across
                 out.append((x, y))
-            return out
+            return out, actual
     raise SystemExit(f"no edge '{edge_id}' in the capture plan")
 
 
@@ -193,8 +204,9 @@ def main():
     ap.add_argument("--plan", required=True, help="capture_plan.json")
     ap.add_argument("--edge", required=True, help="edge id, e.g. L11.cafe--v7")
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--standpoints", type=int, default=5,
-                    help="stops along the corridor, endpoints included")
+    ap.add_argument("--spacing", type=float, default=0.5,
+                    help="metres between stops; the count follows from the "
+                         "corridor's length, as it does when walking")
     ap.add_argument("--world", default="sim_world")
     ap.add_argument("--name", default="rec_cam")
     ap.add_argument("--height", type=float, default=1.6)
@@ -208,12 +220,10 @@ def main():
     ap.add_argument("--frame-timeout", type=float, default=5.0)
     a = ap.parse_args()
 
-    if a.standpoints < 3:
-        raise SystemExit("need at least 3 standpoints: two give a weak axis")
     plan = json.loads(open(a.plan).read())
     # seeded by the corridor, so a re-capture reproduces the same walk
     seed = int(hashlib.sha256(a.edge.encode()).hexdigest()[:8], 16)
-    points = standpoints(plan, a.edge, a.standpoints, seed)
+    points, actual = standpoints(plan, a.edge, a.spacing, seed)
     os.makedirs(a.out_dir, exist_ok=True)
 
     rclpy.init()
@@ -228,7 +238,8 @@ def main():
         raise SystemExit(f"no frames from {ROS_TOPIC}")
 
     base_height = a.height
-    print(f"walking {a.edge}: {len(points)} standpoints", flush=True)
+    print(f"walking {a.edge}: {len(points)} standpoints "
+          f"{actual:.3f} m apart", flush=True)
     rng = np.random.default_rng(seed ^ 0x9E37)
     for i, (x, y) in enumerate(points):
         # and nobody holds a 360 camera at exactly one height
@@ -238,7 +249,10 @@ def main():
         out = os.path.join(a.out_dir, f"{i:03d}.png")
         panorama(node, x, y, a, out, f"{i + 1}/{len(points)}")
 
+    # the interval actually walked, which is what makes the reconstruction
+    # metric — reconstruct with: just generate <edge> <spacing>
     print(f"wrote {len(points)} panoramas to {a.out_dir}", flush=True)
+    print(f"SPACING {actual:.4f}", flush=True)
     # hard-exit past rclpy's static-destructor teardown, which can abort with a
     # non-zero code and fail the stage
     os._exit(0)

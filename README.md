@@ -137,14 +137,20 @@ photographed, so the whole pipeline runs with no camera:
 
 ```bash
 just capture L11.cafe--v7        # -> panos/L11.cafe--v7/000.png ...
-just capture L11.cafe--v7 9      # denser
+just capture L11.cafe--v7 0.3    # stop closer together
 just capture-all                 # every corridor not yet shot, one job each
 ```
 
-A camera stands at points along the lane and takes a full 360 at each. It
-writes **panoramas and nothing else** — no poses, no positions, no marker that
-it came from a simulator — because a synthetic run that leaked what a real
+A camera stands every half metre along the lane and takes a full 360 at each.
+It writes **panoramas and nothing else** — no poses, no positions, no marker
+that it came from a simulator — because a synthetic run that leaked what a real
 capture cannot would be testing the pipeline under conditions it never faces.
+
+The run reports the interval it actually walked, because a corridor's length is
+rarely a whole number of strides. **Pass that to `generate`**: the interval is
+what makes the reconstruction metric, so getting it wrong scales the whole
+splat. Walking 0.549 m apart and reconstructing as 0.5 m makes it 9% small,
+which then shows up as an alignment residual.
 
 **A splat**, from panoramas of one corridor:
 

@@ -240,17 +240,21 @@ world map="" proj=project: up
 # else. That is exactly what someone hands over after walking a corridor, so
 # everything downstream is exercised on the same input it will get for real.
 #
-#   just capture L11.cafe--v7        five standpoints
-#   just capture L11.cafe--v7 9      denser
-capture edge standpoints="5" proj=project: up
+# spacing is how far apart you stop, as when walking — the number of stops
+# follows from the corridor's length. It is also what makes the reconstruction
+# metric, so `just generate` should be given the interval the run reports.
+#
+#   just capture L11.cafe--v7        stop every half metre
+#   just capture L11.cafe--v7 0.3    closer together
+capture edge spacing="0.5" proj=project: up
     docker compose exec -T generator python submit.py \
         capture-edge/dreamworld \
-        project={{proj}} edge={{edge}} standpoints={{standpoints}}
+        project={{proj}} edge={{edge}} spacing={{spacing}}
     @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
 # one is a single re-run rather than a lost batch.
-capture-all standpoints="5" proj=project: up
+capture-all spacing="0.5" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     plan=$(find {{assets}}/projects/{{proj}}/worlds -name capture_plan.json | head -1)
@@ -266,7 +270,7 @@ capture-all standpoints="5" proj=project: up
     ")
     n=$(printf '%s' "$todo" | grep -c . || true)
     echo "$n corridor(s) to photograph"
-    for e in $todo; do just capture "$e" {{standpoints}} {{proj}}; done
+    for e in $todo; do just capture "$e" {{spacing}} {{proj}}; done
 
 # Plan the walk between two waypoints, as a route the viewer streams along.
 #

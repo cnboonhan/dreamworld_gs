@@ -1,7 +1,7 @@
 #!/bin/bash
 # Boot a headless sim on the project's world and photograph one corridor.
 #
-#   capture.sh <project> <map> <edge-id> [standpoints]
+#   capture.sh <project> <map> <edge-id> [spacing-metres]
 #     writes /projects/<project>/panos/<edge-id>/000.png ...
 #
 # Its own Gazebo, separate from the long-running rmfsim service: a capture
@@ -17,7 +17,7 @@ set -eo pipefail
 PROJECT="${1:?usage: capture.sh <project> <map> <edge-id> [standpoints]}"
 MAP="${2:?need a map}"
 EDGE="${3:?need an edge id}"
-STANDPOINTS="${4:-5}"
+SPACING="${4:-0.5}"
 
 world_dir="/projects/${PROJECT}/worlds/${MAP}"
 world="${world_dir}/${MAP}.world"
@@ -91,4 +91,4 @@ trap cleanup EXIT
 
 cam_z=$(awk "BEGIN{print ${elevation}+1.6}")
 python3 /app/capture.py --plan "$plan" --edge "$EDGE" --out-dir "$out" \
-    --standpoints "$STANDPOINTS" --height "$cam_z" --fov 2.2
+    --spacing "$SPACING" --height "$cam_z" --fov 2.2
