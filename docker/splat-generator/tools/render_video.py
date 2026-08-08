@@ -48,17 +48,42 @@ def capture_path(model: Path) -> tuple[np.ndarray, np.ndarray]:
     import pycolmap
 
     rec = pycolmap.Reconstruction(model)
-    groups: dict[str, list[np.ndarray]] = {}
     ups = []
     for _, im in sorted(rec.images.items()):
         cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
         m = np.asarray(cfw.matrix(), dtype=np.float64)
-        R, tvec = m[:3, :3], m[:3, 3]
-        groups.setdefault(im.name.rsplit("_", 1)[0], []).append(-R.T @ tvec)
-        ups.append(-R.T @ np.array([0.0, 1.0, 0.0]))  # camera Y is down
-
-    centres = np.stack([np.median(np.stack(v), 0) for _, v in sorted(groups.items())])
+        ups.append(-m[:3, :3].T @ np.array([0.0, 1.0, 0.0]))  # camera Y is down
     up = np.mean(np.stack(ups), 0)
+
+    # A frame is one standpoint: the rig at one instant, holding the views of
+    # a single panorama. Reading them directly beats grouping by filename —
+    # the poses share a centre by construction rather than by agreement.
+    frames = getattr(rec, "frames", None)
+    if frames:
+        centres, names = [], []
+        for fid, fr in sorted(frames.items()):
+            if not fr.has_pose:
+                continue
+            rfw = fr.rig_from_world
+            m = np.asarray(rfw.matrix(), dtype=np.float64)
+            centres.append(-m[:3, :3].T @ m[:3, 3])
+            # frames come back in registration order, so sort by the standpoint
+            # the images name rather than by when the solver reached it
+            names.append(min((rec.images[d.id].name for d in fr.data_ids
+                              if d.id in rec.images), default=str(fid)))
+        if centres:
+            order = np.argsort([Path(n).name for n in names])
+            return np.stack(centres)[order], up / np.linalg.norm(up)
+
+    # no rig in this reconstruction (built before the upgrade): fall back to
+    # grouping views by the panorama their filename names
+    groups: dict[str, list[np.ndarray]] = {}
+    for _, im in sorted(rec.images.items()):
+        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+        m = np.asarray(cfw.matrix(), dtype=np.float64)
+        key = Path(im.name).name if "/" in im.name else im.name.rsplit("_", 1)[0]
+        groups.setdefault(key, []).append(-m[:3, :3].T @ m[:3, 3])
+    centres = np.stack([np.median(np.stack(v), 0) for _, v in sorted(groups.items())])
     return centres, up / np.linalg.norm(up)
 
 

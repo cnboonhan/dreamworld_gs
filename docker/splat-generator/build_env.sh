@@ -43,6 +43,14 @@ $UVP -r /tmp/requirements_docker.txt
 # the navmesh/trajectory stage)
 $UVP "tokenizers==0.22.1" peft==0.18.1 rtree
 
+# pycolmap 3.12 for rigs and frames. Upstream pins 3.10, which models every
+# image as an independent camera — but the views reprojected from one panorama
+# share an optical centre by construction, and 3.10 gives no way to say so. The
+# solver then slides them along their own viewing axes: measured, 0.3-0.9 m of
+# drift within a single standpoint, more than the distance between standpoints,
+# so the recovered walk was noise. Rigs landed in 3.12.
+$UVP "pycolmap==3.12.6"
+
 # CUDA extension: gsplat with MaskGaussian pruning (needs glm headers)
 GLM_DIR=hyworld2/worldgen/third_party/gsplat_maskgaussian/gsplat/cuda/csrc/third_party
 mkdir -p "$GLM_DIR"

@@ -114,13 +114,23 @@ def reproject(scene: str, panos_dir: str, views: int, size: int,
                            "equirectangular", src.name, w, h)
         for k, (yaw, pitch) in enumerate(angles):
             view = equirect_to_pinhole(pano, yaw, pitch, fov, size)
-            cv2.imwrite(str(out / f"{src.stem}_{k:03d}.jpg"), view,
+            # One directory per view direction, the panorama's name inside it.
+            # COLMAP names a rig's sensors by image *prefix* and its frames by
+            # the remainder, so the direction has to lead: view_007/000.jpg
+            # reads "sensor 7, standpoint 000".
+            vdir = out / f"view_{k:03d}"
+            vdir.mkdir(exist_ok=True)
+            cv2.imwrite(str(vdir / f"{src.stem}.jpg"), view,
                         [cv2.IMWRITE_JPEG_QUALITY, 95])
             n += 1
         logger.info("%s -> %d views", src.name, len(angles))
 
-    logger.info("%d panoramas -> %d pinhole views", len(srcs), n)
-    return {"panos": len(srcs), "views": n}
+    logger.info("%d panoramas -> %d pinhole views over %d direction(s)",
+                len(srcs), n, len(angles))
+    # the angles ARE the rig: each view's fixed rotation off the panorama's own
+    # frame, which is what holds a standpoint together in the solve
+    return {"panos": len(srcs), "views": n,
+            "angles": [[float(y), float(p)] for y, p in angles]}
 
 
 # ------------------------------------------------------------------------ sfm
@@ -135,7 +145,8 @@ def standpoints(rec) -> list[np.ndarray]:
     for _, im in rec.images.items():
         cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
         m = np.asarray(cfw.matrix(), dtype=np.float64)
-        groups.setdefault(im.name.rsplit("_", 1)[0], []).append(-m[:3, :3].T @ m[:3, 3])
+        key = im.name.split("/")[-1] if "/" in im.name else im.name.rsplit("_", 1)[0]
+        groups.setdefault(key, []).append(-m[:3, :3].T @ m[:3, 3])
     return [np.median(np.stack(v), 0) for _, v in sorted(groups.items())]
 
 
@@ -145,7 +156,8 @@ def standpoint_map(rec) -> dict:
     for _, im in rec.images.items():
         cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
         m = np.asarray(cfw.matrix(), dtype=np.float64)
-        groups.setdefault(im.name.rsplit("_", 1)[0], []).append(-m[:3, :3].T @ m[:3, 3])
+        key = im.name.split("/")[-1] if "/" in im.name else im.name.rsplit("_", 1)[0]
+        groups.setdefault(key, []).append(-m[:3, :3].T @ m[:3, 3])
     return {k: np.median(np.stack(v), 0) for k, v in groups.items()}
 
 
@@ -167,8 +179,10 @@ def pick_model(sparse: Path, logger):
         if d.is_dir():
             try:
                 models.append((d, pycolmap.Reconstruction(d)))
-            except Exception:
-                continue
+            except Exception as e:                       # noqa: BLE001
+                # say why: a model that will not load is a bug to fix, not a
+                # fragment to skip past quietly
+                logger.warning("could not read %s: %s", d.name, e)
     if not models:
         return None, None, {}
     models.sort(key=lambda kv: -kv[1].num_reg_images())
@@ -226,8 +240,62 @@ def rescale_to_metric(model: Path, spacing: float, logger) -> float:
     return scale
 
 
+def rig_config(angles, pycolmap):
+    """Declare the reprojected views of one panorama a rigid camera rig.
+
+    They share an optical centre exactly — they are cut from a single image —
+    and their relative rotations are the yaw/pitch we reprojected at. Saying so
+    replaces 6 unknowns per view with 6 per standpoint: a 5-panorama walk goes
+    from 360 pose parameters to 30, and the shared centre stops being something
+    the solver might discover and becomes something it cannot violate.
+
+    `equirect_to_pinhole` builds R mapping camera directions into the panorama's
+    frame, so the rig-to-camera rotation is its transpose. Translation is zero.
+    """
+    import numpy as np
+
+    def rot(yaw, pitch):
+        """Camera directions -> panorama frame, as equirect_to_pinhole builds it."""
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        return (np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+                @ np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]]))
+
+    # sensor 0 defines the rig's frame, so every other sensor's pose is
+    # measured against it: cam_k_from_rig = cam_k_from_pano @ pano_from_cam_0
+    R0 = rot(*angles[0])
+    cams = []
+    for k, (yaw, pitch) in enumerate(angles):
+        cam = pycolmap.RigConfigCamera(image_prefix=f"view_{k:03d}/")
+        if k == 0:
+            cam.ref_sensor = True
+        else:
+            cam.cam_from_rig = pycolmap.Rigid3d(
+                pycolmap.Rotation3d(rot(yaw, pitch).T @ R0), np.zeros(3))
+        cams.append(cam)
+    return pycolmap.RigConfig(cameras=cams)
+
+
+def apply_rig(db, angles, logger):
+    """Write the rig into the database, so mapping solves per standpoint."""
+    import pycolmap
+
+    if not angles:
+        logger.warning("no rig geometry from the reproject stage; "
+                       "every view will be solved independently")
+        return
+    cfg = rig_config(angles, pycolmap)
+    database = pycolmap.Database(str(db))
+    try:
+        pycolmap.apply_rig_config([cfg], database)
+    finally:
+        database.close()
+    logger.info("declared a %d-sensor rig: the views of one panorama now share "
+                "a centre by construction", len(angles))
+
+
 @task(name="2. structure from motion")
-def run_sfm(scene: str, spacing: float = 0.0) -> dict:
+def run_sfm(scene: str, spacing: float = 0.0, angles=None) -> dict:
     """COLMAP poses across every view from every panorama.
 
     Exhaustive matching: the views come from a handful of standpoints rather
@@ -254,15 +322,36 @@ def run_sfm(scene: str, spacing: float = 0.0) -> dict:
     sift.domain_size_pooling = True
     logger.info("feature extraction (peak %.4f, up to %d features/view)",
                 sift.peak_threshold, sift.max_num_features)
-    pycolmap.extract_features(db, images, camera_mode=pycolmap.CameraMode.SINGLE,
+    # One camera per view direction, not one for everything: a rig's sensors
+    # each need their own camera, and SINGLE gives them all the same one — the
+    # reconstruction then refuses to load, "Camera 2 from rig 2 not found".
+    # The per-direction folders make PER_FOLDER land exactly one camera per
+    # sensor, which is the layout COLMAP's rig workflow expects.
+    pycolmap.extract_features(db, images, camera_mode=pycolmap.CameraMode.PER_FOLDER,
                               sift_options=sift)
-    n_img = len(list(images.iterdir()))
+    n_img = sum(1 for _ in images.rglob("*.jpg"))
     logger.info("exhaustive matching over %d views (%d pairs)",
                 n_img, n_img * (n_img - 1) // 2)
     pycolmap.match_exhaustive(db)
+
+    apply_rig(db, angles, logger)
     # mapping is one long call with no output of its own; say so, otherwise
     # the run looks hung for minutes
     logger.info("incremental mapping (no output until it finishes)")
+    # The rig's relative poses are left refinable, which is not where this
+    # should end up. We generate the reprojection, so we know each view's
+    # rotation off the panorama and that they share a centre exactly; left
+    # free, bundle adjustment drifts the sensors 0.49 m from the zero
+    # translation they were given — identically in every frame, which is the
+    # ambiguity reappearing once per rig instead of once per view.
+    #
+    # But pinning them (ba_refine_sensor_from_rig = False) stops COLMAP
+    # building any reconstruction at all: it discards its initial pair and
+    # registers nothing in 80 minutes, against 38 with them free. That points
+    # at the rotations handed to the rig disagreeing with the images — most
+    # likely a frame-convention error in rig_config() — rather than at the
+    # constraint being wrong in principle. Worth fixing: pinned, the scatter
+    # should go to zero by construction.
     recs = pycolmap.incremental_mapping(db, images, sparse)
     if not recs:
         raise RuntimeError(
@@ -270,8 +359,12 @@ def run_sfm(scene: str, spacing: float = 0.0) -> dict:
             "overlap enough. Shoot standpoints closer together.")
 
     best_dir, best, frag = pick_model(sparse, logger)
+    if best_dir is None:
+        raise RuntimeError(
+            f"no readable reconstruction in {sparse} — see the log above for "
+            f"why each model failed to load")
     best_id = best_dir.name
-    total = len(list(images.iterdir()))
+    total = sum(1 for _ in images.rglob("*.jpg"))
     logger.info("registered %d/%d views, %d points, %.2f px reproj error",
                 best.num_reg_images(), total, best.num_points3D(),
                 best.compute_mean_reprojection_error())
@@ -549,7 +642,7 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     is what makes the export metric, which is what a simulator needs.
     """
     shot = reproject(scene, panos, views, size, fov)
-    sfm = run_sfm(scene, spacing)
+    sfm = run_sfm(scene, spacing, shot["angles"])
     stats = train(scene, iters, downscale, aniso_weight)
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building
