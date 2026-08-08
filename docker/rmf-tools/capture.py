@@ -22,8 +22,15 @@ everything downstream.
 Needs a running sim with the rec_cam model, its image topic, and the
 world's set_pose service bridged into ROS. capture.sh arranges that.
 
-Ported from the dreamworld pipeline's panorama_gz stage; the depth output is
-dropped, since a 360 camera does not produce depth.
+Alongside each panorama it also writes `NNN.range.npy`: how far away the
+surface is along every ray of that sphere, straight from the simulator's depth
+camera. A real 360 capture supplies nothing of the kind — this is the ground
+truth the simulator happens to have, and the simulated pipeline uses it to
+start gaussian splatting from the actual surfaces. Without it a corridor
+reconstructs as soup, because every camera centre sits on one walked line and
+depth along a ray is then almost free to be wrong.
+
+Ported from the dreamworld pipeline's panorama_gz stage.
 """
 
 import argparse
@@ -48,6 +55,7 @@ from geometry import quat, quat_to_R  # noqa: E402
 from png_io import write_png  # noqa: E402
 
 ROS_TOPIC = "/rec_cam"
+DEPTH_TOPIC = "/rec_depth"
 
 
 class Cam(Node):
@@ -56,21 +64,31 @@ class Cam(Node):
         self.name = name
         self.latest = None
         self.count = 0            # frames seen, so a fresh one can be waited for
+        self.depth = None
+        self.depth_count = 0
         self.create_subscription(Image, ROS_TOPIC, self._cb, 10)
+        self.create_subscription(Image, DEPTH_TOPIC, self._depth_cb, 10)
         self.cli = self.create_client(SetEntityPose, f"/world/{world}/set_pose")
 
     def _cb(self, msg):
         self.latest = msg
         self.count += 1
 
+    def _depth_cb(self, msg):
+        self.depth = msg
+        self.depth_count += 1
+
     def wait_fresh(self, n, timeout):
-        """Block until n new frames arrive. A fixed sleep alone grabs frames
-        still in flight from the previous pose, which reproject as ghostly
-        overlapping domes."""
-        start, t0 = self.count, time.time()
-        while self.count - start < n and time.time() - t0 < timeout:
+        """Block until n new frames arrive on both topics. A fixed sleep alone
+        grabs frames still in flight from the previous pose, which reproject as
+        ghostly overlapping domes."""
+        start, dstart, t0 = self.count, self.depth_count, time.time()
+        while time.time() - t0 < timeout:
+            if self.count - start >= n and (self.depth is None
+                                            or self.depth_count - dstart >= n):
+                break
             time.sleep(0.005)
-        return self.latest
+        return self.latest, self.depth
 
     def set_pose(self, x, y, z, yaw, pitch, timeout=2.0):
         qx, qy, qz, qw = quat(yaw, pitch)
@@ -96,6 +114,17 @@ def frame_rgb(msg):
     return arr[:, :, ::-1] if msg.encoding == "bgr8" else arr
 
 
+def frame_depth(msg):
+    """sensor_msgs/Image -> (H, W) float32 of depth along the optical axis.
+
+    Gazebo publishes 32FC1, and misses are +inf rather than a sentinel."""
+    if msg is None:
+        return None
+    arr = np.frombuffer(bytes(msg.data), dtype=np.float32)
+    arr = arr[:msg.height * msg.width].reshape(msg.height, msg.width)
+    return np.where(np.isfinite(arr), arr, 0.0)
+
+
 def panorama(node, x, y, a, out, label):
     """Capture the yaw x pitch grid at (x, y) and write one equirect PNG."""
     pitches = (np.linspace(-1, 1, a.pitch_steps) * math.radians(72)
@@ -109,9 +138,10 @@ def panorama(node, x, y, a, out, label):
     for yaw, pitch in views:
         node.set_pose(x, y, a.height, float(yaw), float(pitch))
         time.sleep(a.settle)
-        frame = node.wait_fresh(2, a.frame_timeout)
+        frame, dmsg = node.wait_fresh(2, a.frame_timeout)
         shots.append((frame_rgb(frame).astype(np.float32),
-                      quat_to_R(quat(float(yaw), float(pitch)))))
+                      quat_to_R(quat(float(yaw), float(pitch))),
+                      frame_depth(dmsg)))
 
     H, W = shots[0][0].shape[:2]
     fx = (W / 2) / math.tan(a.fov / 2)          # square pixels, so fy = fx
@@ -128,7 +158,11 @@ def panorama(node, x, y, a, out, label):
 
     acc = np.zeros((Hc, Wc, 3), np.float32)
     wsum = np.zeros((Hc, Wc), np.float32)
-    for frame, R in shots:
+    # the range map is picked, not blended: averaging two views' depths across
+    # a seam invents a surface between them that neither one saw
+    rng_map = np.zeros((Hc, Wc), np.float32)
+    rng_w = np.zeros((Hc, Wc), np.float32)
+    for frame, R, dep in shots:
         fwd, left, up = R[:, 0], R[:, 1], R[:, 2]   # gz: +X fwd, +Z up
         depth = d @ fwd
         rightc = -(d @ left)                        # image right is -Y
@@ -143,10 +177,25 @@ def panorama(node, x, y, a, out, label):
         wgt = np.where(inb, np.clip(depth, 0, 1) ** 4, 0.0).astype(np.float32)
         acc += wgt[..., None] * frame[vic, uic]
         wsum += wgt
+        if dep is not None:
+            # the sensor reports depth along its own axis; the equirect wants
+            # the range along this ray, and dd is the cosine between them
+            r = dep[vic, uic] / np.maximum(dd, 1e-6)
+            take = inb & (dep[vic, uic] > 1e-3) & (wgt > rng_w)
+            rng_map = np.where(take, r, rng_map)
+            rng_w = np.where(take, wgt, rng_w)
 
     pano = (acc / np.maximum(wsum, 1e-6)[..., None]).clip(0, 255).astype(np.uint8)
     write_png(out, np.ascontiguousarray(pano))
-    print(f"  -> {os.path.basename(out)} ({Wc}x{Hc})", flush=True)
+    if rng_w.any():
+        # float16 halves the file and is far finer than the geometry it seeds
+        np.save(out.replace(".png", ".range.npy"), rng_map.astype(np.float16))
+        seen = rng_map[rng_map > 0]
+        print(f"  -> {os.path.basename(out)} ({Wc}x{Hc}), range "
+              f"{seen.min():.2f}-{seen.max():.2f} m over "
+              f"{100 * (rng_map > 0).mean():.0f}% of the sphere", flush=True)
+    else:
+        print(f"  -> {os.path.basename(out)} ({Wc}x{Hc})", flush=True)
 
 
 # How far the walk weaves across the corridor, in metres.

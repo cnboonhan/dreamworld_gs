@@ -512,10 +512,33 @@ def train(scene: str, iters: int, downscale: int,
         data = Path(scene) / "undistorted"
         Ks, viewmats, images, pts, rgb, scale = load_colmap(data, downscale, dev)
     n_views = len(images)
-    holdout = set(range(0, n_views, 8))
+    # Hold out whole viewpoints, not scattered views.
+    #
+    # A panorama becomes a dozen views sharing one camera centre, so holding
+    # out every eighth view leaves eleven neighbours of it in training. That
+    # measures how well the splat interpolates in *direction* from a centre it
+    # already fits, and never tests depth — which is how 38 dB coexisted with a
+    # corridor smeared over three times its width.
+    #
+    # Grouping by camera centre states the requirement directly: a held-out
+    # view must not share its viewpoint with a trained one. Recorded poses
+    # group exactly. A solved reconstruction scatters one panorama's views by
+    # more than the spacing between standpoints, so there each view is its own
+    # group and the old caveat stands.
+    centres = torch.linalg.inv(viewmats)[:, :3, 3].cpu().numpy()
+    seen: dict[tuple, int] = {}
+    groups = np.array([seen.setdefault(tuple(c), len(seen))
+                       for c in np.round(centres, 4)])
+    n_groups = len(seen)
+    # a short walk keeps every viewpoint and reports no PSNR, rather than
+    # crippling the splat that is the actual output to produce a number
+    drop = set(range(1, n_groups, 4)) if n_groups >= 6 else set()
+    holdout = {i for i in range(n_views) if groups[i] in drop}
     train_ids = [i for i in range(n_views) if i not in holdout]
-    logger.info("%d views (%d train / %d eval), %d seed points, scene scale %.2f",
-                n_views, len(train_ids), len(holdout), len(pts), scale)
+    logger.info("%d views from %d viewpoint(s) (%d train / %d eval over %d "
+                "held-out viewpoint(s)), %d seed points, scene scale %.2f",
+                n_views, n_groups, len(train_ids), len(holdout), len(drop),
+                len(pts), scale)
 
     means = torch.tensor(pts, device=dev)
     knn = []
@@ -588,11 +611,15 @@ def train(scene: str, iters: int, downscale: int,
             gt, out, _ = render(i)
             mse = ((out[0].clamp(0, 1) - gt) ** 2).mean().item()
             psnrs.append(-10 * math.log10(max(mse, 1e-10)))
-    psnr = float(np.mean(psnrs)) if psnrs else float("nan")
+    # None, not NaN: no held-out viewpoint means the number was not
+    # measured, which is different from measuring it badly
+    psnr = round(float(np.mean(psnrs)), 2) if psnrs else None
 
     n = save_ply(params, Path(scene) / "world.ply")
-    logger.info("%d gaussians, held-out PSNR %.2f dB", n, psnr)
-    return {"gaussians": n, "psnr": round(psnr, 2)}
+    logger.info("%d gaussians, held-out PSNR %s", n,
+                f"{psnr:.2f} dB" if psnr is not None else
+                "not measured (too few viewpoints to spare one)")
+    return {"gaussians": n, "psnr": psnr}
 
 
 # --------------------------------------------------------------------- export

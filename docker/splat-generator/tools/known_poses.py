@@ -71,6 +71,65 @@ def cam_from_world(centre_gz, yaw: float, pitch: float):
     return R, -R @ np.asarray(centre_gz, dtype=np.float64)
 
 
+def seed_from_range(panos_dir: Path, stand: list[dict], want: int, logger):
+    """A coloured point cloud of the surfaces the capture actually saw.
+
+    Every camera centre on a corridor walk sits on one line, so depth along a
+    ray is barely constrained: gaussians will happily settle wherever they were
+    initialised and still reproduce every training view. Initialisation is
+    therefore not a detail here, it is the geometry. Seeded with uniform noise
+    in a box, a 2 m corridor came out smeared over 6.7 m.
+
+    So the simulated pipeline starts from the range maps its capture recorded.
+    Points are drawn with probability proportional to cos(lat), because an
+    equirectangular image devotes far more pixels to the poles than they
+    subtend, and sampling it flat would put most of the cloud on the ceiling.
+
+    Returns None when there are no range maps — a capture from before they
+    were recorded, which then falls back to noise.
+    """
+    import cv2
+
+    pts, rgb = [], []
+    per = max(1, want // max(1, len(stand)))
+    rng = np.random.default_rng(0)
+    for sp in stand:
+        stem = Path(sp["image"]).stem
+        f = panos_dir / f"{stem}.range.npy"
+        img = panos_dir / sp["image"]
+        if not f.is_file() or not img.is_file():
+            continue
+        R = np.load(f).astype(np.float64)
+        H, W = R.shape
+        colour = cv2.cvtColor(cv2.imread(str(img)), cv2.COLOR_BGR2RGB)
+        if colour.shape[:2] != (H, W):
+            colour = cv2.resize(colour, (W, H), interpolation=cv2.INTER_AREA)
+
+        lat = math.pi / 2 - (np.arange(H) + 0.5) / H * math.pi
+        w = np.repeat(np.cos(lat)[:, None], W, 1)      # equal solid angle
+        w = np.where(np.isfinite(R) & (R > 1e-3) & (R < 30.0), w, 0.0).ravel()
+        if not w.any():
+            continue
+        idx = rng.choice(w.size, size=min(per, int((w > 0).sum())),
+                         replace=False, p=w / w.sum())
+        r, c = np.divmod(idx, W)
+        lon = (c + 0.5) / W * 2 * math.pi - math.pi
+        la = math.pi / 2 - (r + 0.5) / H * math.pi
+        cl = np.cos(la)
+        d = np.stack([cl * np.cos(lon), cl * np.sin(lon), np.sin(la)], -1)
+        pts.append(np.asarray(sp["xyz"], dtype=np.float64) + d * R.ravel()[idx][:, None])
+        rgb.append(colour.reshape(-1, 3)[idx] / 255.0)
+
+    if not pts:
+        return None
+    P = np.concatenate(pts).astype(np.float32)
+    C = np.concatenate(rgb).astype(np.float32)
+    logger.info("seeded from %d recorded range map(s): %d surface points, "
+                "spanning %s m", len(pts), len(P),
+                np.round(P.max(0) - P.min(0), 1).tolist())
+    return P, C
+
+
 def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
          downscale: int, device: str, logger):
     """Posed images and seed points for training, straight from the capture.
@@ -118,13 +177,22 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
     scale = float(np.linalg.norm(C - C.mean(0), axis=1).max()) * 1.1
     scale = max(scale, 1e-3)
 
-    # a cloud around the walk to start from: wide enough to reach the walls,
-    # and densification does the rest
-    rng = np.random.default_rng(0)
-    reach = max(4.0, scale * 3.0)
-    lo, hi = C.min(0) - reach, C.max(0) + reach
-    pts = rng.uniform(lo, hi, size=(60000, 3)).astype(np.float32)
-    rgb = np.full((len(pts), 3), 0.5, dtype=np.float32)
+    seed = seed_from_range(panos_dir, stand, 200_000, logger)
+    if seed is not None:
+        pts, rgb = seed
+    else:
+        # no range maps: a capture from before they were recorded. Noise in a
+        # box around the walk, which is what produced the smeared corridors —
+        # kept only so an old capture still builds something.
+        logger.warning("no range maps beside the panoramas — seeding with "
+                       "noise, which reconstructs a corridor poorly. "
+                       "Re-run `just capture %s` to record them.",
+                       panos_dir.name)
+        rng = np.random.default_rng(0)
+        reach = max(4.0, scale * 3.0)
+        lo, hi = C.min(0) - reach, C.max(0) + reach
+        pts = rng.uniform(lo, hi, size=(60000, 3)).astype(np.float32)
+        rgb = np.full((len(pts), 3), 0.5, dtype=np.float32)
 
     logger.info("training from %d recorded pose(s) over %d standpoint(s); "
                 "%d seed points, scene scale %.2f m",

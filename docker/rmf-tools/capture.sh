@@ -76,6 +76,7 @@ gz sim -s -r --headless-rendering "$ceil_world" >/tmp/gz.log 2>&1 &
 GZ_PID=$!
 ros2 run ros_gz_bridge parameter_bridge \
     "/rec_cam@sensor_msgs/msg/Image[gz.msgs.Image" \
+    "/rec_depth@sensor_msgs/msg/Image[gz.msgs.Image" \
     "/world/sim_world/set_pose@ros_gz_interfaces/srv/SetEntityPose" \
     >/tmp/bridge.log 2>&1 &
 BRIDGE_PID=$!

@@ -79,7 +79,16 @@ def inject_rec_cam(text):
     It has to exist when the world loads: a sensor spawned at runtime never
     renders in server-only mode, so there is no way to add it later. It sits
     idle until `capture.py` teleports it, and publishes on /rec_cam. The
-    horizontal FOV must match what capture.py reprojects with (2.2 rad)."""
+    horizontal FOV must match what capture.py reprojects with (2.2 rad).
+
+    A depth camera rides alongside it, on the same link and the same frustum,
+    publishing to /rec_depth. A 360 camera in a real building produces no such
+    thing — this is the simulator telling us where its surfaces are, and it is
+    used only by the simulated pipeline, to start gaussian splatting from real
+    geometry rather than from noise. Without it the corridor reconstructs as
+    soup: every camera centre sits on one walked line, so depth along a ray is
+    nearly free and gaussians settle wherever they were initialised.
+    """
     if 'name="rec_cam"' in text:
         return text
     cam = """
@@ -91,11 +100,18 @@ def inject_rec_cam(text):
             <clip><near>0.1</near><far>500</far></clip></camera>
           <always_on>1</always_on><update_rate>30</update_rate>
           <topic>rec_cam</topic>
+        </sensor>
+        <sensor name="rec_depth_sensor" type="depth_camera">
+          <camera><horizontal_fov>2.2</horizontal_fov>
+            <image><width>640</width><height>480</height></image>
+            <clip><near>0.1</near><far>100</far></clip></camera>
+          <always_on>1</always_on><update_rate>30</update_rate>
+          <topic>rec_depth</topic>
         </sensor></link>
     </model>
 """
     text = text.replace("</world>", cam + "  </world>", 1)
-    print("  injected the capture camera (rec_cam)")
+    print("  injected the capture camera (rec_cam) and its depth camera")
     return text
 
 
