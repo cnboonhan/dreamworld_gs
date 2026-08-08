@@ -252,6 +252,57 @@ world map="" proj=project: up
         build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
 
+# Package a project into one tarball, to carry to another node.
+#
+# A project is already self-contained — its map, its generated world, its
+# panoramas and its splats — so a tarball of it is everything that machine
+# needs. Model weights are not included: they are hundreds of GB and come from
+# `just setup` on the far side.
+#
+# Paths are stored as assets/projects/<name>/..., so `just unbundle` puts them
+# back exactly where the stack expects them.
+#
+#   just bundle                    the active project -> dist/
+#   just bundle htx /tmp           a named project, somewhere else
+bundle proj=project dest="dist":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src={{assets}}/projects/{{proj}}
+    if [ ! -d "$src" ]; then
+        echo "no such project: {{proj}}" >&2
+        just projects >&2
+        exit 1
+    fi
+    mkdir -p {{dest}}
+    out="$(cd {{dest}} && pwd)/{{proj}}-$(date +%Y%m%d-%H%M%S).tar.gz"
+    tar czf "$out" -C {{repo}} "assets/projects/{{proj}}"
+    n=$(tar tzf "$out" | wc -l)
+    echo "bundled {{proj}} -> $out"
+    echo "  $n entries, $(du -h "$out" | cut -f1)"
+    echo "  restore with: just unbundle $out"
+
+# Restore a bundle made by `just bundle`, in place.
+#
+# Run it on a fresh clone of this repo, then `just up` — the project lands in
+# assets/projects/ and the stack finds it.
+unbundle FILE:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    f="{{FILE}}"; [ -f "$f" ] || f="{{repo}}/{{FILE}}"
+    if [ ! -f "$f" ]; then
+        echo "no such bundle: {{FILE}}" >&2
+        exit 1
+    fi
+    # say what it will land on before it lands on it
+    names=$(tar tzf "$f" | sed -n 's|^assets/projects/\([^/]*\)/.*|\1|p' | sort -u)
+    for n in $names; do
+        [ -d {{assets}}/projects/"$n" ] \
+            && echo "note: assets/projects/$n exists and will be merged into"
+    done
+    tar xzf "$f" -C {{repo}}
+    echo "unbundled into {{repo}}/assets/projects: $(echo $names)"
+    just projects
+
 # What this project's map says exists, and how much of it you have.
 #
 # build-world writes worlds/<map>/capture_plan.json: one entry per vertex and
@@ -280,8 +331,8 @@ projects:
             "$mark" "$n" \
             "$(count "$p/maps" '-name *.building.yaml')" \
             "$(count "$p/worlds" '-type d')" \
-            "$(count "$p/panos" '-type d')" \
-            "$(count "$p/splats" '-name world.ply' 2 2)"
+            "$(count "$p/panos" '-type d' 2 2)" \
+            "$(count "$p/splats" '-name world.ply' 3 3)"
     done
     [ "$found" = 1 ] || echo "  none yet — run: just _env   (seeds samples/)"
     echo

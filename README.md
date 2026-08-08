@@ -161,6 +161,22 @@ just video cafe 20 spline   # visit each standpoint exactly
 One scene per job — build them one at a time and each gets its own run to
 inspect, retry or compare.
 
+## Moving a project
+
+A project is self-contained — its map, its world, its panoramas, its splats —
+so a tarball of one is everything another machine needs. Model weights are not
+included; those come from `just setup` on the far side.
+
+```bash
+just bundle                 # the active project -> dist/
+just bundle htx /tmp        # a named project, somewhere else
+just unbundle <file>        # restore, in place, on the other node
+```
+
+Paths are stored as `assets/projects/<name>/...`, so an unbundle lands exactly
+where the stack looks. `unbundle` warns before merging into a project that
+already exists.
+
 ## Naming
 
 Every part of the building gets an id, and its panoramas go in the folder of
@@ -190,11 +206,26 @@ bidirectional, so the endpoints are sorted and the edge gets one name whichever
 way you walked it. The level is written once, since lanes never cross levels.
 
 ```bash
-just plan            # every id, and what has been captured for it
+just plan            # every id, what is captured for it, and how good it came out
 just plan missing    # only what still needs photographing
 just generate L11.cafe        # panos/vertices/L11.cafe -> splats/vertices/L11.cafe
 just generate L11.cafe--v7    # the corridor between them
 ```
+
+`just plan` ends with a table of every splat already built, so two of them can
+be compared without opening two flow runs:
+
+```
+built splats
+  id        panos  reg/views  gaussians    PSNR   scale      MB  video
+  L11.cafe      4      48/48    778,449   27.58  0.1238    52.9  yes   (2 fragments)
+```
+
+Each splat records these in `world.info.json` at export. What to watch:
+**reg/views** well under half means SfM fragmented and only the largest piece
+was trained; **PSNR** is measured on held-out views, so it says the splat
+matches the photographs — not that the room is covered, which is what the
+capture count tells you; **scale** is the multiplier that put it in metres.
 
 `generate` finds the id under `vertices/` or `edges/` and puts the splat in the
 matching place, so you never say which kind it is.

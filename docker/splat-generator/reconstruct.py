@@ -507,14 +507,30 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     we walk; pass 0 to leave the world unitless. SfM is scale-free, so this
     is what makes the export metric, which is what a simulator needs.
     """
-    reproject(scene, panos, views, size, fov)
+    shot = reproject(scene, panos, views, size, fov)
     sfm = run_sfm(scene, spacing)
     stats = train(scene, iters, downscale, aniso_weight)
     out = export(scene)
+
+    # Everything worth judging the result by, written next to it. These numbers
+    # were only ever in the run log before, which made two splats impossible to
+    # compare without opening two flow runs — `just plan` reads this back.
+    info = {
+        "units": "metres" if spacing > 0 else "unitless",
+        "standpoint_spacing_m": spacing,
+        "metric_scale": sfm["metric_scale"],
+        "panoramas": shot["panos"],
+        "views": shot["views"],
+        "registered": sfm["registered"],
+        "points": sfm["points"],
+        "gaussians": stats["gaussians"],
+        "psnr_db": stats["psnr"],
+    }
+    if "models" in sfm:
+        info["sfm_models"] = sfm["models"]
+    Path(scene, "world.info.json").write_text(json.dumps(info, indent=2))
+
     if spacing > 0:
-        Path(scene, "world.info.json").write_text(json.dumps({
-            "units": "metres", "standpoint_spacing_m": spacing,
-            "metric_scale": sfm["metric_scale"]}, indent=2))
         print(f"metric: {sfm['metric_scale']:.4f}x applied "
               f"({spacing} m between standpoints)")
     print(f"3DGS : {out['ply']}  ({stats['gaussians']:,} gaussians, "
