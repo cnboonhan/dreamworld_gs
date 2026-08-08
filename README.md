@@ -303,6 +303,16 @@ The splats are concatenated into one buffer and depth-sorted together, which
 works only because each was placed in building coordinates. Nothing is merged
 or blended: the renderer never learns there was more than one.
 
+For someone not at the machine, the same walk renders to a file:
+
+```bash
+just route-video L11.cafe L11.v3    # -> traversals/L11.cafe__L11.v3.mp4
+```
+
+That is also the check the viewer cannot easily make. Every frame is rasterised
+from the union of the corridors' gaussians, so a vertex where two independently
+reconstructed splats disagree shows up as a step.
+
 
 ## Notes
 
