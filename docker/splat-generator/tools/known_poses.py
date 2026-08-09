@@ -160,6 +160,52 @@ def depth_view(rng_map: np.ndarray, yaw: float, pitch: float,
     return (rng / n[..., 0]).astype(np.float32)
 
 
+def free_space_probe(panos_dir: Path, stand: list[dict], device: str):
+    """A test for "did any standpoint see straight through this point?".
+
+    The range maps are a record of where the building is *not*, which is the
+    half nobody uses. Colour cannot supply it — a haze that averages to the
+    right grey costs a flat wall almost nothing — and neither can depth on its
+    own, since expected depth is a mean and a cloud in front simply drags it.
+    Pushing alpha toward one is worse still: "this ray must end" is satisfied
+    by filling the ray, which measured 47% of a corridor's gaussians in free
+    space becoming 69%.
+
+    So this asks the question directly, against ground truth, and returns a
+    mask. Returns None when there is nothing to ask with.
+    """
+    import torch
+
+    maps, centres = [], []
+    for sp in stand:
+        f = panos_dir / f"{Path(sp['image']).stem}.range.npy"
+        if not f.is_file():
+            return None
+        maps.append(torch.from_numpy(np.load(f).astype(np.float32)))
+        centres.append(sp["xyz"])
+    R = torch.stack(maps).to(device)                       # (S, H, W)
+    C = torch.tensor(centres, dtype=torch.float32, device=device)   # (S, 3)
+    H, W = R.shape[1], R.shape[2]
+
+    def probe(means, margin: float = 0.25, chunk: int = 200_000):
+        out = torch.zeros(means.shape[0], dtype=torch.bool, device=means.device)
+        for a in range(0, means.shape[0], chunk):
+            m = means[a:a + chunk]
+            d = m[None] - C[:, None]                       # (S, n, 3)
+            r = d.norm(dim=2)
+            u = d / r.clamp(min=1e-9)[..., None]
+            lon = torch.atan2(u[..., 1], u[..., 0])
+            lat = torch.asin(u[..., 2].clamp(-1, 1))
+            col = ((lon + math.pi) / (2 * math.pi) * W).long().clamp(0, W - 1)
+            row = ((math.pi / 2 - lat) / math.pi * H).long().clamp(0, H - 1)
+            surf = torch.gather(R.view(len(C), -1), 1, row * W + col)
+            # this standpoint's line of sight carried on well past the point
+            out[a:a + chunk] = ((surf > 0) & (r < surf - margin)).any(0)
+        return out
+
+    return probe
+
+
 def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
          downscale: int, device: str, logger):
     """Posed images and seed points for training, straight from the capture.

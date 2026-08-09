@@ -568,7 +568,7 @@ def save_ply(params, path: Path) -> int:
 @task(name="3. gaussian splatting")
 def train(scene: str, iters: int, downscale: int,
           needle_weight: float = 1.0, panos: str = "", angles=None,
-          device: str = "", depth_weight: float = 0.5,
+          device: str = "", depth_weight: float = 1.0,
           size: int = 1024, fov: float = 100.0) -> dict:
     """Optimise gaussians against the posed views.
 
@@ -597,6 +597,10 @@ def train(scene: str, iters: int, downscale: int,
         data = Path(scene) / "undistorted"
         Ks, viewmats, images, pts, rgb, scale, depths = load_colmap(
             data, downscale, dev)
+    probe = None
+    if panos and kp.load_poses(Path(panos)):
+        probe = kp.free_space_probe(Path(panos), kp.load_poses(Path(panos)), dev)
+
     n_views = len(images)
     # Hold out whole viewpoints, not scattered views.
     #
@@ -664,17 +668,17 @@ def train(scene: str, iters: int, downscale: int,
     def render(idx):
         gt = images[idx].to(dev).float() / 255.0
         H, W = gt.shape[:2]
-        out, _, info = rasterization(
+        out, alpha, info = rasterization(
             params["means"], torch.nn.functional.normalize(params["quats"], dim=1),
             torch.exp(params["scales"]), torch.sigmoid(params["opacities"]),
             torch.sigmoid(params["colors"]), viewmats[idx][None], Ks[idx][None],
             W, H, packed=False, rasterize_mode="classic",
             render_mode="RGB+ED" if depths is not None else "RGB")
-        return gt, out, info
+        return gt, out, alpha, info
 
     for step in range(iters):
         i = train_ids[torch.randint(len(train_ids), (1,)).item()]
-        gt, out, info = render(i)
+        gt, out, alpha, info = render(i)
         strategy.step_pre_backward(params, opts, state, step, info)
         colour = out[..., :3]
         l1 = (colour[0] - gt).abs().mean()
@@ -698,6 +702,7 @@ def train(scene: str, iters: int, downscale: int,
                 loss = loss + depth_weight * (
                     (out[0, ..., 3][keep] - gz[keep]).abs()
                     / gz[keep].clamp(min=0.5)).mean()
+
         # Bound long slivers, and only those.
         #
         # An earlier attempt penalised the aspect ratio alone and was left off,
@@ -722,13 +727,34 @@ def train(scene: str, iters: int, downscale: int,
         for o in opts.values():
             o.step(); o.zero_grad(set_to_none=True)
         sched.step()
+        # Clear what the capture proved is empty.
+        #
+        # A gaussian sitting where a standpoint saw straight through is wrong
+        # whatever it does for the loss, and no photometric term reliably says
+        # so: on an untextured wall a cloud that averages to the right grey is
+        # nearly free, and 47% of this corridor's gaussians ended up in space
+        # the capture had already measured as open — a third of every frame.
+        # Depth is a mean and a cloud drags it; alpha says "end this ray" and
+        # is satisfied by filling it. Ground truth answers directly, so the
+        # opacity of those gaussians is driven to nothing and the strategy
+        # prunes them on its next pass.
+        if probe is not None and step and step % 500 == 0 and step < iters // 2:
+            with torch.no_grad():
+                empty = probe(params["means"].detach())
+                if empty.any():
+                    params["opacities"][empty] = -20.0
+                    if step % 2000 == 0:
+                        logger.info("step %d: cleared %d gaussian(s) from space "
+                                    "the capture saw through (%.1f%%)", step,
+                                    int(empty.sum()),
+                                    100 * empty.float().mean().item())
         if step % 1000 == 0:
             logger.info("step %d/%d  %d gaussians", step, iters, params["means"].shape[0])
 
     psnrs = []
     with torch.no_grad():
         for i in sorted(holdout):
-            gt, out, _ = render(i)
+            gt, out, _, _ = render(i)
             mse = ((out[0, ..., :3].clamp(0, 1) - gt) ** 2).mean().item()
             psnrs.append(-10 * math.log10(max(mse, 1e-10)))
     # None, not NaN: no held-out viewpoint means the number was not
