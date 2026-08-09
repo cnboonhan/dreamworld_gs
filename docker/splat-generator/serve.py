@@ -1,6 +1,5 @@
 """Serve the splat pipelines from one process.
 
-  generate-world     one panorama -> an imagined navigable world (HY-World)
   reconstruct-world  panoramas of a real place -> a measured world. Poses are
                      inferred (SfM), then the splat is aligned into the building
   reconstruct-simulated  panoramas from the simulator, which recorded where it
@@ -12,9 +11,8 @@
                      viewer streams splats along (nothing is rendered)
 
 Concurrency: reconstructions run several at a time, because each fits on one
-card and picks the emptiest visible one — a batch of corridors is limited by
-how many run at once, not by how fast one runs. Generation and rendering stay
-at one: HY-World shards across every GPU it can see, and a render is short.
+card and claims its own — a batch of corridors is limited by how many run at
+once, not by how fast one runs. Rendering stays at one; it is short.
 
 World generation is a job too, but it needs Gazebo rather than CUDA, so it is
 served from the rmf-tools image instead (docker/rmf-tools/world_flow.py). Both
@@ -30,14 +28,12 @@ from prefect import serve
 RECONSTRUCTIONS = max(1, len(
     [d for d in os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",") if d.strip()]))
 
-from flow import generate_world
 from reconstruct import reconstruct_simulated, reconstruct_world
 from route import plan_route
 from video import render_route, render_walkthrough
 
 if __name__ == "__main__":
     serve(
-        generate_world.to_deployment(name="dreamworld", concurrency_limit=1),
         reconstruct_world.to_deployment(name="dreamworld",
                                         concurrency_limit=RECONSTRUCTIONS),
         reconstruct_simulated.to_deployment(name="dreamworld",

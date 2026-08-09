@@ -32,18 +32,18 @@ justfile                 every workflow — just --list
 compose.yaml             the seven services; reads DW_PROJECT from .env
 samples/                 starter projects, seeded into assets/ by `just setup`
 docker/
-  splat-generator/       reconstruct + generate + render-video flows (GPU)
+  splat-generator/       reconstruct, render-video and plan-route flows (GPU)
   splat-viewer/          WebGL splat viewer
   pano-viewer/           360 viewer for the input panoramas
   rmf-tools/             RMF + Gazebo + traffic editor + the build-world flow
-scripts/                 host-side model downloads
-assets/                  gitignored: model weights, job history, projects/
+scripts/                 plan_report.py, behind `just plan`
+assets/                  gitignored: job history and projects/
 ```
 
 ## Running it
 
 ```bash
-just setup      # one-time: model weights + images (~500GB, needs network)
+just setup      # one-time: build the images (needs network)
 just up         # start everything, print the URLs
 ```
 
@@ -57,7 +57,7 @@ Seven services come up and stay up:
 | http://localhost:8083 | the building simulated under RMF (Gazebo, over noVNC) |
 | http://localhost:8084 | the traffic editor — author the map (over noVNC) |
 
-(Eight services: those five plus the VLM and the two job workers.)
+(Seven services: those five plus the two job workers.)
 
 Remotely:
 
@@ -79,9 +79,9 @@ DW_PROJECT=htx just world  # or override for a single command
 
 `DW_PROJECT` lives in `.env`, so `just` and a bare `docker compose up` agree.
 
-Requirements: NVIDIA GPUs (4+, ~60GB VRAM for generation) with CUDA 12.8, the
-NVIDIA container runtime, [just](https://github.com/casey/just),
-[uv](https://docs.astral.sh/uv/), ~350GB disk.
+Requirements: an NVIDIA GPU with CUDA 12.8 (more cards means a wider batch —
+one reconstruction per card), the NVIDIA container runtime, and
+[just](https://github.com/casey/just).
 
 ## The pipeline
 
@@ -100,7 +100,6 @@ list of splats and worlds rather than random adjectives:
 | `build-world` | `worldjobs` | generate → inspect → plan | one world + nav graph + capture plan |
 | `capture-edge` | `worldjobs` | capture | one corridor's panoramas |
 | `reconstruct-world` | `generator` | reproject → SfM → gaussian splatting → export | one splat, measured |
-| `generate-world` | `generator` | 6 HY-World stages | one splat, imagined |
 | `render-video` | `generator` | plan path → render → encode | one walkthrough |
 | `plan-route` | `generator` | route → resolve → write | one route through the building |
 
@@ -164,10 +163,14 @@ just generate L11.cafe--v7       # panos/<id>/ -> splats/<id>/
 just generate L11.cafe--v7 1.5   # 1.5m between standpoints (default 0.5)
 ```
 
-A *folder* of panoramas is reconstructed together — reproject → COLMAP →
-gaussian splatting — and is faithful to the real room. A *single image file*
-takes the generative HY-World path instead: one real vantage point, the rest
-imagined. Output is `world.ply` (web) and `world.usdz` (Isaac Sim, NuRec).
+Several viewpoints of one place, reconstructed together — reproject → COLMAP →
+gaussian splatting. Output is `world.ply` (web) and `world.usdz` (Isaac Sim,
+NuRec).
+
+A simulated capture takes a different job: it recorded where it stood, so
+`reconstruct-simulated` skips the solve entirely and is placed in the building
+by construction. `just generate` picks between them by whether `poses.json`
+sits beside the panoramas.
 
 The spacing argument is the distance you walked between standpoints. SfM is
 scale-free, so this is the only thing that puts the world in metres; pass `0`
@@ -176,12 +179,11 @@ to leave it unitless.
 `generate` skips a scene that already has a `world.ply` — delete the scene
 directory to rebuild.
 
-**A video**, along the capture path:
+**A video**, riding the walk the splat was captured from:
 
 ```bash
 just video cafe             # -> splats/cafe/walkthrough.mp4
-just video cafe 40          # longer
-just video cafe 20 spline   # visit each standpoint exactly
+just video cafe 40          # slower
 ```
 
 One scene per job — build them one at a time and each gets its own run to
@@ -190,8 +192,7 @@ inspect, retry or compare.
 ## Moving a project
 
 A project is self-contained — its map, its world, its panoramas, its splats —
-so a tarball of one is everything another machine needs. Model weights are not
-included; those come from `just setup` on the far side.
+so a tarball of one is everything another machine needs.
 
 ```bash
 just bundle                 # the active project -> dist/
@@ -326,9 +327,8 @@ reconstructed splats disagree shows up as a step.
   fragment is trained.
 - **Splats train in classic, not antialiased, mode** so the PLY stays portable
   across SuperSplat, web viewers and Isaac.
-- **SAM 3 weights** come from ModelScope; `facebook/sam3` on HuggingFace is
-  gated. See `scripts/README.md`.
-- **Upstream patches** to HY-World live in `docker/splat-generator/hyworld.patch`;
-  environment fixes are documented inline in `build_env.sh`.
+- **No pretrained weights.** Geometry is measured from the photographs, so
+  nothing is downloaded and nothing is mounted but the projects themselves.
+  Environment pins are documented inline in `build_env.sh`.
 
 Third-party code and model licenses: see `NOTICE.md`.
