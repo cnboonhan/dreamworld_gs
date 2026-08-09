@@ -643,7 +643,18 @@ def train(scene: str, iters: int, downscale: int,
     logger.info("%d gaussians, held-out PSNR %s", n,
                 f"{psnr:.2f} dB" if psnr is not None else
                 "not measured (too few viewpoints to spare one)")
-    return {"gaussians": n, "psnr": psnr}
+    # How long the slivers got. This, not how many there are, is what decides
+    # whether a splat reads as clean: a 60 cm splinter a metre away streaks
+    # across the frame, a 9 cm one is invisible. Recorded so `just plan` can
+    # show it, since it predicts appearance better than PSNR does.
+    with torch.no_grad():
+        sc = torch.sort(torch.exp(params["scales"]), dim=1, descending=True).values
+        keep = torch.sigmoid(params["opacities"]) > 0.5
+        sl = sc[keep & (sc[:, 0] / sc[:, 1].clamp(min=1e-8) > NEEDLE_MAX)][:, 0]
+        p99 = float(torch.quantile(sl, 0.99) * 100) if sl.numel() else 0.0
+    logger.info("slivers: %d of %d solid gaussians, 99th percentile %.1f cm",
+                sl.numel(), int(keep.sum()), p99)
+    return {"gaussians": n, "psnr": psnr, "sliver_p99_cm": round(p99, 1)}
 
 
 # --------------------------------------------------------------------- export
@@ -804,6 +815,7 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
         "points": sfm["points"],
         "gaussians": stats["gaussians"],
         "psnr_db": stats["psnr"],
+        "sliver_p99_cm": stats.get("sliver_p99_cm"),
         **{k: v for k, v in placed.items() if k != "transform"},
     }
     if placed.get("transform"):

@@ -20,6 +20,12 @@ from pathlib import Path
 # how many registered views, as a fraction of those offered, before the
 # reconstruction is thin enough to be worth flagging
 THIN_REGISTRATION = 0.5
+# The 99th-percentile length of a sliver gaussian, past which it streaks
+# visibly across a frame rather than hiding in the texture. This predicts how a
+# splat looks better than PSNR does: the splat built from real photographs has
+# nine times as many slivers as a simulated corridor and looks cleaner, because
+# its are 9 cm and the corridor's ran to 76 cm.
+LONG_SLIVER_CM = 30.0
 # held-out PSNR below this reads as blurry rather than merely soft
 LOW_PSNR = 22.0
 
@@ -103,7 +109,7 @@ def print_quality(rows: list[dict]) -> None:
     print()
     print("built splats")
     print(f"  {'id':{w}}  {'panos':>5} {'reg/views':>10} {'gaussians':>10} "
-          f"{'PSNR':>7} {'scale':>7} {'MB':>7}  video")
+          f"{'PSNR':>7} {'sliver':>7} {'scale':>7} {'MB':>7}  video")
     for r in rows:
         reg, views = r.get("registered"), r.get("views")
         regs = f"{reg}/{views}" if reg is not None and views else "—"
@@ -114,11 +120,14 @@ def print_quality(rows: list[dict]) -> None:
             flags.append("low PSNR")
         if r.get("sfm_models", 1) > 1:
             flags.append(f"{r['sfm_models']} fragments")
+        if (r.get("sliver_p99_cm") or 0) > LONG_SLIVER_CM:
+            flags.append("long slivers — expect streaking")
         if r.get("partial"):
             flags.append("metrics not recorded — rebuild to fill in")
         print(f"  {r['id']:{w}}  {fmt(r.get('panoramas'), '>5'):>5} "
               f"{regs:>10} {fmt(r.get('gaussians'), '>10,'):>10} "
               f"{fmt(r.get('psnr_db'), '>7.2f'):>7} "
+              f"{fmt(r.get('sliver_p99_cm'), '>6.1f'):>6}cm "
               f"{fmt(r.get('metric_scale'), '>7.4f'):>7} "
               f"{fmt(r.get('mb'), '>7.1f'):>7}  "
               f"{'yes' if r['video'] else '—'}"
