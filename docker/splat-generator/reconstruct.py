@@ -738,7 +738,11 @@ def train(scene: str, iters: int, downscale: int,
         # is satisfied by filling it. Ground truth answers directly, so the
         # opacity of those gaussians is driven to nothing and the strategy
         # prunes them on its next pass.
-        if probe is not None and step and step % 500 == 0 and step < iters // 2:
+        # For the whole run, not the first half. Densification stops halfway,
+        # but optimisation does not: cleared gaussians grow back over the
+        # remaining steps and sprawl again, which left a corridor with 1.8% of
+        # its gaussians carrying 74% of the frame.
+        if probe is not None and step and step % 500 == 0:
             with torch.no_grad():
                 # seven probes bounding each ellipsoid, not one at its centre:
                 # a gaussian lying on a wall but a metre across still hangs in
