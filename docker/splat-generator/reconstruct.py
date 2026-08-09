@@ -849,41 +849,32 @@ def align(scene: str, panos: str) -> dict:
 
 @task(name="5. export")
 def export(scene: str, panos: str = "") -> dict:
-    """Isaac Sim USDZ, plus the spawn camera the viewer opens at."""
+    """Isaac Sim USDZ, plus the spawn camera and tour path the viewer opens at."""
     logger = get_run_logger()
     world = Path(scene) / "world.ply"
+    usdz = Path(scene) / "world.usdz"
 
-    def sh(cmd):
-        logger.info("$ %s", " ".join(str(c) for c in cmd))
-        import sys as _sys
-
-        _sys.path.insert(0, str(Path(__file__).parent / "tools"))
-        import known_poses as kp
-
-        if panos and kp.load_poses(Path(panos)):
-            # the walk is recorded, so the spawn pose and the tour path come
-            # from it directly rather than out of a reconstruction
-            got = kp.write_sidecars(Path(panos), Path(scene) / "world.ply",
-                                    angles or [])
-            logger.info("sidecars from the recorded walk: %d standpoints, "
-                        "%d path points", got["standpoints"], got["points"])
-        else:
-                    subprocess.run([str(c) for c in cmd], check=True)
-        
-    sh(["python", TOOLS / "ply_to_isaac.py", world, f"{scene}/world.usdz"])
-    import sys as _sys
-
-    _sys.path.insert(0, str(TOOLS))
+    sys.path.insert(0, str(TOOLS))
     import known_poses as kp
+
+    cmd = ["python", str(TOOLS / "ply_to_isaac.py"), str(world), str(usdz)]
+    logger.info("$ %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
     if panos and kp.load_poses(Path(panos)):
         # the walk is recorded, so the spawn pose and the tour path come
         # straight from it rather than out of a reconstruction
-        kp.write_sidecars(Path(panos), Path(scene) / "world.ply")
+        got = kp.write_sidecars(Path(panos), world)
+        logger.info("sidecars from the recorded walk: %d standpoint(s), "
+                    "%d path point(s)", got["standpoints"], got["points"])
     else:
-        sh(["python", TOOLS / "make_spawn_cam.py", "--colmap",
-            f"{scene}/undistorted/sparse/0", world])
-    return {"ply": str(world), "usdz": f"{scene}/world.usdz"}
+        cmd = ["python", str(TOOLS / "make_spawn_cam.py"), "--colmap",
+               f"{scene}/undistorted/sparse/0", str(world)]
+        logger.info("$ %s", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+
+    logger.info("%s (%.1f MB)", usdz.name, usdz.stat().st_size / 1e6)
+    return {"ply": str(world), "usdz": str(usdz)}
 
 
 def _run_name() -> str:
