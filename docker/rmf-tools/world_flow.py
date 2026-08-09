@@ -36,6 +36,11 @@ from prefect import flow, get_run_logger, serve, task
 from prefect.artifacts import create_table_artifact
 
 PROJECTS = Path(os.environ.get("DW_PROJECTS_DIR", "/projects"))
+# How many corridors may be photographed at once. Each capture is a whole
+# Gazebo rendering 2688x2016 frames, which measured around eight cores apiece,
+# and each now runs on its own partition and ROS domain so they cannot see one
+# another. Capped at seven: past that they contend for the box, not for a bus.
+CAPTURES = max(1, min(7, (os.cpu_count() or 8) // 8))
 
 
 def resolve_map(project: str, map_name: str) -> str:
@@ -302,6 +307,13 @@ def capture_edge(project: str, edge: str, spacing: float = 0.5,
 if __name__ == "__main__":
     # one at a time apiece: build-world rewrites the world directory in place,
     # and a capture boots its own Gazebo
+    # Captures run several at a time: each brings up its own Gazebo on its own
+    # partition and its own ROS domain, so they cannot see each other. World
+    # generation stays alone — it rewrites the very files a capture reads.
+    #
+    # `limit` is the runner's own cap and overrides the per-deployment ones
+    # beneath it; leaving it at 1 serialises everything whatever they say.
     serve(build_world.to_deployment(name="dreamworld", concurrency_limit=1),
-          capture_edge.to_deployment(name="dreamworld", concurrency_limit=1),
-          limit=1)
+          capture_edge.to_deployment(name="dreamworld",
+                                     concurrency_limit=CAPTURES),
+          limit=CAPTURES)

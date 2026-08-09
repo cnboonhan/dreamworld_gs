@@ -72,7 +72,22 @@ ros2 run rmf_building_map_tools building_map_generator gazebo \
 python3 /app/postprocess_world.py "$OUT/${MAP}.world" "$IN"
 # The generator bakes near-flat paint onto the walls, which no feature detector
 # can match — and this world gets photographed, not just driven through.
-python3 /app/texturize.py "$OUT/models"
+# Opt-in, because the reason for it has gone.
+#
+# The quasiperiodic pattern exists so structure from motion has corners to
+# match on blank sim walls — untextured, panoramas registered 2 of 60 views.
+# A simulated capture no longer runs structure from motion: its poses are
+# recorded, its geometry is seeded from the depth camera and supervised by it.
+# What is left is a checkerboard mosaic on every surface, which no corridor
+# has, and which dominates every render of the result.
+#
+# Kept for exercising the real path — reconstruct-world does still solve for
+# structure — against a simulated capture. DW_TEXTURIZE=1 turns it back on.
+if [ "${DW_TEXTURIZE:-0}" = "1" ]; then
+    python3 /app/texturize.py "$OUT/models"
+else
+    echo "leaving the map's own surfaces alone (DW_TEXTURIZE=1 to pattern them)"
+fi
 
 ros2 run rmf_building_map_tools building_map_generator nav "$IN" "$OUT/nav_graphs"
 
