@@ -145,7 +145,7 @@ down:
 # scale-free, so this is what puts the world in metres, which a simulator
 # needs; pass 0 to leave it unitless. ^C stops following, the job keeps
 # running (watch it at :4200).
-generate id spacing="0.5" proj=project: up
+generate id spacing="0.25" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
@@ -227,9 +227,17 @@ world map="" proj=project: up
 # follows from the corridor's length. It is also what makes the reconstruction
 # metric, so `just generate` should be given the interval the run reports.
 #
-#   just capture L11.cafe--v7        stop every half metre
-#   just capture L11.cafe--v7 0.3    closer together, for a short corridor
-capture edge spacing="0.5" proj=project: up
+# Spacing is how far apart you stop, as when walking, and it is the strongest
+# lever on how the splat looks. Nine standpoints along a four-metre corridor
+# fits the views it was trained on and falls apart between them, which is
+# exactly where a walkthrough goes: halving the spacing to 0.25 m took a
+# held-out viewpoint from 29.65 to 45.27 dB and the render from veiled to
+# crisp. It is also what makes the reconstruction metric, so pass the same
+# value to `generate`.
+#
+#   just capture L11.cafe--v7        stop every 25 cm
+#   just capture L11.cafe--v7 0.5    faster to capture, visibly hazier
+capture edge spacing="0.25" proj=project: up
     docker compose exec -T generator python submit.py \
         capture-edge/dreamworld \
         project={{proj}} edge={{edge}} spacing={{spacing}}
@@ -237,7 +245,7 @@ capture edge spacing="0.5" proj=project: up
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
 # one is a single re-run rather than a lost batch.
-capture-all spacing="0.5" proj=project: up
+capture-all spacing="0.25" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     plan=$(find {{assets}}/projects/{{proj}}/worlds -name capture_plan.json | head -1)

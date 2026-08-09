@@ -136,12 +136,13 @@ photographed, so the whole pipeline runs with no camera:
 
 ```bash
 just capture L11.cafe--v7        # -> panos/L11.cafe--v7/000.png ...
-just capture L11.cafe--v7 0.3    # stop closer together
+just capture L11.cafe--v7 0.5    # stop further apart — faster, visibly hazier
 just capture-all                 # every corridor not yet shot, one job each
 ```
 
-A camera weaves along the lane, stopping every half metre and taking a full
-360 at each. The weave matters: walking a corridor straight is the worst
+A camera weaves along the lane, stopping every 25 cm and taking a full 360 at
+each, alternating between 1.25 m and 1.95 m so every surface is seen from two
+different angles rather than ten nearly identical ones. The weave matters: walking a corridor straight is the worst
 baseline for the surfaces you are walking toward, because consecutive
 standpoints move *along* the line of sight and the far wall barely shifts
 between them. Weaving gives lateral baseline, which is what triangulates depth
@@ -160,7 +161,7 @@ which then shows up as an alignment residual.
 
 ```bash
 just generate L11.cafe--v7       # panos/<id>/ -> splats/<id>/
-just generate L11.cafe--v7 1.5   # 1.5m between standpoints (default 0.5)
+just generate L11.cafe--v7 0.5   # if you walked 0.5m apart (default 0.25)
 ```
 
 Several viewpoints of one place, reconstructed together — reproject → COLMAP →
