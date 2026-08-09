@@ -8,17 +8,23 @@ Vendored into this repository:
 | `docker/splat-viewer/www/` | [antimatter15/splat](https://github.com/antimatter15/splat) — WebGL 3DGS viewer by Kevin Kwok; patched to resolve `?url=` against this origin and to load a `.cam.json` spawn pose | MIT |
 | `docker/pano-viewer/www/` | equirect WebGL viewer engine from the `dream_editor` tool in the internal htx-robotics-release dreamworld project; reduced to a single panel, given a file picker and an aspect-ratio check | internal |
 
-Fetched at build or run time, not vendored:
+Installed at build time, not vendored:
 
 | Component | Upstream | License |
 | --- | --- | --- |
-| HY-World 2.0 | [Tencent-Hunyuan/HY-World-2.0](https://github.com/Tencent-Hunyuan/HY-World-2.0) — cloned at the pinned commit in the generator Dockerfile, patched with `docker/splat-generator/hyworld.patch` | see upstream `License.txt` |
-| SAM 3 | Meta, via ModelScope `facebook/sam3` | Meta SAM 3 license |
-| Wan 2.1 I2V, Qwen3-VL, Qwen-Image-Edit, WorldStereo, MoGe, ZIM, GroundingDINO | see each model card | respective licenses |
+| gsplat 1.5.3 | [nerfstudio-project/gsplat](https://github.com/nerfstudio-project/gsplat) — the CUDA rasteriser | Apache-2.0 |
+| pycolmap 3.12.6 | [colmap/colmap](https://github.com/colmap/colmap) — structure from motion | BSD-3-Clause |
+| PyTorch, OpenCV, torchmetrics, plyfile, usd-core, nvidia-ncore | see each project | permissive (BSD / Apache-2.0 / MIT) |
 
-Model weights are downloaded by `just fetch-assets` into `assets/`, which is
-not tracked here. Review the individual model licenses before any deployment
-beyond evaluation — several are non-commercial or otherwise restricted.
+**No pretrained model weights.** This pipeline measures geometry from the
+photographs rather than imagining it, so nothing is downloaded at runtime and
+nothing is mounted but the projects themselves.
+
+Earlier revisions carried a generative path — HY-World 2.0, and with it SAM 3,
+Wan 2.1 I2V, Qwen3-VL, Qwen-Image-Edit, WorldStereo, MoGe, ZIM and
+GroundingDINO — several of which are non-commercial or otherwise restricted.
+All of it was removed, along with the weights it needed. If you restore that
+path from history, those licenses apply again and want reviewing first.
 
 ## Open-RMF
 
@@ -35,9 +41,10 @@ rendered — building needs.
 
 The panorama capture (`capture.py`, `capture.sh`) and the shared helpers in
 `docker/rmf-tools/common/` (`geometry.py`, `png_io.py`) are ported from that
-pipeline's `panorama_gz` stage. The depth output is dropped — a 360 camera does
-not produce depth — and capture is extended from nav-graph vertices to points
-along a lane.
+pipeline's `panorama_gz` stage, extended from nav-graph vertices to points
+along a lane. The depth output is kept and written beside each panorama: a real
+360 camera produces none, so it is used only by the simulated pipeline, which
+seeds and supervises from it.
 
 `samples/multilevel_office/` is the `multilevel_office` map from that same
 pipeline (its robot meshes are not included, since no robot is simulated here).

@@ -42,16 +42,11 @@ SH_C0 = 0.28209479177387814
 # one axis only. Penalising longest/shortest hits the discs and inflates them
 # into a haze over the floor.
 NEEDLE_MAX = 15.0
-# A gaussian longer than this, and shaped like a sliver rather than a disc, is
-# an artifact whatever it does for the loss: nothing in a corridor is a 60 cm
-# splinter one centimetre thick. Only such gaussians are penalised — a wall is
-# legitimately a wide flat disc, and a short sliver is too small to see.
-#
-# Measured across the sample building, needles are only 1-2% of a simulated
-# splat by count but run to 60-76 cm at the 99th percentile, against 9 cm in
-# the splat built from real photographs. Few, and enormous: that is the visible
-# streaking, and it is what this bounds.
-SLIVER_MAX_M = 0.25
+# Nothing may be longer than this, whatever its shape. A corridor here is about
+# 1.5 m wide, so a 7 m gaussian is not a wall being represented efficiently, it
+# is a sheet through the building — and edge-on it draws a line across the
+# frame.
+SPLAT_MAX_M = 1.0
 # The chain from panorama to splat, fixed because every link depends on the
 # others. A 100-degree view at 1024 px is 10.2 pixels per degree, which is what
 # a 7680-wide equirect downsamples cleanly into — the same ratio the real 360
@@ -571,28 +566,39 @@ def save_ply(params, path: Path) -> int:
 
 
 def cut_slivers(params):
-    """Set any long sliver's longest axis back to the bound. Returns the mask.
+    """Bound how needle-like, and how large, a gaussian may be. Returns the mask.
 
-    Nothing in a corridor is a 70 cm splinter a centimetre thick, so this
-    states that rather than bargaining for it through the loss. A penalty
-    averaged over every gaussian is diluted by the 99% that are fine — each
-    offender feels a hundredth of the gradient, and once the walls carried a
-    texture there was a strong photometric reason to grow along it. Ten of
-    twenty-six corridors went past 30 cm, two past 70.
+    Two rules, because one of them was measured to be the wrong shape. Bounding
+    length only above an absolute size let 3,611 needles through on one
+    corridor — under 25 cm, so untouched, and 0.005 cm thick. A needle's
+    footprint on screen is its length times about a pixel, not its length times
+    its thickness, so they scored 0.3% by area while each drew a line across a
+    quarter of the frame. That is what the starbursts are.
 
-    Long *and* sliver-shaped: a wall's wide flat disc is neither, and is left
-    alone.
+    So the shape rule applies at every size: nothing may be more than
+    NEEDLE_MAX times longer than it is wide. It scales with thickness, which is
+    the point — a hair-thin gaussian is cut to nothing, while a 5 cm thick wall
+    patch may still run 75 cm.
+
+    And a flat cap on top, because a sheet is not a needle by that test: a 7 m
+    gaussian with an aspect ratio of 9 passed the shape rule and still draws a
+    line through the building when seen edge-on.
     """
     import torch
 
     with torch.no_grad():
-        srt, order = torch.exp(params["scales"]).sort(dim=1, descending=True)
-        bad = ((srt[:, 0] > SLIVER_MAX_M)
-               & (srt[:, 0] / srt[:, 1].clamp(min=1e-8) > NEEDLE_MAX))
-        if bad.any():
-            rows = bad.nonzero(as_tuple=True)[0]
-            params["scales"][rows, order[rows, 0]] = math.log(SLIVER_MAX_M)
-    return bad
+        sc = torch.exp(params["scales"])
+        before = sc.clone()
+        # every axis, not only the longest: clamping the longest alone just
+        # promotes the middle one, which is how a 141 cm gaussian survived a
+        # 100 cm cap
+        sc = sc.clamp(max=SPLAT_MAX_M)
+        srt, order = sc.sort(dim=1, descending=True)
+        rows = torch.arange(sc.shape[0], device=sc.device)
+        sc[rows, order[:, 0]] = torch.minimum(srt[:, 0], srt[:, 1] * NEEDLE_MAX)
+        changed = (sc != before).any(dim=1)
+        params["scales"].copy_(torch.log(sc.clamp(min=1e-6)))
+    return changed
 
 
 @task(name="3. gaussian splatting")
@@ -814,18 +820,20 @@ def train(scene: str, panos: str, angles, device: str) -> dict:
     logger.info("%d gaussians, held-out PSNR %s", n,
                 f"{psnr:.2f} dB" if psnr is not None else
                 "not measured (too few viewpoints to spare one)")
-    # How long the slivers got. This, not how many there are, is what decides
-    # whether a splat reads as clean: a 60 cm splinter a metre away streaks
-    # across the frame, a 9 cm one is invisible. Recorded so `just plan` can
-    # show it, since it predicts appearance better than PSNR does.
+    # The worst aspect ratio left, and the largest gaussian. Length alone was
+    # the wrong thing to record: the needles that draw the starbursts are
+    # under 25 cm and hair-thin, so they looked harmless by every measure that
+    # multiplied length by thickness.
     with torch.no_grad():
         sc = torch.sort(torch.exp(params["scales"]), dim=1, descending=True).values
         keep = torch.sigmoid(params["opacities"]) > 0.5
-        sl = sc[keep & (sc[:, 0] / sc[:, 1].clamp(min=1e-8) > NEEDLE_MAX)][:, 0]
-        p99 = float(torch.quantile(sl, 0.99) * 100) if sl.numel() else 0.0
-    logger.info("slivers: %d of %d solid gaussians, 99th percentile %.1f cm",
-                sl.numel(), int(keep.sum()), p99)
-    return {"gaussians": n, "psnr": psnr, "sliver_p99_cm": round(p99, 1)}
+        solid = sc[keep]
+        ratio = float((solid[:, 0] / solid[:, 1].clamp(min=1e-8)).max())
+        longest = float(solid[:, 0].max() * 100)
+    logger.info("%d solid gaussians, worst aspect ratio %.1f, largest %.1f cm",
+                int(keep.sum()), ratio, longest)
+    return {"gaussians": n, "psnr": psnr,
+            "worst_ratio": round(ratio, 1), "longest_cm": round(longest, 1)}
 
 
 # --------------------------------------------------------------------- export
@@ -980,7 +988,8 @@ def reconstruct_world(scene: str, panos: str, spacing: float = 0.5) -> dict:
         "points": sfm["points"],
         "gaussians": stats["gaussians"],
         "psnr_db": stats["psnr"],
-        "sliver_p99_cm": stats.get("sliver_p99_cm"),
+        "worst_ratio": stats.get("worst_ratio"),
+        "longest_cm": stats.get("longest_cm"),
         **{k: v for k, v in placed.items() if k != "transform"},
     }
     if placed.get("transform"):
