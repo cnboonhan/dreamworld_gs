@@ -53,6 +53,35 @@ NEEDLE_MAX = 15.0
 SLIVER_MAX_M = 0.25
 
 
+def pick_gpu(logger=None) -> str:
+    """The visible CUDA device with the most free memory.
+
+    A reconstruction fits comfortably on one card, so a batch of corridors is
+    limited by how many run at once rather than by how fast one is. Choosing
+    the emptiest device lets several run side by side without a scheduler:
+    whoever starts next takes whatever nobody is on.
+
+    It is a snapshot, so two runs starting in the same instant can pick the
+    same card. They still both complete — an H200 holds several of these — and
+    the caller can pass an explicit device when it wants a strict assignment.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        return "cpu"
+    free = [torch.cuda.mem_get_info(i)[0] for i in range(torch.cuda.device_count())]
+    best = int(max(range(len(free)), key=lambda i: free[i]))
+    # Claim it now. Creating the context costs a few hundred MB and is visible
+    # to every other process immediately, so the next run to pick sees this
+    # card as taken — without that, two starting together both read every card
+    # as empty and land on the same one.
+    torch.zeros(1, device=f"cuda:{best}")
+    if logger:
+        logger.info("cuda:%d of %d visible, %.0f GB free",
+                    best, len(free), free[best] / 1e9)
+    return f"cuda:{best}"
+
+
 # ---------------------------------------------------------------- reprojection
 
 def equirect_to_pinhole(pano: np.ndarray, yaw: float, pitch: float,
@@ -494,6 +523,7 @@ def save_ply(params, path: Path) -> int:
 @task(name="3. gaussian splatting")
 def train(scene: str, iters: int, downscale: int,
           needle_weight: float = 1.0, panos: str = "", angles=None,
+          device: str = "",
           size: int = 1024, fov: float = 100.0) -> dict:
     """Optimise gaussians against the posed views.
 
@@ -506,7 +536,7 @@ def train(scene: str, iters: int, downscale: int,
     from torchmetrics.functional.image import structural_similarity_index_measure as ssim_fn
 
     logger = get_run_logger()
-    dev = "cuda:0"
+    dev = device or pick_gpu(logger)
     import sys as _sys
 
     _sys.path.insert(0, str(Path(__file__).parent / "tools"))
@@ -762,6 +792,7 @@ def _run_name() -> str:
 def reconstruct_simulated(scene: str, panos: str, views: int = 8,
                           size: int = 1024, iters: int = 15000,
                           downscale: int = 1, needle_weight: float = 1.0,
+                          device: str = "",
                           fov: float = 100.0) -> dict:
     """A capture from the simulator, which recorded where it stood.
 
@@ -777,7 +808,8 @@ def reconstruct_simulated(scene: str, panos: str, views: int = 8,
             f"one; a real capture cannot, and belongs in reconstruct-world.")
     return reconstruct_world(scene=scene, panos=panos, views=views, size=size,
                              iters=iters, downscale=downscale,
-                             needle_weight=needle_weight, spacing=0.0, fov=fov)
+                             needle_weight=needle_weight, spacing=0.0, fov=fov,
+                             device=device)
 
 
 @flow(name="reconstruct-world", log_prints=True,
@@ -785,6 +817,7 @@ def reconstruct_simulated(scene: str, panos: str, views: int = 8,
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
                       iters: int = 15000, downscale: int = 1,
                       needle_weight: float = 1.0, spacing: float = 0.5,
+                      device: str = "",
                       fov: float = 100.0) -> dict:
     """scene: output dir; panos: panoramas of one space.
 
@@ -796,7 +829,7 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     sfm = run_sfm(scene, spacing, shot["angles"], panos, size, fov,
                   require_sfm=spacing > 0)
     stats = train(scene, iters, downscale, needle_weight,
-                  panos, shot["angles"], size, fov)
+                  panos, shot["angles"], device, size, fov)
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building
     placed = align(scene, panos)
