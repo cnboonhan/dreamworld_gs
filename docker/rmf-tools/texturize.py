@@ -1,38 +1,31 @@
 #!/usr/bin/env python3
-"""Give the generated world's surfaces something *unrepeated* to look at.
+"""Give the generated world's surfaces a realistic finish.
 
-Two problems, and the second is the one that bites.
+The map generator paints each surface a near-flat colour. That is a problem
+for gaussian splatting, and not the one it first looks like: a flat wall gives
+the photometric loss almost nothing to say, so a haze that averages to the
+right grey costs nothing to keep, and gaussians drift off the surface they
+belong to. Removing the earlier texture entirely put 47% of a corridor's
+gaussians into space the capture had seen straight through.
 
-**Flat paint.** The map generator bakes a near-uniform texture onto the walls —
-`default.png` is 8 KB for a 597x1024 image. Structure from motion needs corners
-to match, and a blank wall has none: panoramas of the untextured world
-registered 2 of 60 views.
+An earlier version of this file solved a different problem — structure from
+motion needs corners to match, and untextured panoramas registered 2 of 60
+views — by replacing every surface with a high-contrast quasiperiodic mosaic.
+It worked for matching and was wrong for everything else: no corridor is a
+chequerboard, and it dominated every render of the result. A simulated capture
+no longer runs structure from motion at all.
 
-**Repetition.** Adding detail is not enough, because the meshes tile their
-texture: the wall's UVs run 0..24.25, so a 512-pixel image repeats about 24
-times along it, and the floor's repeat ~84 x 26. Every repeat is then not only
-detailed but *identically* detailed, which is worse than blank — a feature
-detector matches a corner to the wrong copy and folds the reconstruction. That
-is what happened: 55 of 60 views registered while the recovered walk collapsed
-from 2.2 m to 0.24 m.
+So this adds finish rather than pattern:
 
-So this does two things per mesh:
+  - the authored image is kept, colours and all, not flattened to its mean
+  - fractal grain is laid over it, several octaves, a few percent deep
+  - the UVs are left alone, so the grain lands at the scale the map intended
 
-  - rescales the UVs to span 0..1, so the texture covers the surface once
-  - paints one surface-sized texture that never repeats
-
-The pattern is quasiperiodic. Cell edges come from two incommensurate spacings
-whose ratio is irrational, so the tiling has no translational symmetry at any
-offset — the same reason an aperiodic tiling (Penrose, or the "hat" monotile)
-never repeats. Aperiodic *geometry* alone would not be enough here, because a
-feature descriptor reads a small patch and those recur locally even when the
-global arrangement does not; so every cell is also shaded by a hash of its
-index. Aperiodic layout removes exact repeats, per-cell shading removes local
-ambiguity.
-
-None of this is a thumb on the scale. A real corridor has doors, signage, wear
-and skirting, and does not look the same every 1.2 metres. The uniformity and
-the tiling are both the simulator's artifacts.
+Painted plaster, linoleum and carpet all vary by a few percent over a
+centimetre or two, and that is what this is. It gives the loss something to
+hold on to at the resolution the capture actually resolves — about 10 pixels
+per degree at the training views, so roughly a centimetre on a wall an arm's
+length away — without pretending the building has a pattern on it.
 
 Usage: texturize.py <models-dir>
 """
@@ -44,115 +37,66 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-# how strongly the pattern shows through, as a fraction of the base colour
-STRENGTH = 0.30
-# longest side of a generated texture; the other follows the surface's aspect
-MAX_PX = 4096
-# pixels per cell, roughly — small enough for several cells per camera view
-CELL_PX = 26
-# golden ratio: the least well approximated by rationals, so two spacings in
-# this ratio come closest to never lining up
-PHI = (1 + 5 ** 0.5) / 2
+# How deep the grain runs, as a fraction of each pixel's own brightness. Paint
+# and vinyl vary by a few percent; much more than this reads as dirt.
+STRENGTH = 0.14
+# Finest octave, in pixels of the source texture. The map tiles these across a
+# surface, so a 512 px image over a half-metre tile makes 8 px about a
+# centimetre — near the finest thing the capture resolves.
+FINEST_PX = 8
+OCTAVES = 5
 
 
-def rescale_uvs(obj: Path) -> tuple[float, float] | None:
-    """Map this mesh's UVs onto 0..1, and report the extent they covered.
+def grain(w: int, h: int, seed: int) -> np.ndarray:
+    """Fractal value noise in [-1, 1]: several octaves, each half the last.
 
-    The extent is the aspect ratio the surface wants: a wall 24 tiles long and
-    1 tall should get a long thin texture, not a square one stretched."""
-    lines = obj.read_text().splitlines(keepends=True)
-    uv = [(i, [float(x) for x in l.split()[1:3]])
-          for i, l in enumerate(lines) if l.startswith("vt ")]
-    if not uv:
-        return None
-    us = [c[0] for _, c in uv]
-    vs = [c[1] for _, c in uv]
-    du, dv = max(us) - min(us), max(vs) - min(vs)
-    if du < 1.01 and dv < 1.01:
-        return du or 1.0, dv or 1.0        # already covers the surface once
-    u0, v0 = min(us), min(vs)
-    for i, (u, v) in uv:
-        lines[i] = f"vt {(u - u0) / (du or 1):.6f} {(v - v0) / (dv or 1):.6f}\n"
-    obj.write_text("".join(lines))
-    return du or 1.0, dv or 1.0
-
-
-def quasiperiodic(w: int, h: int, seed: int) -> np.ndarray:
-    """A (h, w) field in [-1, 1] of cells that never repeat.
-
-    Two incommensurate spacings per axis: their ratio is irrational, so the
-    pair of indices a pixel falls into recurs at no finite offset."""
+    One octave alone is either too fine to survive the capture or too coarse
+    to look like a surface. Summing them gives the self-similar roughness real
+    finishes have, which is also what keeps a gradient available at whatever
+    distance the camera happens to be.
+    """
     rng = np.random.default_rng(seed)
-    x = np.arange(w, dtype=np.float64)
-    y = np.arange(h, dtype=np.float64)
-    # index pairs, one per axis
-    ia = np.floor(x / CELL_PX).astype(np.int64)
-    ib = np.floor(x / (CELL_PX * PHI)).astype(np.int64)
-    ja = np.floor(y / CELL_PX).astype(np.int64)
-    jb = np.floor(y / (CELL_PX * PHI)).astype(np.int64)
-
-    # hash the four indices into a value per cell — cheap, and stable so a
-    # rebuild reproduces the same wall
-    def mix(*idx):
-        v = np.uint64(seed | 1)
-        for a in idx:
-            v = (v ^ a.astype(np.uint64)) * np.uint64(0x9E3779B97F4A7C15)
-            v ^= v >> np.uint64(29)
-        return v
-
-    cell = mix(ia[None, :] * np.uint64(1), ib[None, :] * np.uint64(7),
-               ja[:, None] * np.uint64(31), jb[:, None] * np.uint64(97))
-    field = ((cell >> np.uint64(11)).astype(np.float64)
-             / float(1 << 53) * 2.0 - 1.0)
-
-    # a little fine grain on top, so a descriptor has structure inside a cell
-    grain = rng.random((max(2, h // 3), max(2, w // 3))) - 0.5
-    gy = (np.arange(h) * grain.shape[0] // h).clip(0, grain.shape[0] - 1)
-    gx = (np.arange(w) * grain.shape[1] // w).clip(0, grain.shape[1] - 1)
-    return np.clip(field + 0.5 * grain[gy][:, gx], -1, 1)
+    out = np.zeros((h, w), np.float32)
+    amp, total = 1.0, 0.0
+    for o in range(OCTAVES):
+        step = FINEST_PX << o
+        gh, gw = max(2, h // step + 2), max(2, w // step + 2)
+        cell = rng.random((gh, gw)).astype(np.float32) - 0.5
+        # bilinear upsample: the smooth interpolation is what makes it read as
+        # a surface rather than as noise
+        layer = np.asarray(Image.fromarray(cell, mode="F").resize((w, h),
+                                                                  Image.BILINEAR))
+        out += amp * layer
+        total += amp
+        amp *= 0.55
+    out /= max(total, 1e-6)
+    peak = np.abs(out).max()
+    return out / peak if peak > 1e-6 else out
 
 
-def texturize(png: Path, extent: tuple[float, float]) -> str:
-    base = np.asarray(Image.open(png).convert("RGB")).astype(np.float32)
-    colour = base.reshape(-1, 3).mean(0)          # keep the surface's colour
-    du, dv = extent
-    # size to the surface, not the old image: a long wall gets a long texture
-    if du >= dv:
-        w = int(min(MAX_PX, max(256, 512 * du)))
-        h = int(max(64, round(w * dv / du)))
-    else:
-        h = int(min(MAX_PX, max(256, 512 * dv)))
-        w = int(max(64, round(h * du / dv)))
-
+def texturize(png: Path) -> str:
+    img = Image.open(png).convert("RGB")
+    base = np.asarray(img).astype(np.float32)
+    h, w = base.shape[:2]
     seed = int(hashlib.sha256(png.name.encode()).hexdigest()[:8], 16)
-    field = quasiperiodic(w, h, seed)[..., None]
-    out = np.clip(colour[None, None] * (1.0 + STRENGTH * field), 0, 255)
-    out = out.astype(np.uint8)
+    field = grain(w, h, seed)[..., None]
+    # multiplicative, so a dark skirting stays dark and a white wall stays
+    # white — the finish varies the surface rather than repainting it
+    out = np.clip(base * (1.0 + STRENGTH * field), 0, 255).astype(np.uint8)
     Image.fromarray(out).save(png)
-    return (f"{png.name}: {w}x{h} over a {du:.1f}x{dv:.1f} surface, "
-            f"contrast {base.std():.1f} -> {out.std():.1f}")
+    return (f"{png.name}: {w}x{h}, contrast {base.std():.1f} -> {out.std():.1f}, "
+            f"grain from {FINEST_PX} px over {OCTAVES} octaves")
 
 
 def main() -> None:
     models = Path(sys.argv[1])
-    print("texturizing so SfM has features that do not repeat:")
+    print("adding a surface finish, so flat paint still gives the loss a gradient:")
     done = 0
-    for obj in sorted(models.rglob("*.obj")):
-        extent = rescale_uvs(obj)
-        if extent is None:
-            continue
-        # the .mtl beside it names the texture this mesh uses
-        mtl = obj.with_suffix(".mtl")
-        names = [l.split(None, 1)[1].strip()
-                 for l in mtl.read_text().splitlines()
-                 if l.strip().startswith("map_Kd")] if mtl.is_file() else []
-        for name in names:
-            png = obj.parent / name
-            if png.is_file():
-                print("  " + texturize(png, extent))
-                done += 1
+    for png in sorted(models.rglob("*.png")):
+        print("  " + texturize(png))
+        done += 1
     if not done:
-        print("  no textured meshes found")
+        print("  no textures found")
 
 
 if __name__ == "__main__":

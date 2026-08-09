@@ -72,21 +72,20 @@ ros2 run rmf_building_map_tools building_map_generator gazebo \
 python3 /app/postprocess_world.py "$OUT/${MAP}.world" "$IN"
 # The generator bakes near-flat paint onto the walls, which no feature detector
 # can match — and this world gets photographed, not just driven through.
-# Opt-in, because the reason for it has gone.
+# A surface finish, not a pattern.
 #
-# The quasiperiodic pattern exists so structure from motion has corners to
-# match on blank sim walls — untextured, panoramas registered 2 of 60 views.
-# A simulated capture no longer runs structure from motion: its poses are
-# recorded, its geometry is seeded from the depth camera and supervised by it.
-# What is left is a checkerboard mosaic on every surface, which no corridor
-# has, and which dominates every render of the result.
+# The generator paints each surface a near-flat colour, and a flat wall gives
+# the photometric loss nothing to say: a haze that averages to the right grey
+# costs nothing to keep. With this off, 47% of a corridor's gaussians settled
+# in space the capture had seen straight through. texturize.py lays a few
+# percent of fractal grain over the authored image without changing what it
+# depicts — which is what paint and vinyl actually look like up close.
 #
-# Kept for exercising the real path — reconstruct-world does still solve for
-# structure — against a simulated capture. DW_TEXTURIZE=1 turns it back on.
-if [ "${DW_TEXTURIZE:-0}" = "1" ]; then
+# DW_TEXTURIZE=0 leaves the map exactly as authored.
+if [ "${DW_TEXTURIZE:-1}" = "1" ]; then
     python3 /app/texturize.py "$OUT/models"
 else
-    echo "leaving the map's own surfaces alone (DW_TEXTURIZE=1 to pattern them)"
+    echo "leaving the map's surfaces exactly as authored (no finish)"
 fi
 
 ros2 run rmf_building_map_tools building_map_generator nav "$IN" "$OUT/nav_graphs"
