@@ -61,9 +61,7 @@ VIEWS = 8
 VIEW_PX = 1024
 VIEW_FOV = 100.0
 ITERS = 15000
-# How hard the loss pushes back on a long sliver, and on depth disagreeing with
-# the range maps. Both earn their keep at 1.0 and neither has wanted tuning.
-NEEDLE_WEIGHT = 1.0
+# How hard the loss pushes back on depth disagreeing with the range maps.
 DEPTH_WEIGHT = 1.0
 
 
@@ -572,6 +570,31 @@ def save_ply(params, path: Path) -> int:
     return n
 
 
+def cut_slivers(params):
+    """Set any long sliver's longest axis back to the bound. Returns the mask.
+
+    Nothing in a corridor is a 70 cm splinter a centimetre thick, so this
+    states that rather than bargaining for it through the loss. A penalty
+    averaged over every gaussian is diluted by the 99% that are fine — each
+    offender feels a hundredth of the gradient, and once the walls carried a
+    texture there was a strong photometric reason to grow along it. Ten of
+    twenty-six corridors went past 30 cm, two past 70.
+
+    Long *and* sliver-shaped: a wall's wide flat disc is neither, and is left
+    alone.
+    """
+    import torch
+
+    with torch.no_grad():
+        srt, order = torch.exp(params["scales"]).sort(dim=1, descending=True)
+        bad = ((srt[:, 0] > SLIVER_MAX_M)
+               & (srt[:, 0] / srt[:, 1].clamp(min=1e-8) > NEEDLE_MAX))
+        if bad.any():
+            rows = bad.nonzero(as_tuple=True)[0]
+            params["scales"][rows, order[rows, 0]] = math.log(SLIVER_MAX_M)
+    return bad
+
+
 @task(name="3. gaussian splatting")
 def train(scene: str, panos: str, angles, device: str) -> dict:
     """Optimise gaussians against the posed views.
@@ -705,25 +728,6 @@ def train(scene: str, panos: str, angles, device: str) -> dict:
                     (out[0, ..., 3][keep] - gz[keep]).abs()
                     / gz[keep].clamp(min=0.5)).mean()
 
-        # Bound long slivers, and only those.
-        #
-        # An earlier attempt penalised the aspect ratio alone and was left off,
-        # because it costs real sharpness everywhere (28.4 -> 26.6 dB) — it
-        # pushes on every sliver, and most are far too small to see. Requiring
-        # the gaussian to be long *in metres* as well leaves those alone, and
-        # leaves a wall's wide flat disc alone, so the gradient reaches only
-        # the 1-2% that actually streak across a frame.
-        #
-        # It has to act for the whole run. gsplat prunes oversized gaussians
-        # while it refines, and refinement stops halfway — so for the second
-        # half of training a sliver can stretch with nothing to stop it.
-        if NEEDLE_WEIGHT:
-            srt = torch.sort(torch.exp(params["scales"]), dim=1,
-                             descending=True).values
-            sliver = ((srt[:, 0] / srt[:, 1].clamp(min=1e-8) - NEEDLE_MAX)
-                      .clamp(min=0) / NEEDLE_MAX)
-            excess = (srt[:, 0] - SLIVER_MAX_M).clamp(min=0)
-            loss = loss + NEEDLE_WEIGHT * (excess * sliver).mean()
         loss.backward()
         strategy.step_post_backward(params, opts, state, step, info, packed=False)
         for o in opts.values():
@@ -757,16 +761,31 @@ def train(scene: str, panos: str, angles, device: str) -> dict:
                 over = (n_free >= 1) & ~adrift
                 if adrift.any():
                     params["opacities"][adrift] = -20.0
+
+                # Cut long slivers back, rather than asking the loss to.
+                #
+                # A penalty averaged over every gaussian is diluted by the 99%
+                # that are fine: each offender feels a hundredth of the
+                # gradient, and once the walls had a texture there was a strong
+                # photometric reason to grow along it. Ten of twenty-six
+                # corridors went past 30 cm, two past 70. Weighting the penalty
+                # up instead would push on the shape of everything.
+                #
+                # Nothing in a corridor is a 70 cm splinter a centimetre thick,
+                # so this states that rather than bargaining for it: the
+                # longest axis of a gaussian that is both long in metres and
+                # shaped like a sliver is set back to the bound. A wall's wide
+                # flat disc is not a sliver and is untouched.
+                long_sliver = cut_slivers(params)
                 if over.any():
                     # reaching into open air but anchored: pull it back rather
                     # than delete it, since its centre is on something real
                     params["scales"][over] -= 0.35        # log space, about x0.7
                 if step % 2000 == 0:
-                    logger.info("step %d: cleared %d adrift, shrank %d "
-                                "overreaching (%.1f%% / %.1f%%)", step,
+                    logger.info("step %d: cleared %d adrift, pulled in %d "
+                                "overreaching, cut %d long sliver(s)", step,
                                 int(adrift.sum()), int(over.sum()),
-                                100 * adrift.float().mean().item(),
-                                100 * over.float().mean().item())
+                                int(long_sliver.sum()))
         if step % 1000 == 0:
             logger.info("step %d/%d  %d gaussians", step, ITERS, params["means"].shape[0])
 
@@ -776,6 +795,17 @@ def train(scene: str, panos: str, angles, device: str) -> dict:
             gt, out, _, _ = render(i)
             mse = ((out[0, ..., :3].clamp(0, 1) - gt) ** 2).mean().item()
             psnrs.append(-10 * math.log10(max(mse, 1e-10)))
+    # Once more before saving. The clamp above last runs 500 steps from the
+    # end, and the scale learning rate is 5e-3 in log space — enough for a
+    # gaussian to grow twelvefold in what is left, which is how a 4.6 m sliver
+    # survived a 25 cm bound. The bound has to hold on what is written out,
+    # not only during training.
+    with torch.no_grad():
+        cut = cut_slivers(params)
+    if cut.any():
+        logger.info("cut %d sliver(s) that regrew after the last pass",
+                    int(cut.sum()))
+
     # None, not NaN: no held-out viewpoint means the number was not
     # measured, which is different from measuring it badly
     psnr = round(float(np.mean(psnrs)), 2) if psnrs else None
