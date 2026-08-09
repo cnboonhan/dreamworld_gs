@@ -138,9 +138,14 @@ down:
 # and the splat lands in splats/vertices/<id>/ or splats/edges/<a>--<b>/.
 # `just plan` lists the ids this project's map defines.
 #
-# A folder of panoramas is reconstructed together (reproject -> SfM -> gaussian
-# splatting). A single image file takes the generative HY-World path instead:
-# one vantage point, the rest imagined.
+# What you hand it decides the pipeline:
+#
+#   a folder of panoramas   several viewpoints of a real place, so geometry is
+#                           measured — reproject, COLMAP, gaussian splatting.
+#                           This is the path for real 360 captures.
+#   a single image file     one viewpoint, so the rest is imagined — the
+#                           generative HY-World path, which is the only thing
+#                           in this repo that uses the VLM.
 #
 # spacing: metres between consecutive standpoints, default 0.5. SfM is
 # scale-free, so this is what puts the world in metres, which a simulator

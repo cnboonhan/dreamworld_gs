@@ -207,8 +207,12 @@ services:
     depends_on:
       prefect:
         condition: service_healthy
+      # Started, not healthy. Only generate-world talks to the VLM — the
+      # single-panorama generative path — and it needs it when a job runs, not
+      # when this container boots. Gating on health made every reconstruction
+      # wait on a 17 GB model load that none of them use.
       vlm:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     deploy:
       resources:
