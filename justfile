@@ -82,18 +82,27 @@ build:
 #
 # Start everything and print the URLs.
 up: _env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Serialised. Every recipe that submits a job depends on this, so a batch
+    # running seven captures at once calls it seven times together — and two
+    # `docker compose up` racing on the same container leave one of them with
+    # "removal already in progress" and a failed capture. It is a no-op once
+    # everything is running, which is why this only bites after a restart.
+    exec 9>>{{repo}}/.up.lock
+    flock 9
     docker compose up -d --wait
-    @echo
-    @echo "  project       {{project}}   (just use <name> to switch)"
-    @echo "  jobs + logs   http://localhost:4200"
-    @echo "  worlds        http://localhost:8081/?url=files/<scene>/world.ply"
-    @echo "  panoramas     http://localhost:8082"
-    @echo "  rmf sim       http://localhost:8083"
-    @echo "  traffic ed    http://localhost:8084"
-    @echo
-    @echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
-    @echo "              -L 8082:localhost:8082 -L 8083:localhost:8083 \\"
-    @echo "              -L 8084:localhost:8084 <this-host>"
+    echo
+    echo "  project       {{project}}   (just use <name> to switch)"
+    echo "  jobs + logs   http://localhost:4200"
+    echo "  worlds        http://localhost:8081/?url=files/<scene>/world.ply"
+    echo "  panoramas     http://localhost:8082"
+    echo "  rmf sim       http://localhost:8083"
+    echo "  traffic ed    http://localhost:8084"
+    echo
+    echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
+    echo "              -L 8082:localhost:8082 -L 8083:localhost:8083 \\"
+    echo "              -L 8084:localhost:8084 <this-host>"
 
 # Point the whole stack at another project and restart the services that care.
 #
