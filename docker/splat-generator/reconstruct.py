@@ -41,6 +41,16 @@ SH_C0 = 0.28209479177387814
 # one axis only. Penalising longest/shortest hits the discs and inflates them
 # into a haze over the floor.
 NEEDLE_MAX = 15.0
+# A gaussian longer than this, and shaped like a sliver rather than a disc, is
+# an artifact whatever it does for the loss: nothing in a corridor is a 60 cm
+# splinter one centimetre thick. Only such gaussians are penalised — a wall is
+# legitimately a wide flat disc, and a short sliver is too small to see.
+#
+# Measured across the sample building, needles are only 1-2% of a simulated
+# splat by count but run to 60-76 cm at the 99th percentile, against 9 cm in
+# the splat built from real photographs. Few, and enormous: that is the visible
+# streaking, and it is what this bounds.
+SLIVER_MAX_M = 0.25
 
 
 # ---------------------------------------------------------------- reprojection
@@ -483,7 +493,7 @@ def save_ply(params, path: Path) -> int:
 
 @task(name="3. gaussian splatting")
 def train(scene: str, iters: int, downscale: int,
-          aniso_weight: float = 0.0, panos: str = "", angles=None,
+          needle_weight: float = 1.0, panos: str = "", angles=None,
           size: int = 1024, fov: float = 100.0) -> dict:
     """Optimise gaussians against the posed views.
 
@@ -592,17 +602,25 @@ def train(scene: str, iters: int, downscale: int,
         l1 = (out[0] - gt).abs().mean()
         ssim = ssim_fn(out.permute(0, 3, 1, 2), gt[None].permute(0, 3, 1, 2), data_range=1.0)
         loss = 0.8 * l1 + 0.2 * (1 - ssim)
-        # Off by default: it does bound needle shapes, but it costs real
-        # sharpness everywhere (28.4 -> 26.6 dB) and does not fix the
-        # blurring, which comes from surfaces no camera saw twice rather than
-        # from splat shape. Filtering needles at export changes nothing
-        # visible either. More standpoints is the remedy.
-        if aniso_weight:
+        # Bound long slivers, and only those.
+        #
+        # An earlier attempt penalised the aspect ratio alone and was left off,
+        # because it costs real sharpness everywhere (28.4 -> 26.6 dB) — it
+        # pushes on every sliver, and most are far too small to see. Requiring
+        # the gaussian to be long *in metres* as well leaves those alone, and
+        # leaves a wall's wide flat disc alone, so the gradient reaches only
+        # the 1-2% that actually streak across a frame.
+        #
+        # It has to act for the whole run. gsplat prunes oversized gaussians
+        # while it refines, and refinement stops halfway — so for the second
+        # half of training a sliver can stretch with nothing to stop it.
+        if needle_weight:
             srt = torch.sort(torch.exp(params["scales"]), dim=1,
                              descending=True).values
-            needle = srt[:, 0] / srt[:, 1].clamp(min=1e-8)
-            loss = loss + aniso_weight * (
-                needle.clamp(min=NEEDLE_MAX) - NEEDLE_MAX).mean()
+            sliver = ((srt[:, 0] / srt[:, 1].clamp(min=1e-8) - NEEDLE_MAX)
+                      .clamp(min=0) / NEEDLE_MAX)
+            excess = (srt[:, 0] - SLIVER_MAX_M).clamp(min=0)
+            loss = loss + needle_weight * (excess * sliver).mean()
         loss.backward()
         strategy.step_post_backward(params, opts, state, step, info, packed=False)
         for o in opts.values():
@@ -732,7 +750,7 @@ def _run_name() -> str:
 @flow(name="reconstruct-simulated", log_prints=True, flow_run_name=_run_name)
 def reconstruct_simulated(scene: str, panos: str, views: int = 8,
                           size: int = 1024, iters: int = 15000,
-                          downscale: int = 1, aniso_weight: float = 0.0,
+                          downscale: int = 1, needle_weight: float = 1.0,
                           fov: float = 100.0) -> dict:
     """A capture from the simulator, which recorded where it stood.
 
@@ -748,14 +766,14 @@ def reconstruct_simulated(scene: str, panos: str, views: int = 8,
             f"one; a real capture cannot, and belongs in reconstruct-world.")
     return reconstruct_world(scene=scene, panos=panos, views=views, size=size,
                              iters=iters, downscale=downscale,
-                             aniso_weight=aniso_weight, spacing=0.0, fov=fov)
+                             needle_weight=needle_weight, spacing=0.0, fov=fov)
 
 
 @flow(name="reconstruct-world", log_prints=True,
       flow_run_name=_run_name)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
                       iters: int = 15000, downscale: int = 1,
-                      aniso_weight: float = 0.0, spacing: float = 0.5,
+                      needle_weight: float = 1.0, spacing: float = 0.5,
                       fov: float = 100.0) -> dict:
     """scene: output dir; panos: panoramas of one space.
 
@@ -766,7 +784,7 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     shot = reproject(scene, panos, views, size, fov)
     sfm = run_sfm(scene, spacing, shot["angles"], panos, size, fov,
                   require_sfm=spacing > 0)
-    stats = train(scene, iters, downscale, aniso_weight,
+    stats = train(scene, iters, downscale, needle_weight,
                   panos, shot["angles"], size, fov)
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building
