@@ -206,6 +206,37 @@ def free_space_probe(panos_dir: Path, stand: list[dict], device: str):
     return probe
 
 
+def sprawl(probe, means, quats, scales):
+    """How much of each gaussian reaches into space the capture saw through.
+
+    Testing a centre is not enough, and the difference is most of what a cloud
+    is made of: on one corridor only 7% of gaussians had their centre in free
+    space, and those carried 59% of the frame. A gaussian centred on a wall but
+    a metre across still hangs in the open air in front of it.
+
+    So this probes the centre and both ends of each principal axis — seven
+    points that bound the ellipsoid — and returns how many landed in open air.
+    Nothing to nothing for a splat lying on a surface, seven for one adrift.
+    """
+    import torch
+
+    q = torch.nn.functional.normalize(quats, dim=1)
+    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    # columns of the rotation, which are the ellipsoid's axes in world space
+    axes = torch.stack([
+        torch.stack([1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)], -1),
+        torch.stack([2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)], -1),
+        torch.stack([2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)], -1),
+    ], 1).transpose(1, 2)                       # (N, 3, 3), column i = axis i
+
+    pts = [means]
+    for i in range(3):
+        off = axes[:, :, i] * scales[:, i:i + 1]
+        pts += [means + off, means - off]
+    hits = probe(torch.cat(pts, 0)).view(7, means.shape[0])
+    return hits.sum(0)
+
+
 def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
          downscale: int, device: str, logger):
     """Posed images and seed points for training, straight from the capture.

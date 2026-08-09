@@ -740,14 +740,27 @@ def train(scene: str, iters: int, downscale: int,
         # prunes them on its next pass.
         if probe is not None and step and step % 500 == 0 and step < iters // 2:
             with torch.no_grad():
-                empty = probe(params["means"].detach())
-                if empty.any():
-                    params["opacities"][empty] = -20.0
-                    if step % 2000 == 0:
-                        logger.info("step %d: cleared %d gaussian(s) from space "
-                                    "the capture saw through (%.1f%%)", step,
-                                    int(empty.sum()),
-                                    100 * empty.float().mean().item())
+                # seven probes bounding each ellipsoid, not one at its centre:
+                # a gaussian lying on a wall but a metre across still hangs in
+                # the air in front of it, and those few carried most of the
+                # cloud — 7% of gaussians, 59% of the frame on one corridor
+                n_free = kp.sprawl(probe, params["means"].detach(),
+                                   params["quats"].detach(),
+                                   torch.exp(params["scales"].detach()))
+                adrift = n_free >= 4          # more out of the room than in it
+                over = (n_free >= 1) & ~adrift
+                if adrift.any():
+                    params["opacities"][adrift] = -20.0
+                if over.any():
+                    # reaching into open air but anchored: pull it back rather
+                    # than delete it, since its centre is on something real
+                    params["scales"][over] -= 0.35        # log space, about x0.7
+                if step % 2000 == 0:
+                    logger.info("step %d: cleared %d adrift, shrank %d "
+                                "overreaching (%.1f%% / %.1f%%)", step,
+                                int(adrift.sum()), int(over.sum()),
+                                100 * adrift.float().mean().item(),
+                                100 * over.float().mean().item())
         if step % 1000 == 0:
             logger.info("step %d/%d  %d gaussians", step, iters, params["means"].shape[0])
 
