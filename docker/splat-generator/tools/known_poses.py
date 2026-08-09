@@ -130,6 +130,36 @@ def seed_from_range(panos_dir: Path, stand: list[dict], want: int, logger):
     return P, C
 
 
+def depth_view(rng_map: np.ndarray, yaw: float, pitch: float,
+               fov_deg: float, size: int) -> np.ndarray:
+    """The recorded range, resampled into one pinhole view as z-depth.
+
+    Sampled exactly as `equirect_to_pinhole` samples the colour, so this lands
+    pixel for pixel on the training image it supervises. Nearest-neighbour,
+    not linear: interpolating across a depth discontinuity invents a surface
+    halfway between a wall and whatever is behind it.
+    """
+    import cv2
+
+    f = 0.5 * size / math.tan(math.radians(fov_deg) * 0.5)
+    j, i = np.meshgrid(np.arange(size), np.arange(size), indexing="xy")
+    dirs = np.stack([(j - size * 0.5) / f, (i - size * 0.5) / f,
+                     np.ones_like(j, dtype=np.float64)], -1)
+    n = np.linalg.norm(dirs, axis=-1, keepdims=True)
+    d = (dirs / n) @ view_rotation(yaw, pitch).T
+
+    lon = np.arctan2(d[..., 0], d[..., 2])
+    lat = np.arcsin(np.clip(d[..., 1], -1, 1))
+    H, W = rng_map.shape
+    rng = cv2.remap(rng_map.astype(np.float32),
+                    ((lon / (2 * math.pi) + 0.5) * W).astype(np.float32),
+                    ((lat / math.pi + 0.5) * H).astype(np.float32),
+                    cv2.INTER_NEAREST, borderMode=cv2.BORDER_WRAP)
+    # range along the ray -> depth along the optical axis, which is what the
+    # rasteriser reports. dirs was divided by n, so the cosine is 1/n.
+    return (rng / n[..., 0]).astype(np.float32)
+
+
 def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
          downscale: int, device: str, logger):
     """Posed images and seed points for training, straight from the capture.
@@ -149,10 +179,14 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
 
     stand = load_poses(panos_dir)
     f = 0.5 * size / math.tan(math.radians(fov) * 0.5)
-    Ks, viewmats, imgs, centres = [], [], [], []
+    Ks, viewmats, imgs, centres, depths = [], [], [], [], []
     for sp in stand:
         stem = Path(sp["image"]).stem
         centres.append(np.asarray(sp["xyz"], dtype=np.float64))
+        rng_map = None
+        rf = panos_dir / f"{stem}.range.npy"
+        if rf.is_file():
+            rng_map = np.load(rf).astype(np.float32)
         for k_i, (yaw, pitch) in enumerate(angles):
             path = images / f"view_{k_i:03d}" / f"{stem}.jpg"
             if not path.is_file():
@@ -172,6 +206,15 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
             m[:3, 3] = t
             viewmats.append(m)
             imgs.append(torch.from_numpy(img))
+            if rng_map is None:
+                depths.append(None)
+            else:
+                dv = depth_view(rng_map, yaw, pitch, fov, size)
+                if downscale > 1:
+                    dv = cv2.resize(dv, (dv.shape[1] // downscale,
+                                         dv.shape[0] // downscale),
+                                    interpolation=cv2.INTER_NEAREST)
+                depths.append(torch.from_numpy(dv))
 
     C = np.stack(centres)
     scale = float(np.linalg.norm(C - C.mean(0), axis=1).max()) * 1.1
@@ -194,12 +237,14 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
         pts = rng.uniform(lo, hi, size=(60000, 3)).astype(np.float32)
         rgb = np.full((len(pts), 3), 0.5, dtype=np.float32)
 
+    have_depth = all(d is not None for d in depths)
     logger.info("training from %d recorded pose(s) over %d standpoint(s); "
-                "%d seed points, scene scale %.2f m",
-                len(viewmats), len(stand), len(pts), scale)
+                "%d seed points, scene scale %.2f m%s",
+                len(viewmats), len(stand), len(pts), scale,
+                "; depth supervised" if have_depth else "")
     return (torch.tensor(Ks, dtype=torch.float32, device=device),
             torch.tensor(np.stack(viewmats), device=device),
-            imgs, pts, rgb, scale)
+            imgs, pts, rgb, scale, depths if have_depth else None)
 
 
 def write_sidecars(panos_dir: Path, world: Path, angles) -> dict:

@@ -531,7 +531,9 @@ def load_colmap(data: Path, downscale: int, device: str):
     viewmats = torch.tensor(np.stack(viewmats), device=device)
     centers = torch.linalg.inv(viewmats)[:, :3, 3]
     scale = float((centers - centers.mean(0)).norm(dim=1).max()) * 1.1
-    return Ks, viewmats, images, pts, rgb, max(scale, 1e-3)
+    # no depth: a real 360 camera records none, so that path trains on colour
+    # alone exactly as it always has
+    return Ks, viewmats, images, pts, rgb, max(scale, 1e-3), None
 
 
 def save_ply(params, path: Path) -> int:
@@ -566,7 +568,7 @@ def save_ply(params, path: Path) -> int:
 @task(name="3. gaussian splatting")
 def train(scene: str, iters: int, downscale: int,
           needle_weight: float = 1.0, panos: str = "", angles=None,
-          device: str = "",
+          device: str = "", depth_weight: float = 0.5,
           size: int = 1024, fov: float = 100.0) -> dict:
     """Optimise gaussians against the posed views.
 
@@ -588,12 +590,13 @@ def train(scene: str, iters: int, downscale: int,
     if panos and kp.load_poses(Path(panos)):
         # the capture recorded where it stood, so the poses go straight in and
         # no reconstruction is read
-        Ks, viewmats, images, pts, rgb, scale = kp.load(
+        Ks, viewmats, images, pts, rgb, scale, depths = kp.load(
             Path(panos), Path(scene) / "images", angles or [], size, fov,
             downscale, dev, logger)
     else:
         data = Path(scene) / "undistorted"
-        Ks, viewmats, images, pts, rgb, scale = load_colmap(data, downscale, dev)
+        Ks, viewmats, images, pts, rgb, scale, depths = load_colmap(
+            data, downscale, dev)
     n_views = len(images)
     # Hold out whole viewpoints, not scattered views.
     #
@@ -665,16 +668,36 @@ def train(scene: str, iters: int, downscale: int,
             params["means"], torch.nn.functional.normalize(params["quats"], dim=1),
             torch.exp(params["scales"]), torch.sigmoid(params["opacities"]),
             torch.sigmoid(params["colors"]), viewmats[idx][None], Ks[idx][None],
-            W, H, packed=False, rasterize_mode="classic")
+            W, H, packed=False, rasterize_mode="classic",
+            render_mode="RGB+ED" if depths is not None else "RGB")
         return gt, out, info
 
     for step in range(iters):
         i = train_ids[torch.randint(len(train_ids), (1,)).item()]
         gt, out, info = render(i)
         strategy.step_pre_backward(params, opts, state, step, info)
-        l1 = (out[0] - gt).abs().mean()
-        ssim = ssim_fn(out.permute(0, 3, 1, 2), gt[None].permute(0, 3, 1, 2), data_range=1.0)
+        colour = out[..., :3]
+        l1 = (colour[0] - gt).abs().mean()
+        ssim = ssim_fn(colour.permute(0, 3, 1, 2), gt[None].permute(0, 3, 1, 2),
+                       data_range=1.0)
         loss = 0.8 * l1 + 0.2 * (1 - ssim)
+        # Where the simulator says the surface is.
+        #
+        # Colour alone cannot place a gaussian along the ray it is seen on, and
+        # every standpoint of a corridor walk sits on one line — so a splat can
+        # reproduce every training image with 1.8% of its gaussians sitting in
+        # free space a standpoint saw straight through, covering 8.9% of the
+        # frame. Those are the artifacts in clear air. Depth puts them out.
+        #
+        # The error is relative, so a wall four metres down the corridor does
+        # not outweigh one an arm's length away.
+        if depths is not None and depth_weight:
+            gz = depths[i].to(dev)
+            keep = gz > 1e-3
+            if keep.any():
+                loss = loss + depth_weight * (
+                    (out[0, ..., 3][keep] - gz[keep]).abs()
+                    / gz[keep].clamp(min=0.5)).mean()
         # Bound long slivers, and only those.
         #
         # An earlier attempt penalised the aspect ratio alone and was left off,
@@ -706,7 +729,7 @@ def train(scene: str, iters: int, downscale: int,
     with torch.no_grad():
         for i in sorted(holdout):
             gt, out, _ = render(i)
-            mse = ((out[0].clamp(0, 1) - gt) ** 2).mean().item()
+            mse = ((out[0, ..., :3].clamp(0, 1) - gt) ** 2).mean().item()
             psnrs.append(-10 * math.log10(max(mse, 1e-10)))
     # None, not NaN: no held-out viewpoint means the number was not
     # measured, which is different from measuring it badly
@@ -880,8 +903,14 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     # the flow run finishing, however it finishes.
     dev, release = (device, lambda: None) if device else claim_gpu()
     try:
-        stats = train(scene, iters, downscale, needle_weight,
-                      panos, shot["angles"], dev, size, fov)
+        # By keyword, not position. Inserting depth_weight into the signature
+        # silently shifted size and fov along this call, so training ran at
+        # 100 px views with a depth weight of 1024 and failed on a shape
+        # mismatch two stages later — a positional call to a ten-argument
+        # function is one edit away from that every time.
+        stats = train(scene, iters, downscale, needle_weight=needle_weight,
+                      panos=panos, angles=shot["angles"], device=dev,
+                      size=size, fov=fov)
     finally:
         release()
     # align before export, so the sidecars and the Isaac USDZ describe the

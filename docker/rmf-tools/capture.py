@@ -162,11 +162,37 @@ def panorama(node, x, y, a, out, label):
     # a seam invents a surface between them that neither one saw
     rng_map = np.zeros((Hc, Wc), np.float32)
     rng_w = np.zeros((Hc, Wc), np.float32)
+
+    # A view sees a spherical cap, not the sphere. Touching the whole canvas
+    # for each of sixty views costs the same at any resolution the canvas
+    # happens to be, which at 7680x3840 is most of the capture: the cap is
+    # about a fifth of the sphere, and the rest of every pass was arithmetic on
+    # pixels the view cannot reach. Bounding it analytically is exact — outside
+    # the cap `d @ fwd` is below the cosine and the mask was zero anyway.
+    half_h = a.fov / 2.0
+    half_v = math.atan(math.tan(half_h) * H / W)
+    theta = math.atan(math.hypot(math.tan(half_h), math.tan(half_v))) + 0.02
     for frame, R, dep in shots:
         fwd, left, up = R[:, 0], R[:, 1], R[:, 2]   # gz: +X fwd, +Z up
-        depth = d @ fwd
-        rightc = -(d @ left)                        # image right is -Y
-        upc = d @ up
+        lat0 = math.asin(max(-1.0, min(1.0, fwd[2])))
+        lon0 = math.atan2(fwd[1], fwd[0])
+        r0 = int(max(0, math.floor((math.pi / 2 - (lat0 + theta)) / math.pi * Hc)))
+        r1 = int(min(Hc, math.ceil((math.pi / 2 - (lat0 - theta)) / math.pi * Hc) + 1))
+        if abs(lat0) + theta >= math.pi / 2 - 1e-6:
+            cols = slice(0, Wc)                     # the cap reaches a pole
+        else:
+            dlon = math.asin(min(1.0, math.sin(theta) / math.cos(lat0)))
+            c0 = int(math.floor((lon0 - dlon + math.pi) / (2 * math.pi) * Wc))
+            c1 = int(math.ceil((lon0 + dlon + math.pi) / (2 * math.pi) * Wc) + 1)
+            cols = slice(max(0, c0), min(Wc, c1)) if 0 <= c0 and c1 <= Wc \
+                else slice(0, Wc)                   # wraps the seam; take it all
+        if r1 <= r0:
+            continue
+        dv = d[r0:r1, cols]
+
+        depth = dv @ fwd
+        rightc = -(dv @ left)                       # image right is -Y
+        upc = dv @ up
         front = depth > 1e-6
         dd = np.where(front, depth, 1.0)
         ui = np.round(cxp + fx * (rightc / dd)).astype(np.int32)
@@ -175,21 +201,36 @@ def panorama(node, x, y, a, out, label):
         vic, uic = np.clip(vi, 0, H - 1), np.clip(ui, 0, W - 1)
         # feather toward each view's centre so the overlaps blend
         wgt = np.where(inb, np.clip(depth, 0, 1) ** 4, 0.0).astype(np.float32)
-        acc += wgt[..., None] * frame[vic, uic]
-        wsum += wgt
+        acc[r0:r1, cols] += wgt[..., None] * frame[vic, uic]
+        wsum[r0:r1, cols] += wgt
         if dep is not None:
+            # The depth camera shares this frustum but not this grid — it is
+            # half the width, because it feeds geometry rather than a picture.
+            # Same FOV and centre, so the colour pixel maps onto it by a scale.
+            Hd, Wd = dep.shape
+            vd = np.clip((vic * (Hd / H)).astype(np.int32), 0, Hd - 1)
+            ud = np.clip((uic * (Wd / W)).astype(np.int32), 0, Wd - 1)
+            dsel = dep[vd, ud]
             # the sensor reports depth along its own axis; the equirect wants
             # the range along this ray, and dd is the cosine between them
-            r = dep[vic, uic] / np.maximum(dd, 1e-6)
-            take = inb & (dep[vic, uic] > 1e-3) & (wgt > rng_w)
-            rng_map = np.where(take, r, rng_map)
-            rng_w = np.where(take, wgt, rng_w)
+            rr = dsel / np.maximum(dd, 1e-6)
+            take = inb & (dsel > 1e-3) & (wgt > rng_w[r0:r1, cols])
+            sub_r, sub_w = rng_map[r0:r1, cols], rng_w[r0:r1, cols]
+            rng_map[r0:r1, cols] = np.where(take, rr, sub_r)
+            rng_w[r0:r1, cols] = np.where(take, wgt, sub_w)
 
     pano = (acc / np.maximum(wsum, 1e-6)[..., None]).clip(0, 255).astype(np.uint8)
     write_png(out, np.ascontiguousarray(pano))
     if rng_w.any():
+        # The range map is not a picture, it is geometry: it seeds the splat and
+        # supervises depth at the training view's resolution, so matching the
+        # panorama pixel for pixel would be 59 MB a standpoint for detail
+        # nothing reads. Nearest, never averaged — a mean across a depth
+        # discontinuity invents a surface between a wall and what is behind it.
+        rw = min(a.range_width, Wc)
+        rmap = rng_map[::max(1, Hc // (rw // 2)), ::max(1, Wc // rw)]
         # float16 halves the file and is far finer than the geometry it seeds
-        np.save(out.replace(".png", ".range.npy"), rng_map.astype(np.float16))
+        np.save(out.replace(".png", ".range.npy"), rmap.astype(np.float16))
         seen = rng_map[rng_map > 0]
         print(f"  -> {os.path.basename(out)} ({Wc}x{Hc}), range "
               f"{seen.min():.2f}-{seen.max():.2f} m over "
@@ -290,10 +331,16 @@ def main():
     ap.add_argument("--height", type=float, default=1.6)
     ap.add_argument("--fov", type=float, default=2.2,
                     help="must match the camera's horizontal_fov in the world")
-    ap.add_argument("--width", type=int, default=2048,
+    ap.add_argument("--width", type=int, default=7680,
                     help="equirect width; height is forced to width/2")
-    ap.add_argument("--yaw-steps", type=int, default=12)
-    ap.add_argument("--pitch-steps", type=int, default=5)
+    ap.add_argument("--range-width", type=int, default=3840,
+                    help="width of the saved range map; geometry, not a picture")
+    # A 126-degree view needs four yaws to wrap 360 and three pitches to
+    # reach both poles; eight and three keep a wide overlap at every seam
+    # while moving a quarter of the frames. Every frame crosses the gz->ROS
+    # bridge, and at 2688x2016 that transport is the whole capture cost.
+    ap.add_argument("--yaw-steps", type=int, default=8)
+    ap.add_argument("--pitch-steps", type=int, default=3)
     ap.add_argument("--settle", type=float, default=0.15)
     ap.add_argument("--frame-timeout", type=float, default=5.0)
     a = ap.parse_args()
