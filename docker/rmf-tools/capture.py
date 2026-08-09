@@ -259,6 +259,17 @@ def panorama(node, x, y, a, out, label):
 # observed from. So this is now the sway of ordinary walking.
 #
 ZIGZAG_M = 0.10
+# How far the camera rises and falls between stops, either side of eye height.
+#
+# A walk gives every surface a different viewing *direction* but nearly the
+# same viewing *angle*: ten standpoints at one height all meet the floor at
+# much the same grazing incidence, and measured across the building, error on
+# the floor rises from 2.88 at 30-50 degrees to 8.03 at 70-90. That is where
+# the blotches are. Alternating high and low makes each surface seen from two
+# genuinely different angles instead of ten nearly identical ones, which costs
+# nothing to capture. 1.25 m and 1.95 m are both places a person holds a 360
+# camera.
+HEIGHT_SWING_M = 0.35
 # and on top of that, a little untidiness: nobody's stride is exact
 JITTER_M = 0.06
 
@@ -367,8 +378,9 @@ def main():
     rng = np.random.default_rng(seed ^ 0x9E37)
     heights = []
     for i, (x, y) in enumerate(points):
-        # and nobody holds a 360 camera at exactly one height
-        a.height = base_height + float(rng.uniform(-0.05, 0.05))
+        # alternate high and low, plus the untidiness of a real hand
+        a.height = (base_height + (HEIGHT_SWING_M if i % 2 else -HEIGHT_SWING_M)
+                    + float(rng.uniform(-0.05, 0.05)))
         heights.append(a.height)
         # zero-padded, so lexicographic order is walk order — the pipeline reads
         # direction of travel from filename order and nothing else

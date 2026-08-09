@@ -928,8 +928,7 @@ def _run_name() -> str:
     return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 
-@flow(name="reconstruct-simulated", log_prints=True, retries=1,
-      retry_delay_seconds=15, flow_run_name=_run_name)
+@flow(name="reconstruct-simulated", log_prints=True, flow_run_name=_run_name)
 def reconstruct_simulated(scene: str, panos: str) -> dict:
     """A capture from the simulator, which recorded where it stood.
 
@@ -946,11 +945,13 @@ def reconstruct_simulated(scene: str, panos: str) -> dict:
     return reconstruct_world(scene=scene, panos=panos, spacing=0.0)
 
 
-# One retry, because the failure this guards against is transient by nature:
-# a lost race for a GPU, or a driver hiccup under several concurrent runs. A
-# corridor that genuinely cannot be reconstructed fails twice and says so.
-@flow(name="reconstruct-world", log_prints=True, retries=1,
-      retry_delay_seconds=15, flow_run_name=_run_name)
+# No flow-level retries. Prefect retries a *failure* — an exception it caught —
+# and the failure here is a segfault, which kills the process. That lands in
+# Crashed, and the scheduled retry then sat in Running with idle GPUs
+# indefinitely rather than re-running: every affected corridor had to be
+# recovered by hand. submit.py resubmits instead, which works because it starts
+# a genuinely new run.
+@flow(name="reconstruct-world", log_prints=True, flow_run_name=_run_name)
 def reconstruct_world(scene: str, panos: str, spacing: float = 0.5) -> dict:
     """scene: output dir; panos: panoramas of one space.
 

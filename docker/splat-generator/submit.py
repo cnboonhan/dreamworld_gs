@@ -24,6 +24,12 @@ from prefect.client.schemas.filters import FlowRunFilter, FlowRunFilterId
 
 TERMINAL = {"COMPLETED", "FAILED", "CRASHED", "CANCELLED"}
 POLL_SECONDS = 5
+# A crash is the process dying — a segfault under several concurrent runs, most
+# often. Prefect's own retries do not cover it: they retry an exception it
+# caught, and a killed process leaves Crashed, whose scheduled retry then sat in
+# Running with idle GPUs rather than re-running. Resubmitting starts a genuinely
+# new run, which does work, so the retry lives here.
+CRASH_RETRIES = 2
 
 
 def coerce(v: str) -> object:
@@ -46,6 +52,32 @@ def parse(args: list[str]) -> dict:
     return params
 
 
+async def follow(client, run, started) -> str:
+    """Poll until the run reaches a terminal state; return that state."""
+    seen: dict[str, str] = {}
+    while True:
+        await asyncio.sleep(POLL_SECONDS)
+        run = await client.read_flow_run(run.id)
+
+        for tr in sorted(await client.read_task_runs(
+                flow_run_filter=FlowRunFilter(
+                    id=FlowRunFilterId(any_=[run.id]))),
+                key=lambda t: t.name):
+            state = tr.state.type.value if tr.state else "?"
+            if seen.get(tr.name) != state:
+                seen[tr.name] = state
+                mins = (time.monotonic() - started) / 60
+                print(f"[{mins:5.1f}m] {tr.name}: {state.lower()}", flush=True)
+
+        state = run.state.type.value if run.state else "?"
+        if state in TERMINAL:
+            mins = (time.monotonic() - started) / 60
+            print(f"\n{run.name} {state.lower()} after {mins:.1f} min", flush=True)
+            if state != "COMPLETED" and run.state and run.state.message:
+                print(run.state.message, flush=True)
+            return state
+
+
 async def main() -> int:
     args = sys.argv[1:]
 
@@ -53,36 +85,23 @@ async def main() -> int:
         if args[0] == "--follow":
             run = await client.read_flow_run(uuid.UUID(args[1]))
             print(f"following {run.name} ({run.id})", flush=True)
-        else:
-            name, *rest = args
-            deployment = await client.read_deployment_by_name(name)
+            return 0 if await follow(client, run, time.monotonic()) == "COMPLETED" else 1
+
+        name, *rest = args
+        deployment = await client.read_deployment_by_name(name)
+        params = parse(rest)
+        for attempt in range(1 + CRASH_RETRIES):
             run = await client.create_flow_run_from_deployment(
-                deployment.id, parameters=parse(rest))
+                deployment.id, parameters=params)
             print(f"submitted {run.name} ({run.id})", flush=True)
-
-        seen: dict[str, str] = {}
-        started = time.monotonic()
-        while True:
-            await asyncio.sleep(POLL_SECONDS)
-            run = await client.read_flow_run(run.id)
-
-            for tr in sorted(await client.read_task_runs(
-                    flow_run_filter=FlowRunFilter(
-                        id=FlowRunFilterId(any_=[run.id]))),
-                    key=lambda t: t.name):
-                state = tr.state.type.value if tr.state else "?"
-                if seen.get(tr.name) != state:
-                    seen[tr.name] = state
-                    mins = (time.monotonic() - started) / 60
-                    print(f"[{mins:5.1f}m] {tr.name}: {state.lower()}", flush=True)
-
-            state = run.state.type.value if run.state else "?"
-            if state in TERMINAL:
-                mins = (time.monotonic() - started) / 60
-                print(f"\n{run.name} {state.lower()} after {mins:.1f} min", flush=True)
-                if state != "COMPLETED" and run.state and run.state.message:
-                    print(run.state.message, flush=True)
-                return 0 if state == "COMPLETED" else 1
+            state = await follow(client, run, time.monotonic())
+            if state == "COMPLETED":
+                return 0
+            if state != "CRASHED" or attempt == CRASH_RETRIES:
+                return 1
+            print(f"crashed — resubmitting ({attempt + 1} of {CRASH_RETRIES})",
+                  flush=True)
+        return 1
 
 
 if __name__ == "__main__":
