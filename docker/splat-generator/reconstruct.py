@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -53,33 +54,75 @@ NEEDLE_MAX = 15.0
 SLIVER_MAX_M = 0.25
 
 
-def pick_gpu(logger=None) -> str:
-    """The visible CUDA device with the most free memory.
+GPU_LOCKS = Path("/tmp/dw-gpu")
 
-    A reconstruction fits comfortably on one card, so a batch of corridors is
-    limited by how many run at once rather than by how fast one is. Choosing
-    the emptiest device lets several run side by side without a scheduler:
-    whoever starts next takes whatever nobody is on.
 
-    It is a snapshot, so two runs starting in the same instant can pick the
-    same card. They still both complete — an H200 holds several of these — and
-    the caller can pass an explicit device when it wants a strict assignment.
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                      # someone else's, so still held
+    return True
+
+
+def _claim(f: Path) -> bool:
+    """Create this lock exclusively, taking it over if its holder is gone."""
+    for attempt in (1, 2):
+        try:
+            fd = os.open(f, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if attempt == 2:
+                return False
+            try:
+                pid = int(f.read_text().strip() or 0)
+            except (OSError, ValueError):
+                pid = 0
+            if pid and _alive(pid):
+                return False
+            f.unlink(missing_ok=True)    # holder died; try once more
+            continue
+        except OSError:
+            return False
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    return False
+
+
+def claim_gpu(logger=None):
+    """Take one visible CUDA device exclusively. Returns (device, release).
+
+    Picking the emptiest card by free memory looked simpler and was wrong twice
+    over. `torch.cuda.mem_get_info(i)` creates a context on every device it
+    asks about, so each concurrent run spun one up on all of them; and two runs
+    starting together still read the same card as free and landed on it. Under
+    that, two of twenty-six reconstructions died with SIGSEGV during init and
+    then rebuilt cleanly on their own.
+
+    A lock file per device is exact instead: whoever creates it owns that card,
+    no device is touched by a run that does not own it, and the pid inside lets
+    the next run reclaim a slot whose holder died rather than leaking it.
     """
     import torch
 
     if not torch.cuda.is_available():
-        return "cpu"
-    free = [torch.cuda.mem_get_info(i)[0] for i in range(torch.cuda.device_count())]
-    best = int(max(range(len(free)), key=lambda i: free[i]))
-    # Claim it now. Creating the context costs a few hundred MB and is visible
-    # to every other process immediately, so the next run to pick sees this
-    # card as taken — without that, two starting together both read every card
-    # as empty and land on the same one.
-    torch.zeros(1, device=f"cuda:{best}")
+        return "cpu", lambda: None
+    GPU_LOCKS.mkdir(parents=True, exist_ok=True)
+    n = torch.cuda.device_count()        # unlike mem_get_info, creates nothing
+    for i in range(n):
+        f = GPU_LOCKS / f"{i}.lock"
+        if _claim(f):
+            if logger:
+                logger.info("cuda:%d of %d visible", i, n)
+            return f"cuda:{i}", lambda f=f: f.unlink(missing_ok=True)
+    # Should not happen: concurrency is capped at one run per device. Share
+    # rather than fail, and say so, because a stuck lock would look like this.
     if logger:
-        logger.info("cuda:%d of %d visible, %.0f GB free",
-                    best, len(free), free[best] / 1e9)
-    return f"cuda:{best}"
+        logger.warning("all %d GPU(s) claimed — sharing cuda:0. If nothing "
+                       "else is running, clear %s", n, GPU_LOCKS)
+    return "cuda:0", lambda: None
 
 
 # ---------------------------------------------------------------- reprojection
@@ -536,7 +579,7 @@ def train(scene: str, iters: int, downscale: int,
     from torchmetrics.functional.image import structural_similarity_index_measure as ssim_fn
 
     logger = get_run_logger()
-    dev = device or pick_gpu(logger)
+    dev = device
     import sys as _sys
 
     _sys.path.insert(0, str(Path(__file__).parent / "tools"))
@@ -788,7 +831,8 @@ def _run_name() -> str:
     return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 
-@flow(name="reconstruct-simulated", log_prints=True, flow_run_name=_run_name)
+@flow(name="reconstruct-simulated", log_prints=True, retries=1,
+      retry_delay_seconds=15, flow_run_name=_run_name)
 def reconstruct_simulated(scene: str, panos: str, views: int = 8,
                           size: int = 1024, iters: int = 15000,
                           downscale: int = 1, needle_weight: float = 1.0,
@@ -812,8 +856,11 @@ def reconstruct_simulated(scene: str, panos: str, views: int = 8,
                              device=device)
 
 
-@flow(name="reconstruct-world", log_prints=True,
-      flow_run_name=_run_name)
+# One retry, because the failure this guards against is transient by nature:
+# a lost race for a GPU, or a driver hiccup under several concurrent runs. A
+# corridor that genuinely cannot be reconstructed fails twice and says so.
+@flow(name="reconstruct-world", log_prints=True, retries=1,
+      retry_delay_seconds=15, flow_run_name=_run_name)
 def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
                       iters: int = 15000, downscale: int = 1,
                       needle_weight: float = 1.0, spacing: float = 0.5,
@@ -828,8 +875,15 @@ def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
     shot = reproject(scene, panos, views, size, fov)
     sfm = run_sfm(scene, spacing, shot["angles"], panos, size, fov,
                   require_sfm=spacing > 0)
-    stats = train(scene, iters, downscale, needle_weight,
-                  panos, shot["angles"], device, size, fov)
+    # Hold one card for the length of the training, and give it back after.
+    # The claim lives here rather than inside train() so the release is tied to
+    # the flow run finishing, however it finishes.
+    dev, release = (device, lambda: None) if device else claim_gpu()
+    try:
+        stats = train(scene, iters, downscale, needle_weight,
+                      panos, shot["angles"], dev, size, fov)
+    finally:
+        release()
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building
     placed = align(scene, panos)

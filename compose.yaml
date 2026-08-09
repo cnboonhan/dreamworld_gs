@@ -196,10 +196,12 @@ services:
       - ./assets/projects:/workspace/projects
     environment:
       HOME: /tmp
-      # must match the GPUs reserved below: the renderer sizes its work by
-      # torch.cuda.device_count(), so extra visible GPUs make it broadcast
-      # from ranks torchrun never launched
-      CUDA_VISIBLE_DEVICES: "${DW_GPU_IDS:-1,2,3,4}"
+      # Every card except 0, which the VLM holds. Reconstructions take one
+      # each and run one per device, so this also sets how wide a batch goes;
+      # `just` reads the same variable to size HY-World's rank count, since
+      # that shards across every visible GPU and would otherwise broadcast
+      # from ranks torchrun never launched.
+      CUDA_VISIBLE_DEVICES: "${DW_GPU_IDS:-1,2,3,4,5,6,7}"
       PREFECT_API_URL: http://127.0.0.1:${DW_PREFECT_PORT:-4200}/api
       PREFECT_HOME: /tmp/prefect
     depends_on:

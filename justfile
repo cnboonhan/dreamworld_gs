@@ -33,7 +33,10 @@ set dotenv-load := true
 
 repo   := justfile_directory()
 assets := repo / "assets"
-gpus   := "4"
+# HY-World shards across every visible GPU, so the rank count it is
+# launched with has to match what the container can see, or it
+# broadcasts from ranks torchrun never started. Derived, not repeated.
+gpus   := `echo "${DW_GPU_IDS:-1,2,3,4,5,6,7}" | tr ',' '\n' | grep -c .`
 steps  := "2000"
 
 # The active project. A real environment variable wins over .env, so a single
