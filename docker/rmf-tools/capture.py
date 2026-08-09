@@ -67,6 +67,7 @@ class Cam(Node):
         self.name = name
         self.latest = None
         self.count = 0            # frames seen, so a fresh one can be waited for
+        self.sig = self.prev_sig = None
         self.depth = None
         self.depth_count = 0
         self.create_subscription(Image, ROS_TOPIC, self._cb, 10)
@@ -74,6 +75,9 @@ class Cam(Node):
         self.cli = self.create_client(SetEntityPose, f"/world/{world}/set_pose")
 
     def _cb(self, msg):
+        # a cheap digest, so "has the render settled" is a comparison rather
+        # than a guess about how many frames are in flight
+        self.prev_sig, self.sig = self.sig, hash(bytes(msg.data[::997]))
         self.latest = msg
         self.count += 1
 
@@ -81,22 +85,27 @@ class Cam(Node):
         self.depth = msg
         self.depth_count += 1
 
-    def wait_fresh(self, n, timeout):
-        """Block until n new frames arrive on both topics.
+    def wait_settled(self, timeout):
+        """Block until the render has settled at the pose just set.
 
-        Returns (frame, depth, fresh). A fixed sleep alone grabs frames still
-        in flight from the previous pose, which reproject as ghostly
-        overlapping domes — and this used to return exactly those on timeout,
-        silently. Under seven concurrent captures the sim renders slower than
-        one alone, so the timeout started expiring: the same corridor scored
-        twice the error when rebuilt in a batch rather than on its own. The
-        caller is now told, so a degraded capture is a failure rather than a
-        quietly worse splat.
+        Returns (frame, depth, settled). Counting new frames is not enough and
+        the difference is not subtle. A frame that *arrives* after set_pose may
+        still have been *rendered* before it, and how many are in flight
+        depends on how loaded the machine is: waiting for two was right with
+        one sim on the box and wrong with seven, which cost the same corridor
+        floor error 1.71 against 3.58 and wall 2.11 against 7.10 — silently,
+        because the frames were new, just not of here.
+
+        Nothing in the scene moves during a capture except the camera, so once
+        the render has caught up two consecutive frames are identical. That is
+        a fact about the pictures rather than an assumption about the
+        pipeline, so it holds under any load.
         """
         start, dstart, t0 = self.count, self.depth_count, time.time()
         while time.time() - t0 < timeout:
-            if self.count - start >= n and (self.depth is None
-                                            or self.depth_count - dstart >= n):
+            fresh = (self.count - start >= 2 and
+                     (self.depth is None or self.depth_count - dstart >= 2))
+            if fresh and self.sig is not None and self.sig == self.prev_sig:
                 return self.latest, self.depth, True
             time.sleep(0.005)
         return self.latest, self.depth, False
@@ -150,8 +159,8 @@ def panorama(node, x, y, a, out, label):
     for yaw, pitch in views:
         node.set_pose(x, y, a.height, float(yaw), float(pitch))
         time.sleep(a.settle)
-        frame, dmsg, fresh = node.wait_fresh(2, a.frame_timeout)
-        stale += not fresh
+        frame, dmsg, settled = node.wait_settled(a.frame_timeout)
+        stale += not settled
         shots.append((frame_rgb(frame).astype(np.float32),
                       quat_to_R(quat(float(yaw), float(pitch))),
                       frame_depth(dmsg)))
@@ -159,9 +168,9 @@ def panorama(node, x, y, a, out, label):
         # every stale view is a picture of somewhere else pasted into this
         # sphere, so there is no point reconstructing from it
         raise SystemExit(
-            f"{stale} of {len(views)} views timed out waiting for a fresh "
-            f"frame at {label}. The sim is not keeping up — capture fewer "
-            f"corridors at once, or raise --frame-timeout.")
+            f"{stale} of {len(views)} views never settled at {label}. The sim "
+            f"is not keeping up — capture fewer corridors at once, or raise "
+            f"--frame-timeout.")
 
     H, W = shots[0][0].shape[:2]
     fx = (W / 2) / math.tan(a.fov / 2)          # square pixels, so fy = fx
