@@ -263,10 +263,9 @@ def _run_name() -> str:
 
 
 @flow(name="plan-route", log_prints=True, flow_run_name=_run_name)
-def plan_route(project: str, start: str, goal: str, out: str = "") -> dict:
+def plan_route(project: str, start: str, goal: str) -> dict:
     """Walk start -> goal, as a route the viewer can stream splats along."""
     planned = route(project, start, goal)
     checked = resolve(project, planned)
     name = f"{checked['path'][0]}__{checked['path'][-1]}.route.json"
-    return write(project, checked,
-                 out or str(PROJECTS / project / "traversals" / name))
+    return write(project, checked, str(PROJECTS / project / "traversals" / name))

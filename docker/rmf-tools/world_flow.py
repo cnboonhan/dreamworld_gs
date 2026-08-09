@@ -21,7 +21,7 @@ what still needs photographing — is worth recording per run.
 Also serves capture-edge: photograph one corridor of the simulated building, so
 the splat pipeline can be exercised end to end without anyone walking it.
 
-  python submit.py capture-edge/dreamworld project=<p> edge=<id> [spacing=0.5] [zigzag=0.1]
+  python submit.py capture-edge/dreamworld project=<p> edge=<id> [spacing=0.5]
 """
 
 from __future__ import annotations
@@ -249,14 +249,12 @@ CAPTURE_TIMEOUT_S = 20 * 60
 
 
 @task(name="capture", retries=1)
-def photograph(project: str, map_name: str, edge: str, spacing: float,
-               zigzag: float = 0.0) -> dict:
+def photograph(project: str, map_name: str, edge: str, spacing: float) -> dict:
     """Walk the corridor in sim, writing panoramas and nothing else."""
     logger = get_run_logger()
     try:
         proc = subprocess.run(
-            ["/app/capture.sh", project, map_name, edge, str(spacing)]
-            + ([str(zigzag)] if zigzag else []),
+            ["/app/capture.sh", project, map_name, edge, str(spacing)],
             capture_output=True, text=True, timeout=CAPTURE_TIMEOUT_S)
     except subprocess.TimeoutExpired as err:
         # capture.sh's own trap does not run when it is killed from outside, so
@@ -291,7 +289,6 @@ def photograph(project: str, map_name: str, edge: str, spacing: float,
 
 @flow(name="capture-edge", log_prints=True, flow_run_name=_capture_name)
 def capture_edge(project: str, edge: str, spacing: float = 0.5,
-                 zigzag: float = 0.0,
                  map: str = "") -> dict:
     """Photograph one corridor. One run, one corridor, one folder of images.
 
@@ -301,7 +298,7 @@ def capture_edge(project: str, edge: str, spacing: float = 0.5,
     help it would not have from a real capture.
     """
     resolved = resolve_map(project, map)
-    return photograph(project, resolved, edge, spacing, zigzag)
+    return photograph(project, resolved, edge, spacing)
 
 
 if __name__ == "__main__":

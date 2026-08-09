@@ -14,7 +14,7 @@ capture coverage — more standpoints beat a bigger model.
 Two ways to run it:
 
     python reconstruct.py serve
-    python reconstruct.py run <scene-dir> [--views N] [--iters N]
+    python reconstruct.py run <scene-dir> <panos-dir> [--spacing M]
 """
 
 from __future__ import annotations
@@ -52,6 +52,19 @@ NEEDLE_MAX = 15.0
 # the splat built from real photographs. Few, and enormous: that is the visible
 # streaking, and it is what this bounds.
 SLIVER_MAX_M = 0.25
+# The chain from panorama to splat, fixed because every link depends on the
+# others. A 100-degree view at 1024 px is 10.2 pixels per degree, which is what
+# a 7680-wide equirect downsamples cleanly into — the same ratio the real 360
+# captures go through. Eight yaws plus four tilts overlap enough that
+# neighbouring standpoints share surface.
+VIEWS = 8
+VIEW_PX = 1024
+VIEW_FOV = 100.0
+ITERS = 15000
+# How hard the loss pushes back on a long sliver, and on depth disagreeing with
+# the range maps. Both earn their keep at 1.0 and neither has wanted tuning.
+NEEDLE_WEIGHT = 1.0
+DEPTH_WEIGHT = 1.0
 
 
 GPU_LOCKS = Path("/tmp/dw-gpu")
@@ -154,8 +167,7 @@ def equirect_to_pinhole(pano: np.ndarray, yaw: float, pitch: float,
 
 
 @task(name="1. reproject")
-def reproject(scene: str, panos_dir: str, views: int, size: int,
-              fov: float = 100.0) -> dict:
+def reproject(scene: str, panos_dir: str) -> dict:
     """Each panorama -> `views` overlapping pinhole images.
 
     Pinhole views are what SfM and 3DGS expect. A wide field of view on a
@@ -178,13 +190,13 @@ def reproject(scene: str, panos_dir: str, views: int, size: int,
 
     # a ring of yaws at eye level, plus one tilted up and one down: enough
     # overlap to match, without flooding SfM with near-duplicate views
-    ring = [(i * 2 * math.pi / views, 0.0) for i in range(views)]
+    ring = [(i * 2 * math.pi / VIEWS, 0.0) for i in range(VIEWS)]
     # half as many tilted views as ring views: exhaustive matching is
     # quadratic in image count, and the tilted ones (ceiling, floor) are the
     # least likely to register anyway
-    tilts = [(i * 4 * math.pi / views + math.pi / views,
+    tilts = [(i * 4 * math.pi / VIEWS + math.pi / VIEWS,
               math.radians(35 if i % 2 else -35))
-             for i in range(views // 2)]
+             for i in range(VIEWS // 2)]
     angles = ring + tilts
 
     n = 0
@@ -195,7 +207,7 @@ def reproject(scene: str, panos_dir: str, views: int, size: int,
             logger.warning("%s is %dx%d (not 2:1) — reprojection assumes "
                            "equirectangular", src.name, w, h)
         for k, (yaw, pitch) in enumerate(angles):
-            view = equirect_to_pinhole(pano, yaw, pitch, fov, size)
+            view = equirect_to_pinhole(pano, yaw, pitch, VIEW_FOV, VIEW_PX)
             # One directory per view direction, the panorama's name inside it.
             # COLMAP names a rig's sensors by image *prefix* and its frames by
             # the remainder, so the direction has to lead: view_007/000.jpg
@@ -378,8 +390,7 @@ def apply_rig(db, angles, logger):
 
 @task(name="2. structure from motion")
 def run_sfm(scene: str, spacing: float = 0.0, angles=None,
-            panos: str = "", size: int = 1024, fov: float = 100.0,
-            require_sfm: bool = False) -> dict:
+            panos: str = "", require_sfm: bool = False) -> dict:
     """COLMAP poses across every view from every panorama.
 
     Exhaustive matching: the views come from a handful of standpoints rather
@@ -497,7 +508,7 @@ def run_sfm(scene: str, spacing: float = 0.0, angles=None,
 
 # ---------------------------------------------------------------------- train
 
-def load_colmap(data: Path, downscale: int, device: str):
+def load_colmap(data: Path, device: str):
     import cv2
     import pycolmap
     import torch
@@ -514,10 +525,6 @@ def load_colmap(data: Path, downscale: int, device: str):
         else:
             raise ValueError(f"unexpected camera model {cam.model.name}")
         img = cv2.cvtColor(cv2.imread(str(data / "images" / im.name)), cv2.COLOR_BGR2RGB)
-        if downscale > 1:
-            img = cv2.resize(img, (img.shape[1] // downscale, img.shape[0] // downscale),
-                             interpolation=cv2.INTER_AREA)
-            fx, fy, cx, cy = (v / downscale for v in (fx, fy, cx, cy))
         Ks.append([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
         cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
         m = np.eye(4, dtype=np.float32)
@@ -566,10 +573,7 @@ def save_ply(params, path: Path) -> int:
 
 
 @task(name="3. gaussian splatting")
-def train(scene: str, iters: int, downscale: int,
-          needle_weight: float = 1.0, panos: str = "", angles=None,
-          device: str = "", depth_weight: float = 1.0,
-          size: int = 1024, fov: float = 100.0) -> dict:
+def train(scene: str, panos: str, angles, device: str) -> dict:
     """Optimise gaussians against the posed views.
 
     Classic rasterization (not antialiased): AA-trained opacities only render
@@ -591,12 +595,10 @@ def train(scene: str, iters: int, downscale: int,
         # the capture recorded where it stood, so the poses go straight in and
         # no reconstruction is read
         Ks, viewmats, images, pts, rgb, scale, depths = kp.load(
-            Path(panos), Path(scene) / "images", angles or [], size, fov,
-            downscale, dev, logger)
+            Path(panos), Path(scene) / "images", angles, dev, logger)
     else:
         data = Path(scene) / "undistorted"
-        Ks, viewmats, images, pts, rgb, scale, depths = load_colmap(
-            data, downscale, dev)
+        Ks, viewmats, images, pts, rgb, scale, depths = load_colmap(data, dev)
     probe = None
     if panos and kp.load_poses(Path(panos)):
         probe = kp.free_space_probe(Path(panos), kp.load_poses(Path(panos)), dev)
@@ -656,12 +658,12 @@ def train(scene: str, iters: int, downscale: int,
     lrs = {"means": 1.6e-4 * scale, "scales": 5e-3, "quats": 1e-3,
            "opacities": 5e-2, "colors": 2.5e-3}
     opts = {k: torch.optim.Adam([v], lr=lrs[k], eps=1e-15) for k, v in params.items()}
-    sched = torch.optim.lr_scheduler.ExponentialLR(opts["means"], gamma=0.01 ** (1 / iters))
+    sched = torch.optim.lr_scheduler.ExponentialLR(opts["means"], gamma=0.01 ** (1 / ITERS))
     # Leave prune_scale3d at its default. Its threshold is
     # prune_scale3d * scene_scale, and scene_scale here is the spread of the
     # capture standpoints, not the size of the room — tightening it to 0.04
     # pruned legitimate wall and floor splats and cost 23 dB.
-    strategy = DefaultStrategy(refine_stop_iter=iters // 2)
+    strategy = DefaultStrategy(refine_stop_iter=ITERS // 2)
     strategy.check_sanity(params, opts)
     state = strategy.initialize_state(scene_scale=scale)
 
@@ -676,7 +678,7 @@ def train(scene: str, iters: int, downscale: int,
             render_mode="RGB+ED" if depths is not None else "RGB")
         return gt, out, alpha, info
 
-    for step in range(iters):
+    for step in range(ITERS):
         i = train_ids[torch.randint(len(train_ids), (1,)).item()]
         gt, out, alpha, info = render(i)
         strategy.step_pre_backward(params, opts, state, step, info)
@@ -695,11 +697,11 @@ def train(scene: str, iters: int, downscale: int,
         #
         # The error is relative, so a wall four metres down the corridor does
         # not outweigh one an arm's length away.
-        if depths is not None and depth_weight:
+        if depths is not None:
             gz = depths[i].to(dev)
             keep = gz > 1e-3
             if keep.any():
-                loss = loss + depth_weight * (
+                loss = loss + DEPTH_WEIGHT * (
                     (out[0, ..., 3][keep] - gz[keep]).abs()
                     / gz[keep].clamp(min=0.5)).mean()
 
@@ -715,13 +717,13 @@ def train(scene: str, iters: int, downscale: int,
         # It has to act for the whole run. gsplat prunes oversized gaussians
         # while it refines, and refinement stops halfway — so for the second
         # half of training a sliver can stretch with nothing to stop it.
-        if needle_weight:
+        if NEEDLE_WEIGHT:
             srt = torch.sort(torch.exp(params["scales"]), dim=1,
                              descending=True).values
             sliver = ((srt[:, 0] / srt[:, 1].clamp(min=1e-8) - NEEDLE_MAX)
                       .clamp(min=0) / NEEDLE_MAX)
             excess = (srt[:, 0] - SLIVER_MAX_M).clamp(min=0)
-            loss = loss + needle_weight * (excess * sliver).mean()
+            loss = loss + NEEDLE_WEIGHT * (excess * sliver).mean()
         loss.backward()
         strategy.step_post_backward(params, opts, state, step, info, packed=False)
         for o in opts.values():
@@ -766,7 +768,7 @@ def train(scene: str, iters: int, downscale: int,
                                 100 * adrift.float().mean().item(),
                                 100 * over.float().mean().item())
         if step % 1000 == 0:
-            logger.info("step %d/%d  %d gaussians", step, iters, params["means"].shape[0])
+            logger.info("step %d/%d  %d gaussians", step, ITERS, params["means"].shape[0])
 
     psnrs = []
     with torch.no_grad():
@@ -846,7 +848,7 @@ def align(scene: str, panos: str) -> dict:
 
 
 @task(name="5. export")
-def export(scene: str, panos: str = "", angles=None) -> dict:
+def export(scene: str, panos: str = "") -> dict:
     """Isaac Sim USDZ, plus the spawn camera the viewer opens at."""
     logger = get_run_logger()
     world = Path(scene) / "world.ply"
@@ -877,7 +879,7 @@ def export(scene: str, panos: str = "", angles=None) -> dict:
     if panos and kp.load_poses(Path(panos)):
         # the walk is recorded, so the spawn pose and the tour path come
         # straight from it rather than out of a reconstruction
-        kp.write_sidecars(Path(panos), Path(scene) / "world.ply", angles or [])
+        kp.write_sidecars(Path(panos), Path(scene) / "world.ply")
     else:
         sh(["python", TOOLS / "make_spawn_cam.py", "--colmap",
             f"{scene}/undistorted/sparse/0", world])
@@ -899,11 +901,7 @@ def _run_name() -> str:
 
 @flow(name="reconstruct-simulated", log_prints=True, retries=1,
       retry_delay_seconds=15, flow_run_name=_run_name)
-def reconstruct_simulated(scene: str, panos: str, views: int = 8,
-                          size: int = 1024, iters: int = 15000,
-                          downscale: int = 1, needle_weight: float = 1.0,
-                          device: str = "",
-                          fov: float = 100.0) -> dict:
+def reconstruct_simulated(scene: str, panos: str) -> dict:
     """A capture from the simulator, which recorded where it stood.
 
     Separate from reconstruct-world on purpose. A real 360 capture cannot tell
@@ -916,10 +914,7 @@ def reconstruct_simulated(scene: str, panos: str, views: int = 8,
         raise RuntimeError(
             f"no poses.json in {panos}. Captures from the simulator record "
             f"one; a real capture cannot, and belongs in reconstruct-world.")
-    return reconstruct_world(scene=scene, panos=panos, views=views, size=size,
-                             iters=iters, downscale=downscale,
-                             needle_weight=needle_weight, spacing=0.0, fov=fov,
-                             device=device)
+    return reconstruct_world(scene=scene, panos=panos, spacing=0.0)
 
 
 # One retry, because the failure this guards against is transient by nature:
@@ -927,39 +922,29 @@ def reconstruct_simulated(scene: str, panos: str, views: int = 8,
 # corridor that genuinely cannot be reconstructed fails twice and says so.
 @flow(name="reconstruct-world", log_prints=True, retries=1,
       retry_delay_seconds=15, flow_run_name=_run_name)
-def reconstruct_world(scene: str, panos: str, views: int = 8, size: int = 1024,
-                      iters: int = 15000, downscale: int = 1,
-                      needle_weight: float = 1.0, spacing: float = 0.5,
-                      device: str = "",
-                      fov: float = 100.0) -> dict:
+def reconstruct_world(scene: str, panos: str, spacing: float = 0.5) -> dict:
     """scene: output dir; panos: panoramas of one space.
 
-    spacing: metres between consecutive standpoints. Defaults to the 0.5 m
-    we walk; pass 0 to leave the world unitless. SfM is scale-free, so this
-    is what makes the export metric, which is what a simulator needs.
+    spacing: metres between consecutive standpoints, and the one thing that
+    genuinely differs between the two sources. A real capture is scale-free
+    until you say how far you walked; a simulated one passes 0, because its
+    poses are already in building metres.
     """
-    shot = reproject(scene, panos, views, size, fov)
-    sfm = run_sfm(scene, spacing, shot["angles"], panos, size, fov,
+    shot = reproject(scene, panos)
+    sfm = run_sfm(scene, spacing, shot["angles"], panos,
                   require_sfm=spacing > 0)
     # Hold one card for the length of the training, and give it back after.
     # The claim lives here rather than inside train() so the release is tied to
     # the flow run finishing, however it finishes.
-    dev, release = (device, lambda: None) if device else claim_gpu()
+    dev, release = claim_gpu()
     try:
-        # By keyword, not position. Inserting depth_weight into the signature
-        # silently shifted size and fov along this call, so training ran at
-        # 100 px views with a depth weight of 1024 and failed on a shape
-        # mismatch two stages later — a positional call to a ten-argument
-        # function is one edit away from that every time.
-        stats = train(scene, iters, downscale, needle_weight=needle_weight,
-                      panos=panos, angles=shot["angles"], device=dev,
-                      size=size, fov=fov)
+        stats = train(scene, panos, shot["angles"], dev)
     finally:
         release()
     # align before export, so the sidecars and the Isaac USDZ describe the
     # splat where it actually sits in the building
     placed = align(scene, panos)
-    out = export(scene, panos, shot["angles"])
+    out = export(scene, panos)
 
     # Everything worth judging the result by, written next to it. These numbers
     # were only ever in the run log before, which made two splats impossible to
@@ -999,8 +984,6 @@ def main() -> None:
     one = sub.add_parser("run")
     one.add_argument("scene")
     one.add_argument("panos")
-    one.add_argument("--views", type=int, default=8)
-    one.add_argument("--iters", type=int, default=15000)
     one.add_argument("--spacing", type=float, default=0.5,
                      help="metres between standpoints (enables metric scale)")
     args = p.parse_args()
@@ -1008,8 +991,7 @@ def main() -> None:
     if args.mode == "serve":
         reconstruct_world.serve(name=DEPLOYMENT, limit=1)
     else:
-        reconstruct_world(args.scene, args.panos, views=args.views,
-                          iters=args.iters, spacing=args.spacing)
+        reconstruct_world(args.scene, args.panos, spacing=args.spacing)
 
 
 if __name__ == "__main__":

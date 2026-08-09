@@ -130,8 +130,7 @@ def seed_from_range(panos_dir: Path, stand: list[dict], want: int, logger):
     return P, C
 
 
-def depth_view(rng_map: np.ndarray, yaw: float, pitch: float,
-               fov_deg: float, size: int) -> np.ndarray:
+def depth_view(rng_map: np.ndarray, yaw: float, pitch: float) -> np.ndarray:
     """The recorded range, resampled into one pinhole view as z-depth.
 
     Sampled exactly as `equirect_to_pinhole` samples the colour, so this lands
@@ -141,9 +140,9 @@ def depth_view(rng_map: np.ndarray, yaw: float, pitch: float,
     """
     import cv2
 
-    f = 0.5 * size / math.tan(math.radians(fov_deg) * 0.5)
-    j, i = np.meshgrid(np.arange(size), np.arange(size), indexing="xy")
-    dirs = np.stack([(j - size * 0.5) / f, (i - size * 0.5) / f,
+    f = 0.5 * VIEW_PX / math.tan(math.radians(VIEW_FOV) * 0.5)
+    j, i = np.meshgrid(np.arange(VIEW_PX), np.arange(VIEW_PX), indexing="xy")
+    dirs = np.stack([(j - VIEW_PX * 0.5) / f, (i - VIEW_PX * 0.5) / f,
                      np.ones_like(j, dtype=np.float64)], -1)
     n = np.linalg.norm(dirs, axis=-1, keepdims=True)
     d = (dirs / n) @ view_rotation(yaw, pitch).T
@@ -237,8 +236,13 @@ def sprawl(probe, means, quats, scales):
     return hits.sum(0)
 
 
-def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
-         downscale: int, device: str, logger):
+# Must match reconstruct.VIEW_PX / VIEW_FOV: these read the views that stage
+# wrote, and a depth map has to land on its image pixel for pixel.
+VIEW_PX = 1024
+VIEW_FOV = 100.0
+
+
+def load(panos_dir: Path, images: Path, angles, device: str, logger):
     """Posed images and seed points for training, straight from the capture.
 
     The trainer needs intrinsics, view matrices, images and some starting
@@ -255,7 +259,7 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
     import torch
 
     stand = load_poses(panos_dir)
-    f = 0.5 * size / math.tan(math.radians(fov) * 0.5)
+    f = 0.5 * VIEW_PX / math.tan(math.radians(VIEW_FOV) * 0.5)
     Ks, viewmats, imgs, centres, depths = [], [], [], [], []
     for sp in stand:
         stem = Path(sp["image"]).stem
@@ -270,12 +274,7 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
                 continue
             img = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
             fx = fy = f
-            cx = cy = size / 2.0
-            if downscale > 1:
-                img = cv2.resize(img, (img.shape[1] // downscale,
-                                       img.shape[0] // downscale),
-                                 interpolation=cv2.INTER_AREA)
-                fx, fy, cx, cy = (v / downscale for v in (fx, fy, cx, cy))
+            cx = cy = VIEW_PX / 2.0
             Ks.append([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             R, t = cam_from_world(sp["xyz"], yaw, pitch)
             m = np.eye(4, dtype=np.float32)
@@ -286,12 +285,8 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
             if rng_map is None:
                 depths.append(None)
             else:
-                dv = depth_view(rng_map, yaw, pitch, fov, size)
-                if downscale > 1:
-                    dv = cv2.resize(dv, (dv.shape[1] // downscale,
-                                         dv.shape[0] // downscale),
-                                    interpolation=cv2.INTER_NEAREST)
-                depths.append(torch.from_numpy(dv))
+                depths.append(torch.from_numpy(
+                    depth_view(rng_map, yaw, pitch)))
 
     C = np.stack(centres)
     scale = float(np.linalg.norm(C - C.mean(0), axis=1).max()) * 1.1
@@ -324,7 +319,7 @@ def load(panos_dir: Path, images: Path, angles, size: int, fov: float,
             imgs, pts, rgb, scale, depths if have_depth else None)
 
 
-def write_sidecars(panos_dir: Path, world: Path, angles) -> dict:
+def write_sidecars(panos_dir: Path, world: Path) -> dict:
     """world.cam.json and world.path.json, straight from the recorded walk.
 
     The viewer wants a spawn pose and a path to tour. Both come from the

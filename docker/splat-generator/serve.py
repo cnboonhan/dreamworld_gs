@@ -5,7 +5,7 @@
                      inferred (SfM), then the splat is aligned into the building
   reconstruct-simulated  panoramas from the simulator, which recorded where it
                      stood -> no solve, no alignment; placed by construction
-  render-video       a built splat -> a walkthrough along its capture path
+  render-video       a built splat -> a walkthrough riding its recorded walk
   render-route       a planned route -> a walkthrough of the whole traversal,
                      rendered from the union of the corridors it crosses
   plan-route         two waypoints -> the walk between them, as a route the

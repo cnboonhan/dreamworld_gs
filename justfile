@@ -215,12 +215,11 @@ generate id spacing="0.5" proj=project: up
     echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .path.json)"
     echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
 
-#   just video cafe 40           longer
-#   just video cafe 20 spline    weave through each standpoint exactly
-#   just video cafe 20 orbit     circle the centre (expect artifacts)
+# Render a walkthrough of one splat, riding the walk it was captured from.
 #
-# Render a walkthrough of one vertex or edge, along its capture path.
-video id seconds="20" path="walk" proj=project: up
+#   just video cafe        twenty seconds
+#   just video cafe 40     slower
+video id seconds="20" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
@@ -230,8 +229,7 @@ video id seconds="20" path="walk" proj=project: up
     fi
     docker compose exec -T generator python submit.py \
         render-video/dreamworld \
-        scene=/workspace/projects/{{proj}}/splats/{{id}} \
-        seconds={{seconds}} path={{path}}
+        scene=/workspace/projects/{{proj}}/splats/{{id}} seconds={{seconds}}
     echo "-> assets/projects/{{proj}}/splats/{{id}}/walkthrough.mp4"
 
 # Build the Gazebo world + nav graph from a project's building map.
@@ -260,19 +258,12 @@ world map="" proj=project: up
 # follows from the corridor's length. It is also what makes the reconstruction
 # metric, so `just generate` should be given the interval the run reports.
 #
-# zigzag is how far the walk sways across the corridor. The default is the
-# sway of ordinary walking; a wide weave gives structure from motion the
-# lateral baseline it needs, at the cost of a path 1.7x the corridor's length —
-# and that path is what the viewer rides, since it is the only line the splat
-# was ever observed from.
-#
-#   just capture L11.cafe--v7            stop every half metre
-#   just capture L11.cafe--v7 0.3        closer together
-#   just capture L11.cafe--v7 0.5 0.35   weave wide, for an SfM test
-capture edge spacing="0.5" zigzag="0" proj=project: up
+#   just capture L11.cafe--v7        stop every half metre
+#   just capture L11.cafe--v7 0.3    closer together, for a short corridor
+capture edge spacing="0.5" proj=project: up
     docker compose exec -T generator python submit.py \
         capture-edge/dreamworld \
-        project={{proj}} edge={{edge}} spacing={{spacing}} zigzag={{zigzag}}
+        project={{proj}} edge={{edge}} spacing={{spacing}}
     @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
@@ -293,7 +284,7 @@ capture-all spacing="0.5" proj=project: up
     ")
     n=$(printf '%s' "$todo" | grep -c . || true)
     echo "$n corridor(s) to photograph"
-    for e in $todo; do just capture "$e" {{spacing}} 0 {{proj}}; done
+    for e in $todo; do just capture "$e" {{spacing}} {{proj}}; done
 
 # Plan the walk between two waypoints, as a route the viewer streams along.
 #

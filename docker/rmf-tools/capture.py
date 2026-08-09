@@ -56,6 +56,9 @@ from png_io import write_png  # noqa: E402
 
 ROS_TOPIC = "/rec_cam"
 DEPTH_TOPIC = "/rec_depth"
+# what postprocess_world.py injects, and the world it injects into
+WORLD = "sim_world"
+CAM_MODEL = "rec_cam"
 
 
 class Cam(Node):
@@ -255,14 +258,12 @@ def panorama(node, x, y, a, out, label):
 # it is the path the viewer rides, since that is the only line the splat was
 # observed from. So this is now the sway of ordinary walking.
 #
-# It stays a parameter: a real 360 capture still goes through SfM, and if one
-# is ever simulated for that path it wants the wide weave back.
 ZIGZAG_M = 0.10
 # and on top of that, a little untidiness: nobody's stride is exact
 JITTER_M = 0.06
 
 
-def standpoints(plan, edge_id, spacing, seed=0, zigzag=ZIGZAG_M):
+def standpoints(plan, edge_id, spacing, seed=0):
     """Stops roughly `spacing` metres apart along the lane, endpoints included.
 
     Spacing is chosen, not derived: a person walks a corridor stopping about
@@ -301,7 +302,7 @@ def standpoints(plan, edge_id, spacing, seed=0, zigzag=ZIGZAG_M):
                 # 3 mm, and the two pinned endpoints scattered by 0.67 m — so
                 # the stops alignment depends on most were the least
                 # constrained. Nobody stops on a mathematical vertex anyway.
-                weave = zigzag * (1 if i % 2 else -1)
+                weave = ZIGZAG_M * (1 if i % 2 else -1)
                 along = rng.uniform(-JITTER_M, JITTER_M)
                 across = weave + rng.uniform(-JITTER_M, JITTER_M)
                 x += dx / length * along + nx * across
@@ -326,8 +327,6 @@ def main():
     ap.add_argument("--spacing", type=float, default=0.5,
                     help="metres between stops; the count follows from the "
                          "corridor's length, as it does when walking")
-    ap.add_argument("--world", default="sim_world")
-    ap.add_argument("--name", default="rec_cam")
     ap.add_argument("--height", type=float, default=1.6)
     ap.add_argument("--fov", type=float, default=2.2,
                     help="must match the camera's horizontal_fov in the world")
@@ -348,11 +347,11 @@ def main():
     plan = json.loads(open(a.plan).read())
     # seeded by the corridor, so a re-capture reproduces the same walk
     seed = int(hashlib.sha256(a.edge.encode()).hexdigest()[:8], 16)
-    points, actual = standpoints(plan, a.edge, a.spacing, seed, a.zigzag)
+    points, actual = standpoints(plan, a.edge, a.spacing, seed)
     os.makedirs(a.out_dir, exist_ok=True)
 
     rclpy.init()
-    node = Cam(a.world, a.name)
+    node = Cam(WORLD, CAM_MODEL)
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
     if not node.cli.wait_for_service(timeout_sec=30):
         raise SystemExit("set_pose service not bridged (is the sim up?)")

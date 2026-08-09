@@ -1,13 +1,10 @@
 """Render a walkthrough video of a reconstructed world.
 
-The camera follows the capture path, because that is where the scene was
-actually observed — straying from it is what makes gaussian splats look bad,
-since those regions were never constrained by any view. By default it rides
-the recorded walk itself; --path line fits a straight line through it, which
-is smoother but is a line no panorama was shot from.
+The camera rides the recorded walk, because that is where the scene was
+actually observed — off it is what makes gaussian splats look bad, since those
+regions were never constrained by any view.
 
-    python render_video.py <scene-dir> [--seconds 20] [--fps 30]
-                           [--path walk|line|spline|orbit] [--fov 75]
+    python render_video.py <scene-dir> [--seconds 20]
 
 Writes <scene>/walkthrough.mp4.
 """
@@ -23,6 +20,9 @@ import numpy as np
 import torch
 
 SH_C0 = 0.28209479177387814
+# 720p at a natural walking field of view. Never varied, and the render is
+# short enough that a bigger one would not buy anything the capture resolves.
+WIDTH, HEIGHT, FOV, FPS = 1280, 720, 75.0, 30
 
 
 def load_splat(ply: Path, device: str):
@@ -133,25 +133,6 @@ def capture_path(model: Path) -> tuple[np.ndarray, np.ndarray]:
     return centres, up / np.linalg.norm(up)
 
 
-def catmull_rom(points: np.ndarray, n: int, loop: bool = True) -> np.ndarray:
-    """Smooth spline through the given points."""
-    pts = np.vstack([points, points[:1]]) if loop else points
-    k = len(pts)
-    idx = lambda i: pts[i % k] if loop else pts[np.clip(i, 0, k - 1)]
-
-    out = []
-    segments = k if loop else k - 1
-    for s in range(segments):
-        p0, p1, p2, p3 = idx(s - 1), idx(s), idx(s + 1), idx(s + 2)
-        for j in range(max(1, n // segments)):
-            t = j / max(1, n // segments)
-            t2, t3 = t * t, t * t * t
-            out.append(0.5 * ((2 * p1) + (-p0 + p2) * t
-                              + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
-                              + (-p0 + 3 * p1 - 3 * p2 + p3) * t3))
-    return np.stack(out)
-
-
 def straight_path(centres: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
     """Points along the least-squares line through the standpoints.
 
@@ -205,29 +186,18 @@ def walked_path(scene: Path) -> tuple[np.ndarray, np.ndarray, int]:
     return centres, up, len(centres)
 
 
-def plan_path(scene: Path, kind: str, n_frames: int):
-    """(eyes, targets, up) for the camera, one entry per frame."""
-    centres, up, n_stand = walked_path(scene)
+def plan_path(scene: Path, n_frames: int):
+    """(eyes, targets, up) for the camera, one entry per frame.
 
-    if kind == "walk" and len(centres) >= 4:
-        # Ride where the camera actually was. The alternative below fits a
-        # straight line through the walk, which is smoother but is a line no
-        # panorama was ever shot from — and off the observed path is exactly
-        # where a splat frays into needles.
+    Ride where the camera actually was. Fitting a straight line through the
+    walk is smoother, and is a line no panorama was ever shot from — off the
+    observed path is exactly where a splat frays. Only a walk too short to
+    have a shape falls back to that.
+    """
+    centres, up, n_stand = walked_path(scene)
+    if len(centres) >= 4:
         eyes, targets = along_polyline(centres, up, n_frames)
-    elif kind == "orbit":
-        mid = centres.mean(0)
-        radius = float(np.linalg.norm(centres - mid, axis=1).max()) * 1.6 + 1e-3
-        ang = np.linspace(0, 2 * np.pi, n_frames, endpoint=False)
-        basis = np.eye(3)[np.argsort(np.abs(up))[:2]]  # two axes most level
-        eyes = mid + radius * (np.outer(np.cos(ang), basis[0])
-                               + np.outer(np.sin(ang), basis[1]))
-        targets = np.repeat(mid[None], n_frames, 0)
-    elif kind == "spline":
-        eyes = catmull_rom(centres, n_frames)
-        # aim a little ahead along the path so the motion reads as walking
-        targets = np.roll(eyes, -max(2, n_frames // 60), axis=0)
-    else:                                   # "line", or a walk too short to ride
+    else:
         eyes, axis = straight_path(centres, n_frames)
         span = float(np.linalg.norm(eyes[-1] - eyes[0]))
         targets = eyes + axis * max(1.0, span * 0.3)
@@ -281,24 +251,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("scene", type=Path)
     ap.add_argument("--seconds", type=float, default=20.0)
-    ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--fov", type=float, default=75.0)
-    ap.add_argument("--path", choices=("walk", "line", "spline", "orbit"),
-                    default="walk",
-                    help="walk: ride the recorded walk (default); line: "
-                         "straight along its best-fit axis, smoother but a "
-                         "line nothing was shot from; spline: through each "
-                         "standpoint exactly; orbit: circle the centre")
-    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
-    n_frames = int(args.seconds * args.fps)
-    out = args.out or args.scene / "walkthrough.mp4"
-    eyes, targets, up, n_stand = plan_path(args.scene, args.path, n_frames)
-    tmp = render_frames(args.scene, eyes, targets, up, out,
-                        args.width, args.height, args.fov, args.fps)
+    n_frames = int(args.seconds * FPS)
+    out = args.scene / "walkthrough.mp4"
+    eyes, targets, up, n_stand = plan_path(args.scene, n_frames)
+    tmp = render_frames(args.scene, eyes, targets, up, out, WIDTH, HEIGHT, FOV, FPS)
     encode(tmp, out)
     print(f"wrote {out} ({out.stat().st_size / 1e6:.1f}MB, "
           f"{n_frames} frames, {n_stand} standpoints)")
