@@ -82,16 +82,24 @@ class Cam(Node):
         self.depth_count += 1
 
     def wait_fresh(self, n, timeout):
-        """Block until n new frames arrive on both topics. A fixed sleep alone
-        grabs frames still in flight from the previous pose, which reproject as
-        ghostly overlapping domes."""
+        """Block until n new frames arrive on both topics.
+
+        Returns (frame, depth, fresh). A fixed sleep alone grabs frames still
+        in flight from the previous pose, which reproject as ghostly
+        overlapping domes — and this used to return exactly those on timeout,
+        silently. Under seven concurrent captures the sim renders slower than
+        one alone, so the timeout started expiring: the same corridor scored
+        twice the error when rebuilt in a batch rather than on its own. The
+        caller is now told, so a degraded capture is a failure rather than a
+        quietly worse splat.
+        """
         start, dstart, t0 = self.count, self.depth_count, time.time()
         while time.time() - t0 < timeout:
             if self.count - start >= n and (self.depth is None
                                             or self.depth_count - dstart >= n):
-                break
+                return self.latest, self.depth, True
             time.sleep(0.005)
-        return self.latest, self.depth
+        return self.latest, self.depth, False
 
     def set_pose(self, x, y, z, yaw, pitch, timeout=2.0):
         qx, qy, qz, qw = quat(yaw, pitch)
@@ -138,13 +146,22 @@ def panorama(node, x, y, a, out, label):
           f"({a.yaw_steps} yaw x {a.pitch_steps} pitch)", flush=True)
 
     shots = []
+    stale = 0
     for yaw, pitch in views:
         node.set_pose(x, y, a.height, float(yaw), float(pitch))
         time.sleep(a.settle)
-        frame, dmsg = node.wait_fresh(2, a.frame_timeout)
+        frame, dmsg, fresh = node.wait_fresh(2, a.frame_timeout)
+        stale += not fresh
         shots.append((frame_rgb(frame).astype(np.float32),
                       quat_to_R(quat(float(yaw), float(pitch))),
                       frame_depth(dmsg)))
+    if stale:
+        # every stale view is a picture of somewhere else pasted into this
+        # sphere, so there is no point reconstructing from it
+        raise SystemExit(
+            f"{stale} of {len(views)} views timed out waiting for a fresh "
+            f"frame at {label}. The sim is not keeping up — capture fewer "
+            f"corridors at once, or raise --frame-timeout.")
 
     H, W = shots[0][0].shape[:2]
     fx = (W / 2) / math.tan(a.fov / 2)          # square pixels, so fy = fx
@@ -352,7 +369,10 @@ def main():
     ap.add_argument("--yaw-steps", type=int, default=8)
     ap.add_argument("--pitch-steps", type=int, default=3)
     ap.add_argument("--settle", type=float, default=0.15)
-    ap.add_argument("--frame-timeout", type=float, default=5.0)
+    # Generous, because it only waits when it has to, and the alternative is a
+    # panorama with somebody else's frames in it. Seven concurrent sims on one
+    # box render several times slower than one.
+    ap.add_argument("--frame-timeout", type=float, default=30.0)
     a = ap.parse_args()
 
     plan = json.loads(open(a.plan).read())
