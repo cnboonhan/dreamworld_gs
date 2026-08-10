@@ -1,0 +1,19 @@
+# HuggingFace repos the pipeline loads, fetched by `just fetch-assets`.
+# Blank lines and #-comments ignored.
+
+# world generation: HY-Pano 2.0, WorldStereo 2.0, WorldMirror 2.0
+tencent/HY-World-2.0
+hanshanxue/WorldStereo
+tencent/HunyuanWorld-Mirror
+Qwen/Qwen-Image-Edit
+
+# base video model WorldStereo builds on
+Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
+
+# perception models the trajectory planner loads
+naver-iv/zim-anything-vitl
+IDEA-Research/grounding-dino-tiny
+Ruicheng/moge-2-vitl-normal
+
+# VLM that plans the camera trajectories
+Qwen/Qwen3-VL-8B-Instruct

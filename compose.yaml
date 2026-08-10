@@ -2,6 +2,7 @@
 # from any working directory. Driven by the justfile — see `just --list`.
 #
 #   prefect    long-running: job orchestration + UI on :4200
+#   vlm        long-running: plans camera trajectories, captions views
 #   viewer     long-running: WebGL splat viewer for every generated world
 #   panoviewer long-running: 360 viewer for the input panoramas
 #   generator  long-running: waits for jobs, runs the 6-stage pipeline
@@ -14,9 +15,8 @@
 # and every service mounts that one tree, so a project is a single directory to
 # copy, back up or hand over.
 #
-# Nothing here reaches the network at runtime, and nothing needs pretrained
-# weights: this pipeline measures geometry from photographs rather than
-# imagining it.
+# Nothing here reaches the network at runtime: model weights are mounted from
+# assets/ and the containers run with HuggingFace offline mode set.
 
 name: dreamworld
 
@@ -56,6 +56,39 @@ services:
       start_period: 2m
       retries: 5
     restart: unless-stopped
+  vlm:
+    image: vllm/vllm-openai:v0.11.0
+    container_name: dreamworld-vlm
+    # host networking: the generator reaches this on 127.0.0.1:8000
+    network_mode: host
+    ipc: host
+    volumes:
+      - ./assets/hf:/hf:ro
+    environment:
+      HF_HOME: /hf
+      HF_HUB_OFFLINE: "1"
+    command:
+      - --model=Qwen/Qwen3-VL-8B-Instruct
+      - --port=8000
+      - --host=127.0.0.1
+      - --max-model-len=32768
+      - --trust-remote-code
+      - --gpu-memory-utilization=0.80
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]   # the generator uses the rest
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/v1/models"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15m           # first start loads ~17GB from disk
+      retries: 3
+    restart: unless-stopped
+
   viewer:
     build:
       context: ./docker/splat-viewer
@@ -154,21 +187,32 @@ services:
       context: ./docker/splat-generator
       dockerfile: splat-generator.Dockerfile
     image: dreamworld/splat-generator:latest
-    network_mode: host            # to reach the job server on localhost
+    network_mode: host            # to reach the vlm
     shm_size: 32gb
     volumes:
       - /etc/passwd:/etc/passwd:ro
+      - ./assets/models:/assets/models:ro
+      - ./assets/hf:/assets/hf:ro
       - ./assets/projects:/workspace/projects
     environment:
       HOME: /tmp
-      # Every card on the box. A reconstruction takes one and claims it, and
-      # they run one per device, so this also sets how wide a batch goes.
-      CUDA_VISIBLE_DEVICES: "${DW_GPU_IDS:-0,1,2,3,4,5,6,7}"
+      # Every card except 0, which the VLM holds. Reconstructions take one
+      # each and run one per device, so this also sets how wide a batch goes;
+      # `just` reads the same variable to size HY-World's rank count, since
+      # that shards across every visible GPU and would otherwise broadcast
+      # from ranks torchrun never launched.
+      CUDA_VISIBLE_DEVICES: "${DW_GPU_IDS:-1,2,3,4,5,6,7}"
       PREFECT_API_URL: http://127.0.0.1:${DW_PREFECT_PORT:-4200}/api
       PREFECT_HOME: /tmp/prefect
     depends_on:
       prefect:
         condition: service_healthy
+      # Started, not healthy. Only generate-world talks to the VLM — the
+      # single-panorama generative path — and it needs it when a job runs, not
+      # when this container boots. Gating on health made every reconstruction
+      # wait on a 17 GB model load that none of them use.
+      vlm:
+        condition: service_started
     restart: unless-stopped
     deploy:
       resources:

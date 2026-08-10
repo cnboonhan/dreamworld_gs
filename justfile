@@ -15,7 +15,7 @@
 # :4200. These recipes only submit and follow — ^C stops following, the job
 # keeps running.
 #
-#   just setup                       one-time: build the images
+#   just setup                       one-time: fetch weights + build images
 #   just up                          start everything, print the URLs
 #   just projects                    what's there, and which one is active
 #   just world                       maps/ -> a Gazebo world + nav graph
@@ -33,6 +33,11 @@ set dotenv-load := true
 
 repo   := justfile_directory()
 assets := repo / "assets"
+# HY-World shards across every visible GPU, so the rank count it is
+# launched with has to match what the container can see, or it
+# broadcasts from ranks torchrun never started. Derived, not repeated.
+gpus   := `echo "${DW_GPU_IDS:-1,2,3,4,5,6,7}" | tr ',' '\n' | grep -c .`
+steps  := "2000"
 
 # The active project. A real environment variable wins over .env, so a single
 # command can target another project without switching the stack.
@@ -46,9 +51,8 @@ export DW_GID := `id -g`
 _default:
     @just --list
 
-# Everything needed to run offline: just the images. Nothing here uses
-# pretrained weights — geometry is measured from the photographs.
-setup: _env build
+# Everything needed to run offline: model weights + both images (~500GB).
+setup: _env fetch-assets build
 
 _env:
     #!/usr/bin/env bash
@@ -72,13 +76,18 @@ _env:
         mkdir -p "$p"maps "$p"worlds "$p"panos "$p"splats
     done
 
+# Download all models into assets/ (idempotent; list in scripts/models.txt).
+fetch-assets:
+    HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
+        --with safetensors --no-project \
+        {{repo}}/scripts/fetch_assets.py {{assets}}
+
 # Build the generator and viewer images.
 build:
     docker compose build
 
-# Job server, generator, both viewers and the two job workers come up together
-# and stay up; `just generate` depends on this recipe, so nothing needs
-# launching by hand.
+# Job server, VLM, generator and both viewers come up together and stay up;
+# `just generate` depends on this recipe, so nothing needs launching by hand.
 #
 # Start everything and print the URLs.
 up: _env
@@ -138,8 +147,14 @@ down:
 # and the splat lands in splats/vertices/<id>/ or splats/edges/<a>--<b>/.
 # `just plan` lists the ids this project's map defines.
 #
-# Several viewpoints of one place, reconstructed together: reproject each
-# panorama into pinhole views, solve or read the poses, then fit gaussians.
+# What you hand it decides the pipeline:
+#
+#   a folder of panoramas   several viewpoints of a real place, so geometry is
+#                           measured — reproject, COLMAP, gaussian splatting.
+#                           This is the path for real 360 captures.
+#   a single image file     one viewpoint, so the rest is imagined — the
+#                           generative HY-World path, which is the only thing
+#                           in this repo that uses the VLM.
 #
 # spacing: metres between consecutive standpoints, default 0.5. SfM is
 # scale-free, so this is what puts the world in metres, which a simulator
@@ -149,40 +164,70 @@ generate id spacing="0.25" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
-    src="$dir/panos/{{id}}"
-    if [ ! -d "$src" ]; then
-        echo "no panoramas for '{{id}}' in {{proj}}" >&2
+    if [ ! -d "$dir" ]; then
+        echo "no such project: {{proj}}" >&2
+        just projects >&2
+        exit 1
+    fi
+    src=$(ls -d "$dir"/panos/{{id}} "$dir"/panos/{{id}}.* 2>/dev/null | head -1 || true)
+    if [ -z "$src" ]; then
+        echo "nothing to reconstruct for '{{id}}' in {{proj}}" >&2
         echo "captured so far:" >&2
         find "$dir/panos" -mindepth 1 -maxdepth 1 2>/dev/null \
             | sed "s|$dir/panos/|  |" >&2
         echo "run 'just plan' for the ids this project's map defines" >&2
         exit 1
     fi
-    if [ -f "$dir/splats/{{id}}/world.ply" ]; then
-        echo "{{proj}} {{id}}: already built, skipping"
-        echo "   (delete assets/projects/{{proj}}/splats/{{id}} to rebuild)"
+    # ids contain dots (L11.cafe), so strip an extension only from a file
+    if [ -d "$src" ]; then id=$(basename "$src"); else id=$(basename "${src%.*}"); fi
+    out="$dir/splats/$id"
+    if [ -f "$out/world.ply" ]; then
+        echo "{{proj}} $id: already built, skipping"
+        echo "   (delete assets/projects/{{proj}}/splats/$id to rebuild)"
         exit 0
     fi
-    mkdir -p "$dir/splats/{{id}}"
+    mkdir -p "$out"
     win=/workspace/projects/{{proj}}
-    n=$(find "$src" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' \) | wc -l)
-    # Two jobs, because they are two different pieces of work: a simulated
-    # capture recorded where it stood, a real one cannot. Chosen here, at
-    # submission, so the queue names which one ran.
-    if [ -f "$src/poses.json" ]; then
-        echo "reconstructing {{proj}} {{id}} from $n simulated panoramas (poses recorded)"
-        docker compose exec -T generator python submit.py \
-            reconstruct-simulated/dreamworld \
-            scene="$win/splats/{{id}}" panos="$win/panos/{{id}}"
+
+    if [ -d "$src" ]; then
+        # `|| true`: an unmatched glob makes ls fail, and pipefail turns that
+        # into an exit before anything is submitted
+        n=$(find "$src" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' \) 2>/dev/null | wc -l || true)
+        # Two different jobs, because they are two different pieces of work: a
+        # simulated capture recorded where it stood, a real one cannot. The
+        # choice is made here, at submission, so the queue names which ran.
+        if [ -f "$src/poses.json" ]; then
+            echo "reconstructing {{proj}} $id from $n simulated panoramas (poses recorded)"
+            docker compose exec -T generator python submit.py \
+                reconstruct-simulated/dreamworld \
+                scene="$win/splats/$id" \
+                panos="$win/panos/$id"
+        else
+            echo "reconstructing {{proj}} $id from $n panoramas"
+            docker compose exec -T generator python submit.py \
+                reconstruct-world/dreamworld \
+                scene="$win/splats/$id" \
+                panos="$win/panos/$id" \
+                spacing={{spacing}}
+        fi
     else
-        echo "reconstructing {{proj}} {{id}} from $n panoramas"
+        cp "$src" "$out/_input.${src##*.}"
+        # the generative pipeline reads panorama.png
+        docker compose exec -T generator python -c "
+        from pathlib import Path
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        d = Path('$win/splats/$id')
+        src = next(p for p in d.iterdir() if p.stem == '_input')
+        Image.open(src).convert('RGB').save(d / 'panorama.png')
+        src.unlink()"
         docker compose exec -T generator python submit.py \
-            reconstruct-world/dreamworld \
-            scene="$win/splats/{{id}}" panos="$win/panos/{{id}}" \
-            spacing={{spacing}}
+            generate-world/dreamworld \
+            scene="$win/splats/$id" \
+            gpus={{gpus}} steps={{steps}}
     fi
-    echo "-> assets/projects/{{proj}}/splats/{{id}}/world.ply (+ .usdz, .cam.json, .path.json)"
-    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/{{id}}/world.ply"
+    echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .path.json)"
+    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
 
 # Render a walkthrough of one splat, riding the walk it was captured from.
 #
