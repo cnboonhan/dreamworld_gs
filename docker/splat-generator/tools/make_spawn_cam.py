@@ -1,16 +1,19 @@
 """Tag a generated world with the camera the viewer should spawn at, and the
 path it should tour along.
 
-Writes <world>.cam.json next to <world>.ply holding a 16-float column-major
-world->camera matrix. The viewer picks it up automatically, so a scene opens
-at eye level with the correct up-axis instead of the viewer's arbitrary
-default (which makes non-+Y-up scenes look upside down until you drag).
+Writes <world>.path.json, the level line the standpoints lie on, and
+<world>.cam.json, a 16-float column-major world->camera matrix midway along
+it. The viewer picks both up automatically, so a scene opens at eye level the
+right way up rather than in the viewer's arbitrary default orientation, and
+its tour rides the same walk the rendered video does.
 
-The pose comes from the scene's own training cameras: WorldNav planned them
-along the walkable floor, so they are upright by construction.
+Both flows land here. A reconstructed world's poses come from its COLMAP
+model; a generated one's come from HY-World's own record of the frame it
+normalised the world into.
 
 Usage:
     python make_spawn_cam.py <scene-dir> [world.ply]
+    python make_spawn_cam.py --colmap <sparse-model> <world.ply>
 """
 
 import json
@@ -20,19 +23,33 @@ from pathlib import Path
 import numpy as np
 
 
-# HY-World writes its worlds in a canonical frame with -Y up, the same
-# convention the reconstruction path produces. Its extrinsics do not share
-# COLMAP's row layout, so deriving up from them the same way yields +Z and
-# every render comes out rolled 90 degrees. Established by rendering the same
-# viewpoint under each candidate: -Y is upright, +Z is on its side.
-HYWORLD_UP = np.array([0.0, -1.0, 0.0])
+def unit(v) -> np.ndarray:
+    v = np.asarray(v, dtype=np.float64)
+    return v / max(np.linalg.norm(v), 1e-9)
 
 
-def training_cameras(scene: Path) -> np.ndarray:
-    """(N,4,4) world->camera matrices from the GS training data."""
+def hyworld_walk(scene: Path) -> tuple[np.ndarray, np.ndarray]:
+    """(standpoints, up) for a generated world, in its exported ply's frame.
+
+    The world is not axis-aligned — this building's corridors come out with up
+    at [-0.07, -0.58, -0.82] and no two the same — so up cannot be guessed, and
+    guessing it is what put the tour camera on its side walking into the
+    ceiling: an up that is really a horizontal direction leaves cross(forward,
+    up) nearly degenerate, which rolls the render and tilts the walk at once.
+
+    It does not have to be guessed. HY-World records the frame it normalised
+    the world into, beside the ply it exported: up, facing, centre and scale.
+    The training extrinsics live in that normalised frame, so those four
+    numbers map their centres back to ply coordinates exactly, and the walk
+    comes out where the scene was actually observed.
+    """
+    meta = json.loads((scene / "gs_result" / "ply"
+                       / "position_meta_info.json").read_text())
+    up, fwd = unit(meta["up_direction"]), unit(meta["facing_direction"])
+    centre = np.asarray(meta["center_point"], dtype=np.float64)
+    scale = float(meta["scale"])
+
     path = scene / "gs_data" / "cameras.json"
-    if not path.exists():
-        raise SystemExit(f"no {path}; run the pipeline first")
     data = json.loads(path.read_text())
     entries = data.values() if isinstance(data, dict) else data
     # the file mixes per-camera dicts with scalar metadata entries
@@ -40,7 +57,9 @@ def training_cameras(scene: Path) -> np.ndarray:
             for e in entries if isinstance(e, dict) and "extrinsic" in e]
     if not mats:
         raise SystemExit(f"no extrinsics in {path}")
-    return np.stack(mats)
+    normalised = np.stack([-m[:3, :3].T @ m[:3, 3] for m in mats])
+    rows = np.stack([unit(np.cross(fwd, up)), fwd, up])
+    return centre + scale * (normalised @ rows), up
 
 
 def colmap_cameras(model: Path) -> tuple[np.ndarray, list[str]]:
@@ -60,50 +79,51 @@ def colmap_cameras(model: Path) -> tuple[np.ndarray, list[str]]:
     return np.stack(mats), names
 
 
-def write_path(w2c: np.ndarray, world: Path, names: list[str] | None = None,
-               up_hint: np.ndarray | None = None) -> None:
-    """Sample the straight line through the standpoints, for the viewer.
-
-    The viewer's tour then walks the camera along the same line the rendered
-    walkthrough uses, which keeps it inside the space the panoramas actually
-    observed — outside it, nothing constrained the geometry.
+def colmap_walk(model: Path) -> tuple[np.ndarray, np.ndarray]:
+    """(standpoints, up) for a reconstructed world, from its COLMAP model.
 
     Views are named <panorama>_<k>, so grouping by prefix gives one centre per
     standpoint. That is what render_video.py fits its line through; fitting
-    through the raw per-view poses instead would tilt the line slightly and
-    the tour would no longer match the video.
+    through the raw per-view poses instead would tilt the line slightly and the
+    tour would no longer match the video.
     """
+    w2c, names = colmap_cameras(model)
     centres = np.stack([-m[:3, :3].T @ m[:3, 3] for m in w2c])
-    if names and len(names) == len(centres):
-        groups: dict[str, list[np.ndarray]] = {}
-        for name, c in zip(names, centres):
-            groups.setdefault(name.rsplit("_", 1)[0], []).append(c)
-        pts = np.stack([np.median(np.stack(v), 0) for _, v in sorted(groups.items())])
-    else:
-        # generative path: no view names, drop repeats instead
-        keep = [centres[0]]
-        for c in centres[1:]:
-            if np.linalg.norm(c - keep[-1]) > 1e-6:
-                keep.append(c)
-        pts = np.stack(keep)
-    if len(pts) < 2:
-        return
+    groups: dict[str, list[np.ndarray]] = {}
+    for name, c in zip(names, centres):
+        groups.setdefault(name.rsplit("_", 1)[0], []).append(c)
+    pts = np.stack([np.median(np.stack(v), 0) for _, v in sorted(groups.items())])
+    up = np.stack([-m[:3, :3].T @ np.array([0.0, 1.0, 0.0]) for m in w2c]).mean(0)
+    return pts, unit(up)
 
-    centred = pts - pts.mean(0)
-    axis = np.linalg.svd(centred, full_matrices=False)[2][0]
+
+def fit_walk(pts: np.ndarray, up: np.ndarray,
+             facing: np.ndarray | None = None) -> np.ndarray:
+    """Points along the level line the standpoints lie on.
+
+    The viewer's tour and the rendered walkthrough both ride this, which keeps
+    the camera inside the space the panoramas observed — outside it, nothing
+    constrained the geometry. Levelling against up is what makes it a walk
+    rather than a climb; the fit is otherwise least-squares.
+    """
+    height = float(np.median(pts @ up))
+    flat = pts - np.outer(pts @ up, up)
+    centred = flat - flat.mean(0)
+    axis = unit(np.linalg.svd(centred, full_matrices=False)[2][0])
     t = centred @ axis
-    if t[0] > t[-1]:
+    if (axis @ facing if facing is not None else t[-1] - t[0]) < 0:
         axis, t = -axis, -t
-    mid = pts.mean(0)
-    line = np.linspace(mid + axis * t.min(), mid + axis * t.max(), 240)
+    # the ends are excursions: HY-World sweeps its cameras out past the room to
+    # see round corners, and a capture's first and last standpoints sit against
+    # the vertices. Neither belongs in a walkthrough.
+    lo, hi = np.percentile(t, [10, 90])
+    mid = flat.mean(0) + up * height
+    return np.linspace(mid + axis * lo, mid + axis * hi, 240)
 
-    if up_hint is not None:
-        up = np.asarray(up_hint, dtype=np.float64)
-    else:
-        ups = np.stack([-m[:3, :3].T @ np.array([0.0, 1.0, 0.0]) for m in w2c])
-        up = ups.mean(0)
-    up /= max(np.linalg.norm(up), 1e-9)
 
+def write_path(world: Path, pts: np.ndarray, up: np.ndarray,
+               facing: np.ndarray | None = None) -> np.ndarray:
+    line = fit_walk(pts, up, facing)
     out = world.with_suffix("").as_posix() + ".path.json"
     Path(out).write_text(json.dumps({
         "points": [[round(float(v), 5) for v in p] for p in line],
@@ -111,53 +131,50 @@ def write_path(w2c: np.ndarray, world: Path, names: list[str] | None = None,
         "standpoints": len(pts),
     }))
     print(f"wrote {out} ({len(line)} points along {len(pts)} standpoints)")
+    return line
+
+
+def write_cam(world: Path, line: np.ndarray, up: np.ndarray) -> None:
+    """The pose the viewer spawns at: midway along the walk, looking down it.
+
+    Built here rather than copied from a training extrinsic — HY-World lays
+    those out differently from COLMAP, so handing one straight to the viewer
+    opened every generated world on its side.
+    """
+    i = len(line) // 2
+    eye = line[i]
+    fwd = unit(line[min(i + 10, len(line) - 1)] - eye)
+    right = unit(np.cross(fwd, up))
+    R = np.stack([right, np.cross(fwd, right), fwd])
+    m = np.eye(4)
+    m[:3, :3] = R
+    m[:3, 3] = -R @ eye
+    out = world.with_suffix("").as_posix() + ".cam.json"
+    Path(out).write_text(json.dumps({
+        "viewMatrix": [round(float(v), 6) for v in m.T.flatten()],
+        "source": "midway along the walk",
+    }, indent=2))
+    print(f"wrote {out}")
 
 
 def main() -> None:
     args = sys.argv[1:]
     # --colmap <sparse-model> <world.ply>: the reconstruction flow has no
     # gs_data/cameras.json, its poses live in the COLMAP model
-    names, up_hint = None, None
     if args and args[0] == "--colmap":
-        model, world = Path(args[1]), Path(args[2])
-        w2c, names = colmap_cameras(model)
+        world = Path(args[2])
+        pts, up = colmap_walk(Path(args[1]))
+        facing = None
     else:
         scene = Path(args[0])
         world = Path(args[1]) if len(args) > 1 else scene / "world.ply"
-        w2c = training_cameras(scene)
-        up_hint = HYWORLD_UP
-    centers = np.stack([-m[:3, :3].T @ m[:3, 3] for m in w2c])
-    # most central camera: representative of the interior, and away from the
-    # trajectory endpoints that often sit against a wall
-    pick = int(np.argmin(np.linalg.norm(centers - np.median(centers, 0), axis=1)))
-
-    write_path(w2c, world, names, up_hint)
-
-    out = world.with_suffix("").as_posix() + ".cam.json"
-    if up_hint is not None:
-        # Built here rather than copied from a training extrinsic. Those are
-        # laid out differently from COLMAP's, so handing one straight to the
-        # viewer opened every generated world rolled on its side. Looking along
-        # the walk with a known up gives the same camera the walkthrough uses.
-        pts = json.loads(Path(world.with_suffix("").as_posix()
-                              + ".path.json").read_text())["points"]
-        eye = np.asarray(pts[len(pts) // 2], dtype=np.float64)
-        ahead = np.asarray(pts[min(len(pts) // 2 + 10, len(pts) - 1)],
-                           dtype=np.float64)
-        fwd = ahead - eye
-        fwd /= max(np.linalg.norm(fwd), 1e-9)
-        right = np.cross(fwd, up_hint); right /= max(np.linalg.norm(right), 1e-9)
-        down = np.cross(fwd, right)
-        R = np.stack([right, down, fwd])
-        m = np.eye(4); m[:3, :3] = R; m[:3, 3] = -R @ eye
-        view, source = m.T.flatten(), "along the generated walk"
-    else:
-        view, source = w2c[pick].T.flatten(), f"training camera {pick} of {len(w2c)}"
-    Path(out).write_text(json.dumps({
-        "viewMatrix": [round(float(v), 6) for v in view],
-        "source": source,
-    }, indent=2))
-    print(f"wrote {out} ({source})")
+        pts, up = hyworld_walk(scene)
+        facing = unit(json.loads((scene / "gs_result" / "ply"
+                                  / "position_meta_info.json").read_text())
+                      ["facing_direction"])
+    if len(pts) < 2:
+        raise SystemExit(f"{world}: too few standpoints to fit a walk")
+    write_cam(world, write_path(world, pts, up, facing), up)
 
 
 if __name__ == "__main__":
