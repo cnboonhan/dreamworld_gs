@@ -284,8 +284,29 @@ def photograph(project: str, map_name: str, edge: str, spacing: float) -> dict:
     logger.info("%d panoramas, walked %.3f m apart -> "
                 "reconstruct with: just generate %s %.3f",
                 len(shots), walked, edge, walked)
+
+    # Then check the panoramas against each other, because a capture can come
+    # back the right size and shape and still be wrong. Nineteen corridors were
+    # photographed from stale frames and nothing noticed for a day.
+    import pano_check
+
+    faithful = pano_check.check(out)
+    if not faithful["judged"]:
+        logger.info("not checked: %s", faithful["why"])
+    elif faithful["corrupt"]:
+        raise RuntimeError(
+            f"{project}/{edge}: the panoramas disagree with each other by "
+            f"{faithful['difference']}/255 over {100 * faithful['overlap']:.0f}% "
+            f"of what both standpoints can see — a faithful capture scores under "
+            f"{pano_check.MAX_DIFFERENCE}. Something is composing them from the "
+            f"wrong poses; re-run before building anything on this.")
+    else:
+        logger.info("panoramas agree to %.1f/255 over %.0f%% shared, "
+                    "%.2f m apart", faithful["difference"],
+                    100 * faithful["overlap"], faithful["baseline_m"])
     return {"panos": f"{project}/panos/{edge}", "count": len(shots),
-            "spacing_m": round(walked, 4), "first": shots[0], "last": shots[-1]}
+            "spacing_m": round(walked, 4), "first": shots[0], "last": shots[-1],
+            "agreement": faithful.get("difference")}
 
 
 @flow(name="capture-edge", log_prints=True, flow_run_name=_capture_name)

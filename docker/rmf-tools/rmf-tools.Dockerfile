@@ -48,7 +48,7 @@ WORKDIR /app
 COPY rmf-tools/entrypoint.sh rmf-tools/with_display.sh rmf-tools/generate_world.sh \
      rmf-tools/postprocess_world.py rmf-tools/sim.launch.xml.template \
      rmf-tools/world_flow.py rmf-tools/capture.py rmf-tools/capture.sh \
-     rmf-tools/texturize.py /app/
+     rmf-tools/pano_check.py rmf-tools/texturize.py /app/
 COPY rmf-tools/common/ /app/common/
 RUN chmod +x /app/entrypoint.sh /app/with_display.sh /app/generate_world.sh \
              /app/capture.sh
