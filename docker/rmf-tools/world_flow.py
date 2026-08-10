@@ -241,11 +241,12 @@ def _capture_name() -> str:
     return f"{p.get('project', '?')}/{p.get('edge', '?')}"
 
 
-# A corridor takes about four minutes. This is the ceiling before the run is
-# called stuck rather than slow — generous, because a long corridor with close
-# spacing is legitimately several times the typical one, and because the retry
-# above gets a clean sim to try again in.
-CAPTURE_TIMEOUT_S = 20 * 60
+# The ceiling before a run is called stuck rather than slow. Generous on
+# purpose: at 0.25 m spacing the longest corridor is twenty-two standpoints of
+# twenty-four views each, and several sims share the box, so forty minutes is
+# ordinary. This has now been the third constant sized for a sparser capture —
+# a value that was comfortable at 0.5 m spacing is a hard failure at 0.25.
+CAPTURE_TIMEOUT_S = 120 * 60
 
 
 @task(name="capture", retries=1)
