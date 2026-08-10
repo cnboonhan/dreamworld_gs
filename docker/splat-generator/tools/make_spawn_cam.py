@@ -97,8 +97,8 @@ def to_building(scene: Path, panos: Path, pick: str, p0: np.ndarray) -> np.ndarr
     return np.concatenate([M, (centre - M @ p0)[:, None]], 1)
 
 
-def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray] | None:
-    """(points, up) tracing this world's own lane, in the world's coordinates.
+def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """(points, up, length_m) tracing this world's lane, in world coordinates.
 
     A generated world is one corridor, so the walk through it is that
     corridor's lane out of the building — the same straight line a camera
@@ -136,8 +136,9 @@ def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray] | None:
 
     T = to_building(scene, panos, pick, xyz[pick])
     line = np.linspace(a, b, 240)
-    print(f"  {edge}: {np.linalg.norm(b - a):.2f} m lane at {height:.2f} m")
-    return line @ T[:, :3].T + T[:, 3], unit(T[:, :3] @ [0.0, 0.0, 1.0])
+    length = float(np.linalg.norm(b - a))
+    print(f"  {edge}: {length:.2f} m lane at {height:.2f} m")
+    return (line @ T[:, :3].T + T[:, 3], unit(T[:, :3] @ [0.0, 0.0, 1.0]), length)
 
 
 def hyworld_walk(scene: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -233,13 +234,20 @@ def fit_walk(pts: np.ndarray, up: np.ndarray,
     return np.linspace(mid + axis * lo, mid + axis * hi, 240)
 
 
-def write_path(world: Path, line: np.ndarray, up: np.ndarray, source: str) -> np.ndarray:
+def write_path(world: Path, line: np.ndarray, up: np.ndarray, source: str,
+               length_m: float | None = None) -> np.ndarray:
     out = world.with_suffix("").as_posix() + ".path.json"
-    Path(out).write_text(json.dumps({
+    doc = {
         "points": [[round(float(v), 5) for v in p] for p in line],
         "up": [round(float(v), 5) for v in up],
         "source": source,
-    }))
+    }
+    # how long the walk is in the building, when that is known: it is what
+    # lets the walkthrough be paced at walking speed rather than at whatever
+    # speed fills a fixed number of seconds
+    if length_m is not None:
+        doc["length_m"] = round(float(length_m), 3)
+    Path(out).write_text(json.dumps(doc))
     print(f"wrote {out} ({len(line)} points, {source})")
     return line
 
@@ -271,6 +279,7 @@ def main() -> None:
     args = sys.argv[1:]
     # --colmap <sparse-model> <world.ply>: the reconstruction flow has no
     # gs_data/cameras.json, its poses live in the COLMAP model
+    length = None
     if args and args[0] == "--colmap":
         world = Path(args[2])
         pts, up = colmap_walk(Path(args[1]))
@@ -280,7 +289,7 @@ def main() -> None:
         world = Path(args[1]) if len(args) > 1 else scene / "world.ply"
         walk = building_walk(scene)
         if walk is not None:
-            line, up = walk
+            line, up, length = walk
             source = "the lane, out of the building"
         else:
             # no capture to align to: a world generated from a loose panorama
@@ -290,7 +299,7 @@ def main() -> None:
                           ["facing_direction"])
             line = fit_walk(pts, up, facing)
             source = f"fitted through {len(pts)} planned cameras"
-    write_cam(world, write_path(world, line, up, source), up)
+    write_cam(world, write_path(world, line, up, source, length), up)
 
 
 if __name__ == "__main__":

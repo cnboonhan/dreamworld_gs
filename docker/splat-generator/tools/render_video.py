@@ -247,13 +247,33 @@ def encode(tmp: Path, out: Path) -> None:
     tmp.unlink()
 
 
+WALK_MS = 0.8                        # unhurried, and steady enough to look at
+
+
+def seconds_for(scene: Path, asked: float | None) -> float:
+    """How long the walkthrough should run.
+
+    A corridor here is between one and six metres, so a fixed duration makes
+    one a crawl and another a dash. When the sidecar knows how long the walk
+    is in the building, walk it at walking speed instead.
+    """
+    if asked is not None:
+        return asked
+    sidecar = scene / "world.path.json"
+    if sidecar.is_file():
+        length = json.loads(sidecar.read_text()).get("length_m")
+        if length:
+            return float(min(30.0, max(6.0, length / WALK_MS)))
+    return 20.0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("scene", type=Path)
-    ap.add_argument("--seconds", type=float, default=20.0)
+    ap.add_argument("--seconds", type=float, default=None)
     args = ap.parse_args()
 
-    n_frames = int(args.seconds * FPS)
+    n_frames = int(seconds_for(args.scene, args.seconds) * FPS)
     out = args.scene / "walkthrough.mp4"
     eyes, targets, up, n_stand = plan_path(args.scene, n_frames)
     tmp = render_frames(args.scene, eyes, targets, up, out, WIDTH, HEIGHT, FOV, FPS)

@@ -75,13 +75,18 @@ def _run_name() -> str:
 
 @flow(name="render-video", log_prints=True,
       flow_run_name=_run_name)
-def render_walkthrough(scene: str, seconds: float = 20.0) -> dict:
-    """scene: a splats/<name> directory holding world.ply and its COLMAP model."""
+def render_walkthrough(scene: str, seconds: float = 0.0) -> dict:
+    """scene: a splats/<name> directory holding world.ply and its COLMAP model.
+
+    seconds=0 paces the walk at walking speed, from the length its sidecar
+    records — these corridors run from one metre to six, and one duration for
+    all of them is a crawl through some and a dash through others.
+    """
     logger = get_run_logger()
     if not (Path(scene) / "world.ply").is_file():
         raise SystemExit(f"no world.ply in {scene} — build the splat first")
     out = str(Path(scene) / "walkthrough.mp4")
-    n_frames = int(seconds * rv.FPS)
+    n_frames = int(rv.seconds_for(Path(scene), seconds or None) * rv.FPS)
     logger.info("rendering %s -> %s", scene, out)
 
     p = plan(scene, n_frames)
