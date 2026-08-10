@@ -185,9 +185,18 @@ def panorama(node, x, y, a, out, label):
     cxp, cyp = W / 2.0, H / 2.0
 
     # equirect grid -> world ray directions; even width keeps it exactly 2:1
+    #
+    # Longitude runs backwards across the canvas, which is the convention every
+    # other piece of 360 software uses: moving right through the image turns you
+    # right. Writing it the other way round produces a mirror image that is
+    # self-consistent — it reprojects and reconstructs perfectly well — and is
+    # wrong in a way nothing downstream can detect. HunyuanWorld read our
+    # panoramas under the standard convention and generated worlds whose
+    # corridors were handed backwards, measured as an exact diag(-1, 1, 1)
+    # between its ray grid and this one.
     Wc = a.width - (a.width % 2)
     Hc = Wc // 2
-    lon = (np.arange(Wc) + 0.5) / Wc * 2 * math.pi - math.pi
+    lon = math.pi - (np.arange(Wc) + 0.5) / Wc * 2 * math.pi
     lat = math.pi / 2 - (np.arange(Hc) + 0.5) / Hc * math.pi
     lon_g, lat_g = np.meshgrid(lon, lat)
     cl = np.cos(lat_g)
@@ -219,8 +228,10 @@ def panorama(node, x, y, a, out, label):
             cols = slice(0, Wc)                     # the cap reaches a pole
         else:
             dlon = math.asin(min(1.0, math.sin(theta) / math.cos(lat0)))
-            c0 = int(math.floor((lon0 - dlon + math.pi) / (2 * math.pi) * Wc))
-            c1 = int(math.ceil((lon0 + dlon + math.pi) / (2 * math.pi) * Wc) + 1)
+            # columns run against longitude, so the cap's high longitude is its
+            # low column
+            c0 = int(math.floor((math.pi - lon0 - dlon) / (2 * math.pi) * Wc))
+            c1 = int(math.ceil((math.pi - lon0 + dlon) / (2 * math.pi) * Wc) + 1)
             cols = slice(max(0, c0), min(Wc, c1)) if 0 <= c0 and c1 <= Wc \
                 else slice(0, Wc)                   # wraps the seam; take it all
         if r1 <= r0:

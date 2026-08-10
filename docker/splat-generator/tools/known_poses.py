@@ -28,13 +28,17 @@ from pathlib import Path
 import numpy as np
 
 # capture.py:      d_gz = [cos(lat)cos(lon), cos(lat)sin(lon), sin(lat)]
-#                  with lat = +pi/2 at the top of the image
+#                  with lat = +pi/2 and lon = +pi at the top left of the image
 # equirect_to_pinhole: lon = atan2(d.x, d.z), lat = asin(d.y)
-#                  with lat = -pi/2 at the top of the image
+#                  with lat = -pi/2 and lon = -pi at the top left
 #
-# Same pixel, so lon matches and lat negates, giving
-#     d_pano.x =  d_gz.y      d_pano.y = -d_gz.z      d_pano.z =  d_gz.x
-GZ_TO_PANO = np.array([[0.0, 1.0, 0.0],
+# Same pixel, so both angles negate, giving
+#     d_pano.x = -d_gz.y      d_pano.y = -d_gz.z      d_pano.z =  d_gz.x
+#
+# Its determinant is +1. It was -1 while capture.py ran longitude the other
+# way — the two frames were mirror images, and a reflection posing as a pose
+# is what put a left-handed building into COLMAP.
+GZ_TO_PANO = np.array([[0.0, -1.0, 0.0],
                        [0.0, 0.0, -1.0],
                        [1.0, 0.0, 0.0]])
 
