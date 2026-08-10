@@ -48,6 +48,7 @@ from geometry_msgs.msg import Point, Pose, Quaternion
 from rclpy.node import Node
 from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "common"))
@@ -70,8 +71,15 @@ class Cam(Node):
         self.sig = self.prev_sig = None
         self.depth = None
         self.depth_count = 0
-        self.create_subscription(Image, ROS_TOPIC, self._cb, 10)
-        self.create_subscription(Image, DEPTH_TOPIC, self._depth_cb, 10)
+        # Keep only the newest frame. With a queue of ten, a loaded sim builds
+        # a backlog and every frame read is an older pose — so two consecutive
+        # frames are never of the same place and the settle check can never
+        # fire. That is what "24 of 24 views never settled" was: not a sim too
+        # slow to render, a reader too far behind to notice it had.
+        latest = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                            reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.create_subscription(Image, ROS_TOPIC, self._cb, latest)
+        self.create_subscription(Image, DEPTH_TOPIC, self._depth_cb, latest)
         self.cli = self.create_client(SetEntityPose, f"/world/{world}/set_pose")
 
     def _cb(self, msg):
@@ -381,7 +389,7 @@ def main():
     # Generous, because it only waits when it has to, and the alternative is a
     # panorama with somebody else's frames in it. Seven concurrent sims on one
     # box render several times slower than one.
-    ap.add_argument("--frame-timeout", type=float, default=30.0)
+    ap.add_argument("--frame-timeout", type=float, default=90.0)
     a = ap.parse_args()
 
     plan = json.loads(open(a.plan).read())
