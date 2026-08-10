@@ -33,10 +33,11 @@ set dotenv-load := true
 
 repo   := justfile_directory()
 assets := repo / "assets"
-# HY-World shards across every visible GPU, so the rank count it is
-# launched with has to match what the container can see, or it
-# broadcasts from ranks torchrun never started. Derived, not repeated.
-gpus   := `echo "${DW_GPU_IDS:-1,2,3,4,5,6,7}" | tr ',' '\n' | grep -c .`
+# HY-World shards across every visible GPU, so the rank count it is launched
+# with has to match what the container can see. Derived, not repeated — but
+# four is also what upstream ships and what its FSDP sharding of a 14B video
+# model is known to work with, so widening this is not free.
+gpus   := `echo "${DW_GPU_IDS:-1,2,3,4}" | tr ',' '\n' | grep -c .`
 steps  := "2000"
 
 # The active project. A real environment variable wins over .env, so a single
@@ -212,15 +213,11 @@ generate id spacing="0.25" proj=project: up
         fi
     else
         cp "$src" "$out/_input.${src##*.}"
-        # the generative pipeline reads panorama.png
-        docker compose exec -T generator python -c "
-        from pathlib import Path
-        from PIL import Image
-        Image.MAX_IMAGE_PIXELS = None
-        d = Path('$win/splats/$id')
-        src = next(p for p in d.iterdir() if p.stem == '_input')
-        Image.open(src).convert('RGB').save(d / 'panorama.png')
-        src.unlink()"
+        # The generative pipeline reads panorama.png. One line, because a
+        # recipe body must be indented for `just` to parse it and that same
+        # indentation reaches `python -c` as an IndentationError — which is
+        # what this branch did, before anything else could run.
+        docker compose exec -T generator python -c "from pathlib import Path; import PIL.Image as I; I.MAX_IMAGE_PIXELS=None; d=Path('$win/splats/$id'); s=next(p for p in d.iterdir() if p.stem=='_input'); I.open(s).convert('RGB').save(d/'panorama.png'); s.unlink()"
         docker compose exec -T generator python submit.py \
             generate-world/dreamworld \
             scene="$win/splats/$id" \
@@ -287,6 +284,27 @@ capture edge spacing="0.25" proj=project: up
         capture-edge/dreamworld \
         project={{proj}} edge={{edge}} spacing={{spacing}}
     @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
+
+# One generated world per corridor, from a single panorama of it.
+#
+# HY-World takes one vantage point and imagines the rest, so a corridor needs
+# one panorama, not a walk: this photographs it if that has not been done, then
+# hands the middle standpoint to generate-world. The middle one because the
+# ends of a lane sit against whatever the corridor opens onto.
+#
+#   just world-edge L11.cafe--v7
+world-edge edge proj=project: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir={{assets}}/projects/{{proj}}
+    if ! compgen -G "$dir/panos/{{edge}}/*.png" >/dev/null; then
+        just capture {{edge}} 0.5 {{proj}}
+    fi
+    mapfile -t shots < <(find "$dir/panos/{{edge}}" -maxdepth 1 -name '*.png' | sort)
+    pick="${shots[$(( ${#shots[@]} / 2 ))]}"
+    cp "$pick" "$dir/panos/{{edge}}@world.png"
+    echo "generating a world for {{edge}} from $(basename "$pick")"
+    just generate "{{edge}}@world" 0.5 {{proj}}
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
 # one is a single re-run rather than a lost batch.

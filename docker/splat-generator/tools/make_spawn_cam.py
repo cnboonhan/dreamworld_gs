@@ -20,6 +20,14 @@ from pathlib import Path
 import numpy as np
 
 
+# HY-World writes its worlds in a canonical frame with -Y up, the same
+# convention the reconstruction path produces. Its extrinsics do not share
+# COLMAP's row layout, so deriving up from them the same way yields +Z and
+# every render comes out rolled 90 degrees. Established by rendering the same
+# viewpoint under each candidate: -Y is upright, +Z is on its side.
+HYWORLD_UP = np.array([0.0, -1.0, 0.0])
+
+
 def training_cameras(scene: Path) -> np.ndarray:
     """(N,4,4) world->camera matrices from the GS training data."""
     path = scene / "gs_data" / "cameras.json"
@@ -52,7 +60,8 @@ def colmap_cameras(model: Path) -> tuple[np.ndarray, list[str]]:
     return np.stack(mats), names
 
 
-def write_path(w2c: np.ndarray, world: Path, names: list[str] | None = None) -> None:
+def write_path(w2c: np.ndarray, world: Path, names: list[str] | None = None,
+               up_hint: np.ndarray | None = None) -> None:
     """Sample the straight line through the standpoints, for the viewer.
 
     The viewer's tour then walks the camera along the same line the rendered
@@ -88,8 +97,11 @@ def write_path(w2c: np.ndarray, world: Path, names: list[str] | None = None) -> 
     mid = pts.mean(0)
     line = np.linspace(mid + axis * t.min(), mid + axis * t.max(), 240)
 
-    ups = np.stack([-m[:3, :3].T @ np.array([0.0, 1.0, 0.0]) for m in w2c])
-    up = ups.mean(0)
+    if up_hint is not None:
+        up = np.asarray(up_hint, dtype=np.float64)
+    else:
+        ups = np.stack([-m[:3, :3].T @ np.array([0.0, 1.0, 0.0]) for m in w2c])
+        up = ups.mean(0)
     up /= max(np.linalg.norm(up), 1e-9)
 
     out = world.with_suffix("").as_posix() + ".path.json"
@@ -105,7 +117,7 @@ def main() -> None:
     args = sys.argv[1:]
     # --colmap <sparse-model> <world.ply>: the reconstruction flow has no
     # gs_data/cameras.json, its poses live in the COLMAP model
-    names = None
+    names, up_hint = None, None
     if args and args[0] == "--colmap":
         model, world = Path(args[1]), Path(args[2])
         w2c, names = colmap_cameras(model)
@@ -113,20 +125,39 @@ def main() -> None:
         scene = Path(args[0])
         world = Path(args[1]) if len(args) > 1 else scene / "world.ply"
         w2c = training_cameras(scene)
+        up_hint = HYWORLD_UP
     centers = np.stack([-m[:3, :3].T @ m[:3, 3] for m in w2c])
     # most central camera: representative of the interior, and away from the
     # trajectory endpoints that often sit against a wall
     pick = int(np.argmin(np.linalg.norm(centers - np.median(centers, 0), axis=1)))
 
-    write_path(w2c, world, names)
+    write_path(w2c, world, names, up_hint)
 
     out = world.with_suffix("").as_posix() + ".cam.json"
+    if up_hint is not None:
+        # Built here rather than copied from a training extrinsic. Those are
+        # laid out differently from COLMAP's, so handing one straight to the
+        # viewer opened every generated world rolled on its side. Looking along
+        # the walk with a known up gives the same camera the walkthrough uses.
+        pts = json.loads(Path(world.with_suffix("").as_posix()
+                              + ".path.json").read_text())["points"]
+        eye = np.asarray(pts[len(pts) // 2], dtype=np.float64)
+        ahead = np.asarray(pts[min(len(pts) // 2 + 10, len(pts) - 1)],
+                           dtype=np.float64)
+        fwd = ahead - eye
+        fwd /= max(np.linalg.norm(fwd), 1e-9)
+        right = np.cross(fwd, up_hint); right /= max(np.linalg.norm(right), 1e-9)
+        down = np.cross(fwd, right)
+        R = np.stack([right, down, fwd])
+        m = np.eye(4); m[:3, :3] = R; m[:3, 3] = -R @ eye
+        view, source = m.T.flatten(), "along the generated walk"
+    else:
+        view, source = w2c[pick].T.flatten(), f"training camera {pick} of {len(w2c)}"
     Path(out).write_text(json.dumps({
-        "viewMatrix": [round(float(v), 6) for v in w2c[pick].T.flatten()],
-        "source": f"training camera {pick} of {len(w2c)}",
+        "viewMatrix": [round(float(v), 6) for v in view],
+        "source": source,
     }, indent=2))
-    print(f"wrote {out} (camera {pick}/{len(w2c)}, "
-          f"center {centers[pick].round(2).tolist()})")
+    print(f"wrote {out} ({source})")
 
 
 if __name__ == "__main__":
