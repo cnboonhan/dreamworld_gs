@@ -108,7 +108,7 @@ def export_world(scene: str) -> dict:
     world.write_bytes(plys[-1].read_bytes())
 
     sh(["python", TOOLS / "ply_to_isaac.py", world, f"{scene}/world.usdz"], logger)
-    sh(["python", TOOLS / "make_spawn_cam.py", scene, world], logger)
+    sh(["python", TOOLS / "make_spawn_cam.py", scene], logger)
     return {"ply": str(world), "usdz": f"{scene}/world.usdz"}
 
 

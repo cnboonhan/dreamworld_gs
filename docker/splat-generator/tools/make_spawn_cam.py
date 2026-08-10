@@ -1,18 +1,19 @@
-"""Tag a generated world with the camera the viewer should spawn at, and the
-path it should tour along.
+"""Tag a built world with the walk it should be toured along, and the camera
+the viewer should open at.
 
-Writes <world>.path.json, the level line the standpoints lie on, and
-<world>.cam.json, a 16-float column-major world->camera matrix midway along
-it. The viewer picks both up automatically, so a scene opens at eye level the
-right way up rather than in the viewer's arbitrary default orientation, and
-its tour rides the same walk the rendered video does.
+Writes <world>.path.json — the walk, its up axis, and how long it is in the
+building — and <world>.cam.json, a 16-float column-major world->camera matrix
+midway along it. The viewer picks both up automatically, so a scene opens at
+eye level the right way up rather than in the viewer's arbitrary default
+orientation, and its tour rides the walk the rendered video does.
 
-Both flows land here. A reconstructed world's poses come from its COLMAP
-model; a generated one's come from HY-World's own record of the frame it
-normalised the world into.
+Both flows land here, and the difference between them is where the walk comes
+from. A generated world is one corridor, so its walk is that corridor's lane
+out of the building map. A reconstructed one is a real place with no map, so
+its walk is fitted through the standpoints COLMAP recovered.
 
 Usage:
-    python make_spawn_cam.py <scene-dir> [world.ply]
+    python make_spawn_cam.py <scene-dir>
     python make_spawn_cam.py --colmap <sparse-model> <world.ply>
 """
 
@@ -26,6 +27,8 @@ import torch
 
 # a world generated from one panorama, rather than reconstructed from many
 GENERATED = "@world"
+# enough that the viewer's tour and the video interpolate the same curve
+POINTS = 240
 
 
 def unit(v) -> np.ndarray:
@@ -97,82 +100,40 @@ def to_building(scene: Path, panos: Path, pick: str, p0: np.ndarray) -> np.ndarr
     return np.concatenate([M, (centre - M @ p0)[:, None]], 1)
 
 
-def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float] | None:
+def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float]:
     """(points, up, length_m) tracing this world's lane, in world coordinates.
 
-    A generated world is one corridor, so the walk through it is that
-    corridor's lane out of the building — the same straight line a camera
-    driven through Gazebo would take, at the height the panoramas were shot
-    from. Fitting a line through HY-World's planned cameras instead walked
-    metres of invented space either side of a corridor only a metre or two
-    long, which is what made the tours wander.
+    A generated world is one corridor — `<edge>@world`, built from one
+    panorama of it — so the walk through it is that corridor's lane out of the
+    building map, at the height the panoramas were shot from. It is the line a
+    camera driven through Gazebo would take. Fitting one through HY-World's
+    planned cameras instead walked metres of invented space either side of a
+    corridor a metre or two long, which is what made the tours wander.
     """
-    if not scene.name.endswith(GENERATED):
-        return None
     edge = scene.name[:-len(GENERATED)]
     root = scene.parent.parent
     panos = root / "panos" / edge
-    plans = sorted(root.glob("worlds/*/capture_plan.json"))
-    if not (panos / "poses.json").is_file() or not plans:
-        return None
-    lane = next((e for data in json.loads(plans[0].read_text())["levels"].values()
-                 for e in data["edges"] if e["id"] == edge), None)
+    plan = json.loads(next(root.glob("worlds/*/capture_plan.json")).read_text())
+    levels = plan["levels"].values()
+    lane = next((e for data in levels for e in data["edges"] if e["id"] == edge), None)
     if lane is None:
-        return None
-    verts = {v["id"]: v for data in json.loads(plans[0].read_text())["levels"].values()
-             for v in data["vertices"]}
+        raise SystemExit(f"{edge} is not a lane in this building's map")
+    verts = {v["id"]: v for data in levels for v in data["vertices"]}
 
     stand = json.loads((panos / "poses.json").read_text())["standpoints"]
-    # the same panorama world-edge handed to HY-World: the middle of the walk
-    pick = sorted(s["image"] for s in stand)[len(stand) // 2]
     xyz = {s["image"]: np.asarray(s["xyz"], dtype=np.float64) for s in stand}
+    # the same panorama world-edge handed to HY-World: the middle of the walk
+    pick = sorted(xyz)[len(xyz) // 2]
     height = float(np.median([p[2] for p in xyz.values()]))
     a = np.array([verts[lane["a"]]["x"], verts[lane["a"]]["y"], height])
     b = np.array([verts[lane["b"]]["x"], verts[lane["b"]]["y"], height])
-    # walked a to b, which is the order the id names and the order capture.py
-    # sampled the lane in
-    if np.linalg.norm(xyz[sorted(xyz)[0]] - b) < np.linalg.norm(xyz[sorted(xyz)[0]] - a):
-        a, b = b, a
-
-    T = to_building(scene, panos, pick, xyz[pick])
-    line = np.linspace(a, b, 240)
+    # capture.py sampled the lane a to b, so the walk goes the way the id reads
     length = float(np.linalg.norm(b - a))
     print(f"  {edge}: {length:.2f} m lane at {height:.2f} m")
-    return (line @ T[:, :3].T + T[:, 3], unit(T[:, :3] @ [0.0, 0.0, 1.0]), length)
 
-
-def hyworld_walk(scene: Path) -> tuple[np.ndarray, np.ndarray]:
-    """(standpoints, up) for a generated world, in its exported ply's frame.
-
-    The world is not axis-aligned — this building's corridors come out with up
-    at [-0.07, -0.58, -0.82] and no two the same — so up cannot be guessed, and
-    guessing it is what put the tour camera on its side walking into the
-    ceiling: an up that is really a horizontal direction leaves cross(forward,
-    up) nearly degenerate, which rolls the render and tilts the walk at once.
-
-    It does not have to be guessed. HY-World records the frame it normalised
-    the world into, beside the ply it exported: up, facing, centre and scale.
-    The training extrinsics live in that normalised frame, so those four
-    numbers map their centres back to ply coordinates exactly, and the walk
-    comes out where the scene was actually observed.
-    """
-    meta = json.loads((scene / "gs_result" / "ply"
-                       / "position_meta_info.json").read_text())
-    up, fwd = unit(meta["up_direction"]), unit(meta["facing_direction"])
-    centre = np.asarray(meta["center_point"], dtype=np.float64)
-    scale = float(meta["scale"])
-
-    path = scene / "gs_data" / "cameras.json"
-    data = json.loads(path.read_text())
-    entries = data.values() if isinstance(data, dict) else data
-    # the file mixes per-camera dicts with scalar metadata entries
-    mats = [np.asarray(e["extrinsic"], dtype=np.float64).reshape(4, 4)
-            for e in entries if isinstance(e, dict) and "extrinsic" in e]
-    if not mats:
-        raise SystemExit(f"no extrinsics in {path}")
-    normalised = np.stack([-m[:3, :3].T @ m[:3, 3] for m in mats])
-    rows = np.stack([unit(np.cross(fwd, up)), fwd, up])
-    return centre + scale * (normalised @ rows), up
+    T = to_building(scene, panos, pick, xyz[pick])
+    line = np.linspace(a, b, POINTS) @ T[:, :3].T + T[:, 3]
+    return line, unit(T[:, :3] @ [0.0, 0.0, 1.0]), length
 
 
 def colmap_cameras(model: Path) -> tuple[np.ndarray, list[str]]:
@@ -210,8 +171,7 @@ def colmap_walk(model: Path) -> tuple[np.ndarray, np.ndarray]:
     return pts, unit(up)
 
 
-def fit_walk(pts: np.ndarray, up: np.ndarray,
-             facing: np.ndarray | None = None) -> np.ndarray:
+def fit_walk(pts: np.ndarray, up: np.ndarray) -> np.ndarray:
     """Points along the level line the standpoints lie on.
 
     The viewer's tour and the rendered walkthrough both ride this, which keeps
@@ -224,31 +184,32 @@ def fit_walk(pts: np.ndarray, up: np.ndarray,
     centred = flat - flat.mean(0)
     axis = unit(np.linalg.svd(centred, full_matrices=False)[2][0])
     t = centred @ axis
-    if (axis @ facing if facing is not None else t[-1] - t[0]) < 0:
+    if t[-1] < t[0]:                     # travel the way the walk went
         axis, t = -axis, -t
-    # the ends are excursions: HY-World sweeps its cameras out past the room to
-    # see round corners, and a capture's first and last standpoints sit against
-    # the vertices. Neither belongs in a walkthrough.
+    # the first and last standpoints sit against the vertices, where the
+    # corridor opens onto whatever is beyond it
     lo, hi = np.percentile(t, [10, 90])
     mid = flat.mean(0) + up * height
-    return np.linspace(mid + axis * lo, mid + axis * hi, 240)
+    return np.linspace(mid + axis * lo, mid + axis * hi, POINTS)
 
 
-def write_path(world: Path, line: np.ndarray, up: np.ndarray, source: str,
-               length_m: float | None = None) -> np.ndarray:
+def write_path(world: Path, line: np.ndarray, up: np.ndarray,
+               length_m: float, source: str) -> np.ndarray:
+    """The walk, and how long it is in the building.
+
+    `length_m` is what lets the walkthrough run at walking speed instead of
+    stretching every corridor to a common duration. A reconstruction is metric
+    already, so there it is the line's own length; a generated world is not, so
+    there it is the lane's.
+    """
     out = world.with_suffix("").as_posix() + ".path.json"
-    doc = {
+    Path(out).write_text(json.dumps({
         "points": [[round(float(v), 5) for v in p] for p in line],
         "up": [round(float(v), 5) for v in up],
+        "length_m": round(float(length_m), 3),
         "source": source,
-    }
-    # how long the walk is in the building, when that is known: it is what
-    # lets the walkthrough be paced at walking speed rather than at whatever
-    # speed fills a fixed number of seconds
-    if length_m is not None:
-        doc["length_m"] = round(float(length_m), 3)
-    Path(out).write_text(json.dumps(doc))
-    print(f"wrote {out} ({len(line)} points, {source})")
+    }))
+    print(f"wrote {out} ({length_m:.2f} m, {source})")
     return line
 
 
@@ -279,27 +240,19 @@ def main() -> None:
     args = sys.argv[1:]
     # --colmap <sparse-model> <world.ply>: the reconstruction flow has no
     # gs_data/cameras.json, its poses live in the COLMAP model
-    length = None
-    if args and args[0] == "--colmap":
+    if args[0] == "--colmap":
         world = Path(args[2])
         pts, up = colmap_walk(Path(args[1]))
-        line, source = fit_walk(pts, up), f"fitted through {len(pts)} standpoints"
+        line = fit_walk(pts, up)
+        # a reconstruction is already metric, scaled by the walked interval
+        length = float(np.linalg.norm(line[-1] - line[0]))
+        source = f"fitted through {len(pts)} standpoints"
     else:
         scene = Path(args[0])
-        world = Path(args[1]) if len(args) > 1 else scene / "world.ply"
-        walk = building_walk(scene)
-        if walk is not None:
-            line, up, length = walk
-            source = "the lane, out of the building"
-        else:
-            # no capture to align to: a world generated from a loose panorama
-            pts, up = hyworld_walk(scene)
-            facing = unit(json.loads((scene / "gs_result" / "ply"
-                                      / "position_meta_info.json").read_text())
-                          ["facing_direction"])
-            line = fit_walk(pts, up, facing)
-            source = f"fitted through {len(pts)} planned cameras"
-    write_cam(world, write_path(world, line, up, source, length), up)
+        world = scene / "world.ply"
+        line, up, length = building_walk(scene)
+        source = "the lane, out of the building"
+    write_cam(world, write_path(world, line, up, length, source), up)
 
 
 if __name__ == "__main__":

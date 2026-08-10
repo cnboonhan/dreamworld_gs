@@ -226,11 +226,13 @@ generate id spacing="0.25" proj=project: up
     echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .path.json)"
     echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
 
-# Render a walkthrough of one splat, riding the walk it was captured from.
+# Render a walkthrough of one splat, riding the walk it was built from.
 #
-#   just video cafe        twenty seconds
-#   just video cafe 40     slower
-video id seconds="20" proj=project: up
+# Paced at walking speed from the length the splat's sidecar records, so a one
+# metre corridor and a six metre one are watched at the same speed.
+#
+#   just video L11.cafe--v7@world
+video id proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
@@ -240,7 +242,7 @@ video id seconds="20" proj=project: up
     fi
     docker compose exec -T generator python submit.py \
         render-video/dreamworld \
-        scene=/workspace/projects/{{proj}}/splats/{{id}} seconds={{seconds}}
+        scene=/workspace/projects/{{proj}}/splats/{{id}}
     echo "-> assets/projects/{{proj}}/splats/{{id}}/walkthrough.mp4"
 
 # Build the Gazebo world + nav graph from a project's building map.
@@ -266,20 +268,19 @@ world map="" proj=project: up
 # everything downstream is exercised on the same input it will get for real.
 #
 # spacing is how far apart you stop, as when walking — the number of stops
-# follows from the corridor's length. It is also what makes the reconstruction
-# metric, so `just generate` should be given the interval the run reports.
+# follows from the corridor's length. Half a metre is plenty for the generative
+# path, which takes one panorama of a corridor and imagines the rest.
 #
-# Spacing is how far apart you stop, as when walking, and it is the strongest
-# lever on how the splat looks. Nine standpoints along a four-metre corridor
-# fits the views it was trained on and falls apart between them, which is
-# exactly where a walkthrough goes: halving the spacing to 0.25 m took a
-# held-out viewpoint from 29.65 to 45.27 dB and the render from veiled to
-# crisp. It is also what makes the reconstruction metric, so pass the same
-# value to `generate`.
+# It matters far more if you reconstruct a corridor instead of generating one,
+# where it is the strongest lever on how the splat looks: nine standpoints
+# along a four-metre corridor fit the views they were trained on and fall apart
+# between them, which is exactly where a walkthrough goes. Halving it to 0.25 m
+# took a held-out viewpoint from 29.65 to 45.27 dB. It is also what makes a
+# reconstruction metric, so pass the same value to `generate`.
 #
-#   just capture L11.cafe--v7        stop every 25 cm
-#   just capture L11.cafe--v7 0.5    faster to capture, visibly hazier
-capture edge spacing="0.25" proj=project: up
+#   just capture L11.cafe--v7        stop every half metre
+#   just capture L11.cafe--v7 0.25   denser, for reconstructing rather than generating
+capture edge spacing="0.5" proj=project: up
     docker compose exec -T generator python submit.py \
         capture-edge/dreamworld \
         project={{proj}} edge={{edge}} spacing={{spacing}}
@@ -304,11 +305,12 @@ world-edge edge proj=project: up
     pick="${shots[$(( ${#shots[@]} / 2 ))]}"
     cp "$pick" "$dir/panos/{{edge}}@world.png"
     echo "generating a world for {{edge}} from $(basename "$pick")"
+    # spacing is inert on this branch — one panorama, so nothing is walked
     just generate "{{edge}}@world" 0.5 {{proj}}
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
 # one is a single re-run rather than a lost batch.
-capture-all spacing="0.25" proj=project: up
+capture-all spacing="0.5" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     plan=$(find {{assets}}/projects/{{proj}}/worlds -name capture_plan.json | head -1)
@@ -348,9 +350,8 @@ route start goal proj=project: up
 # step at each vertex, since every frame is rasterised from the union of their
 # gaussians.
 #
-#   just route-video L11.cafe L11.v3          the pace of a walk
-#   just route-video L11.cafe L11.v3 30       thirty seconds
-route-video start goal seconds="0" proj=project: up
+#   just route-video L11.cafe L11.v3
+route-video start goal proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     f={{assets}}/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json
@@ -360,8 +361,7 @@ route-video start goal seconds="0" proj=project: up
     fi
     docker compose exec -T generator python submit.py \
         render-route/dreamworld \
-        route=/workspace/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json \
-        seconds={{seconds}}
+        route=/workspace/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json
     echo "-> assets/projects/{{proj}}/traversals/{{start}}__{{goal}}.mp4"
 
 # Package a project into one tarball, to carry to another node.

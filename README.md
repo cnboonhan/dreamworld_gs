@@ -137,11 +137,11 @@ photographed, so the whole pipeline runs with no camera:
 
 ```bash
 just capture L11.cafe--v7        # -> panos/L11.cafe--v7/000.png ...
-just capture L11.cafe--v7 0.5    # stop further apart — faster, visibly hazier
+just capture L11.cafe--v7 0.25   # stop closer together, for reconstructing
 just capture-all                 # every corridor not yet shot, one job each
 ```
 
-A camera weaves along the lane, stopping every 25 cm and taking a full 360 at
+A camera weaves along the lane, stopping every half metre and taking a full 360 at
 each, alternating between 1.25 m and 1.95 m so every surface is seen from two
 different angles rather than ten nearly identical ones. The weave matters: walking a corridor straight is the worst
 baseline for the surfaces you are walking toward, because consecutive
@@ -177,13 +177,17 @@ to leave it unitless.
 `generate` skips a scene that already has a `world.ply` — delete the scene
 directory to rebuild.
 
-**A video**, along the capture path:
+**A video**, along the walk:
 
 ```bash
-just video cafe             # -> splats/cafe/walkthrough.mp4
-just video cafe 40          # longer
-just video cafe 20 spline   # visit each standpoint exactly
+just video L11.cafe--v7@world    # -> splats/<id>/walkthrough.mp4
 ```
+
+The camera rides `world.path.json`, which the build writes beside the splat: a
+generated world's corridor straight out of the building map, a reconstructed
+one's walk through its own standpoints. It is paced at walking speed from the
+length recorded there, so a one-metre corridor and a six-metre one are watched
+at the same speed rather than stretched to a common duration.
 
 One scene per job — build them one at a time and each gets its own run to
 inspect, retry or compare.

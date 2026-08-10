@@ -351,9 +351,13 @@ def write_sidecars(panos_dir: Path, world: Path) -> dict:
         for i in range(20):
             pts.append(a + (b - a) * (i / 20))
     pts.append(C[-1])
+    # these poses are in building metres already, so the walked distance is
+    # the length the walkthrough is paced by
+    walked = float(sum(np.linalg.norm(b - a) for a, b in zip(C, C[1:])))
     Path(world.with_suffix("").as_posix() + ".path.json").write_text(json.dumps({
         "points": [[round(float(v), 5) for v in p] for p in pts],
         "up": [0.0, 0.0, 1.0],
-        "standpoints": len(C),
+        "length_m": round(walked, 3),
+        "source": f"the recorded walk over {len(C)} standpoints",
     }))
     return {"standpoints": len(C), "points": len(pts)}

@@ -1,21 +1,23 @@
 """render-video — a walkthrough of a built splat, as a job.
 
-The camera follows the capture path, because that is where the scene was
-actually observed; straying from it is where a gaussian splat looks worst,
-since nothing constrained the geometry there.
+The camera rides `world.path.json`: for a generated world that is the corridor
+it was built from, straight out of the building map; for a reconstructed one it
+is the walk the panoramas were shot along. Either way it is where the scene was
+actually observed, and straying from it is where a gaussian splat looks worst.
 
 Three stages, so a long render reports where it is rather than going quiet:
 
-  1. plan       the capture path -> one camera pose per frame
+  1. plan       the walk -> one camera pose per frame
   2. render     rasterise every frame (GPU)
   3. encode     H.264, so browsers and players accept it
 
   python submit.py render-video/dreamworld \
-      scene=/workspace/projects/<p>/splats/<s> seconds=20
+      scene=/workspace/projects/<p>/splats/<s>
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -28,26 +30,21 @@ import render_video as rv  # noqa: E402
 @task(name="1. plan path")
 def plan(scene: str, n_frames: int) -> dict:
     logger = get_run_logger()
-    eyes, targets, up, n_stand = rv.plan_path(Path(scene), n_frames)
-    span = float(((eyes[-1] - eyes[0]) ** 2).sum() ** 0.5)
-    logger.info("the recorded walk over %d standpoints, %.2f m end to end, "
-                "%d frames", n_stand, span, n_frames)
-    return {"eyes": eyes.tolist(), "targets": targets.tolist(),
-            "up": up.tolist(), "standpoints": n_stand}
+    eyes, targets, up = rv.plan_path(Path(scene), n_frames)
+    logger.info("the walk, %d frames", n_frames)
+    return {"eyes": eyes.tolist(), "targets": targets.tolist(), "up": up.tolist()}
 
 
 @task(name="2. render")
-def render(scene: str, plan: dict, out: str) -> str:
+def render(plan: dict, out: str) -> str:
     import numpy as np
 
     logger = get_run_logger()
-    plys = [Path(p) for p in plan.get("plys", [])]
-    tmp = rv.render_frames(Path(scene), np.array(plan["eyes"]),
-                           np.array(plan["targets"]), np.array(plan["up"]),
-                           Path(out), rv.WIDTH, rv.HEIGHT, rv.FOV, rv.FPS,
-                           plys=plys or None)
+    plys = [Path(p) for p in plan["plys"]]
+    tmp = rv.render_frames(np.array(plan["eyes"]), np.array(plan["targets"]),
+                           np.array(plan["up"]), Path(out), plys)
     logger.info("rasterised %d frames at %dx%d from %d splat(s)",
-                len(plan["eyes"]), rv.WIDTH, rv.HEIGHT, len(plys) or 1)
+                len(plan["eyes"]), rv.WIDTH, rv.HEIGHT, len(plys))
     return str(tmp)
 
 
@@ -73,26 +70,25 @@ def _run_name() -> str:
     return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
 
 
-@flow(name="render-video", log_prints=True,
-      flow_run_name=_run_name)
-def render_walkthrough(scene: str, seconds: float = 0.0) -> dict:
-    """scene: a splats/<name> directory holding world.ply and its COLMAP model.
+@flow(name="render-video", log_prints=True, flow_run_name=_run_name)
+def render_walkthrough(scene: str) -> dict:
+    """scene: a splats/<name> directory holding world.ply and world.path.json.
 
-    seconds=0 paces the walk at walking speed, from the length its sidecar
-    records — these corridors run from one metre to six, and one duration for
-    all of them is a crawl through some and a dash through others.
+    The walk is paced at walking speed from the length the sidecar records, so
+    a one-metre corridor and a six-metre one are watched at the same speed
+    rather than stretched to a common duration.
     """
     logger = get_run_logger()
     if not (Path(scene) / "world.ply").is_file():
         raise SystemExit(f"no world.ply in {scene} — build the splat first")
     out = str(Path(scene) / "walkthrough.mp4")
-    n_frames = int(rv.seconds_for(Path(scene), seconds or None) * rv.FPS)
+    doc = json.loads((Path(scene) / "world.path.json").read_text())
+    n_frames = rv.frames_for(doc["length_m"])
     logger.info("rendering %s -> %s", scene, out)
 
     p = plan(scene, n_frames)
-    tmp = render(scene, p, out)
-    result = encode(tmp, out)
-    result["standpoints"] = p["standpoints"]
+    p["plys"] = [str(Path(scene) / "world.ply")]
+    result = encode(render(p, out), out)
     result["frames"] = n_frames
     return result
 
@@ -100,8 +96,6 @@ def render_walkthrough(scene: str, seconds: float = 0.0) -> dict:
 @task(name="1. plan route")
 def plan_route_path(route: str, n_frames: int) -> dict:
     """The route's polyline, as camera poses — and the splats it crosses."""
-    import json
-
     logger = get_run_logger()
     doc = json.loads(Path(route).read_text())
     eyes, targets, up = rv.route_path(doc, n_frames)
@@ -118,7 +112,7 @@ def plan_route_path(route: str, n_frames: int) -> dict:
     logger.info("%s: %.1f m over %d splat(s), %d frames",
                 " -> ".join(doc["waypoints"]), doc["metres"], len(plys), n_frames)
     return {"eyes": eyes.tolist(), "targets": targets.tolist(),
-            "up": up.tolist(), "plys": plys, "standpoints": len(doc["segments"])}
+            "up": up.tolist(), "plys": plys}
 
 
 def _route_run_name() -> str:
@@ -128,7 +122,7 @@ def _route_run_name() -> str:
 
 
 @flow(name="render-route", log_prints=True, flow_run_name=_route_run_name)
-def render_route(route: str, seconds: float = 0.0) -> dict:
+def render_route(route: str) -> dict:
     """A walkthrough of a whole route, the way the viewer streams it.
 
     The viewer is the live version of this and needs no render; this is the
@@ -136,19 +130,14 @@ def render_route(route: str, seconds: float = 0.0) -> dict:
     — and, because it is rasterised from the union of the corridors' gaussians,
     it is also the check that they meet without a step at the vertex.
     """
-    import json
-
     logger = get_run_logger()
     doc = json.loads(Path(route).read_text())
     out = str(Path(route).with_suffix("").with_suffix("")) + ".mp4"
-    # a walking pace, so a long route is not a sprint
-    seconds = seconds or max(5.0, doc.get("metres", 10) * 1.5)
-    n_frames = int(seconds * rv.FPS)
-    logger.info("rendering %s -> %s (%.0f s)", route, out, seconds)
+    n_frames = rv.frames_for(doc["metres"])
+    logger.info("rendering %s -> %s (%d frames)", route, out, n_frames)
 
     p = plan_route_path(route, n_frames)
-    tmp = render(str(Path(route).parent), p, out)
-    result = encode(tmp, out)
+    result = encode(render(p, out), out)
     result["waypoints"] = doc["waypoints"]
     result["splats"] = len(p["plys"])
     result["frames"] = n_frames

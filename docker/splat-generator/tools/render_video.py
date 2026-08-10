@@ -1,10 +1,12 @@
-"""Render a walkthrough video of a reconstructed world.
+"""Render a walkthrough video of a built world.
 
-The camera rides the recorded walk, because that is where the scene was
-actually observed — off it is what makes gaussian splats look bad, since those
-regions were never constrained by any view.
+The camera rides `world.path.json`, the walk make_spawn_cam wrote beside the
+splat — a generated world's corridor out of the building map, a reconstructed
+one's walk through its own standpoints. Either way it is where the scene was
+actually observed, and off it is what makes gaussian splats look bad, since
+those regions were never constrained by any view.
 
-    python render_video.py <scene-dir> [--seconds 20]
+    python render_video.py <scene-dir>
 
 Writes <scene>/walkthrough.mp4.
 """
@@ -23,6 +25,7 @@ SH_C0 = 0.28209479177387814
 # 720p at a natural walking field of view. Never varied, and the render is
 # short enough that a bigger one would not buy anything the capture resolves.
 WIDTH, HEIGHT, FOV, FPS = 1280, 720, 75.0, 30
+WALK_MS = 0.8                        # unhurried, and steady enough to look at
 
 
 def load_splat(ply: Path, device: str):
@@ -164,61 +167,31 @@ def look_at(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
     return m
 
 
-def walked_path(scene: Path) -> tuple[np.ndarray, np.ndarray, int]:
-    """(points, up, standpoints) for this scene's walk, however it was obtained.
-
-    `world.path.json` is the walk itself — written by whichever stage knew it.
-    A simulated capture recorded its standpoints and has no reconstruction to
-    read them back out of, so this is the only place they exist; a real one is
-    reconstructed first and the sidecar is derived from that. Preferring the
-    sidecar means one path source for both, and the COLMAP read below is the
-    fallback for splats built before it was written.
-    """
-    sidecar = scene / "world.path.json"
-    if sidecar.is_file():
-        doc = json.loads(sidecar.read_text())
-        pts = np.asarray(doc.get("points") or [], dtype=np.float64)
-        if len(pts) > 1:
-            up = np.asarray(doc.get("up") or [0.0, 0.0, 1.0], dtype=np.float64)
-            return (pts, up / max(np.linalg.norm(up), 1e-9),
-                    int(doc.get("standpoints") or len(pts)))
-    centres, up = capture_path(scene / "undistorted" / "sparse" / "0")
-    return centres, up, len(centres)
-
-
 def plan_path(scene: Path, n_frames: int):
     """(eyes, targets, up) for the camera, one entry per frame.
 
-    Ride where the camera actually was. Fitting a straight line through the
-    walk is smoother, and is a line no panorama was ever shot from — off the
-    observed path is exactly where a splat frays. Only a walk too short to
-    have a shape falls back to that.
+    `world.path.json` is the walk itself, written by make_spawn_cam whichever
+    way it knew it: a generated world's corridor comes out of the building map,
+    a reconstructed one's out of its COLMAP model. One source for both, so the
+    camera here only has to ride it.
     """
-    centres, up, n_stand = walked_path(scene)
-    if len(centres) >= 4:
-        eyes, targets = along_polyline(centres, up, n_frames)
-    else:
-        eyes, axis = straight_path(centres, n_frames)
-        span = float(np.linalg.norm(eyes[-1] - eyes[0]))
-        targets = eyes + axis * max(1.0, span * 0.3)
-    return eyes, targets, up, n_stand
+    doc = json.loads((scene / "world.path.json").read_text())
+    return route_path(doc, n_frames)
 
 
-def render_frames(scene: Path, eyes, targets, up, out: Path,
-                  width: int, height: int, fov: float, fps: int,
-                  plys: list[Path] | None = None) -> Path:
+def render_frames(eyes, targets, up, out: Path, plys: list[Path]) -> Path:
     """Rasterise every frame of the path into a raw mp4; returns its path."""
     import cv2
     from gsplat import rasterization
 
     dev = "cuda:0"
-    splat = load_splats(plys or [scene / "world.ply"], dev)
-    f = 0.5 * width / np.tan(np.radians(fov) * 0.5)
-    K = torch.tensor([[[f, 0, width / 2], [0, f, height / 2], [0, 0, 1]]],
+    splat = load_splats(plys, dev)
+    f = 0.5 * WIDTH / np.tan(np.radians(FOV) * 0.5)
+    K = torch.tensor([[[f, 0, WIDTH / 2], [0, f, HEIGHT / 2], [0, 0, 1]]],
                      dtype=torch.float32, device=dev)
     tmp = out.with_suffix(".raw.mp4")
     writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"mp4v"),
-                             fps, (width, height))
+                             FPS, (WIDTH, HEIGHT))
     quats = torch.nn.functional.normalize(splat["quats"], dim=1)
     n = len(eyes)
     for i, (eye, tgt) in enumerate(zip(eyes, targets)):
@@ -226,11 +199,11 @@ def render_frames(scene: Path, eyes, targets, up, out: Path,
         with torch.no_grad():
             rgb, _, _ = rasterization(
                 splat["means"], quats, splat["scales"], splat["opacities"],
-                splat["colors"], vm[None], K, width, height,
+                splat["colors"], vm[None], K, WIDTH, HEIGHT,
                 near_plane=0.01, rasterize_mode="classic")
         frame = (rgb[0].clamp(0, 1) * 255).byte().cpu().numpy()
         writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        if i % fps == 0:
+        if i % FPS == 0:
             print(f"  {i}/{n} frames", flush=True)
     writer.release()
     return tmp
@@ -247,39 +220,28 @@ def encode(tmp: Path, out: Path) -> None:
     tmp.unlink()
 
 
-WALK_MS = 0.8                        # unhurried, and steady enough to look at
+def frames_for(metres: float) -> int:
+    """How many frames a walk of this length earns.
 
-
-def seconds_for(scene: Path, asked: float | None) -> float:
-    """How long the walkthrough should run.
-
-    A corridor here is between one and six metres, so a fixed duration makes
-    one a crawl and another a dash. When the sidecar knows how long the walk
-    is in the building, walk it at walking speed instead.
+    A corridor here is between one and six metres and a route is tens, so one
+    duration for all of them is a crawl through some and a dash through
+    others. Walking speed instead, floored so the shortest is still watchable.
     """
-    if asked is not None:
-        return asked
-    sidecar = scene / "world.path.json"
-    if sidecar.is_file():
-        length = json.loads(sidecar.read_text()).get("length_m")
-        if length:
-            return float(min(30.0, max(6.0, length / WALK_MS)))
-    return 20.0
+    return int(max(6.0, metres / WALK_MS) * FPS)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("scene", type=Path)
-    ap.add_argument("--seconds", type=float, default=None)
     args = ap.parse_args()
 
-    n_frames = int(seconds_for(args.scene, args.seconds) * FPS)
+    doc = json.loads((args.scene / "world.path.json").read_text())
+    n_frames = frames_for(doc["length_m"])
     out = args.scene / "walkthrough.mp4"
-    eyes, targets, up, n_stand = plan_path(args.scene, n_frames)
-    tmp = render_frames(args.scene, eyes, targets, up, out, WIDTH, HEIGHT, FOV, FPS)
+    eyes, targets, up = plan_path(args.scene, n_frames)
+    tmp = render_frames(eyes, targets, up, out, [args.scene / "world.ply"])
     encode(tmp, out)
-    print(f"wrote {out} ({out.stat().st_size / 1e6:.1f}MB, "
-          f"{n_frames} frames, {n_stand} standpoints)")
+    print(f"wrote {out} ({out.stat().st_size / 1e6:.1f}MB, {n_frames} frames)")
 
 
 if __name__ == "__main__":
