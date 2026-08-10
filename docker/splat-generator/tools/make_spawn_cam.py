@@ -25,6 +25,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import pick_panorama
+
 # a world generated from one panorama, rather than reconstructed from many
 GENERATED = "@world"
 # enough that the viewer's tour and the video interpolate the same curve
@@ -122,8 +124,9 @@ def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float]:
 
     stand = json.loads((panos / "poses.json").read_text())["standpoints"]
     xyz = {s["image"]: np.asarray(s["xyz"], dtype=np.float64) for s in stand}
-    # the same panorama world-edge handed to HY-World: the middle of the walk
-    pick = sorted(xyz)[len(xyz) // 2]
+    # the same panorama world-edge handed to HY-World, by the same rule, so the
+    # frame this is solved in is the frame the world was built in
+    pick = pick_panorama.pick(panos)
     height = float(np.median([p[2] for p in xyz.values()]))
     a = np.array([verts[lane["a"]]["x"], verts[lane["a"]]["y"], height])
     b = np.array([verts[lane["b"]]["x"], verts[lane["b"]]["y"], height])

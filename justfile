@@ -290,8 +290,9 @@ capture edge spacing="0.5" proj=project: up
 #
 # HY-World takes one vantage point and imagines the rest, so a corridor needs
 # one panorama, not a walk: this photographs it if that has not been done, then
-# hands the middle standpoint to generate-world. The middle one because the
-# ends of a lane sit against whatever the corridor opens onto.
+# hands one standpoint to generate-world — the one that can see the most of the
+# corridor, measured from the range map the capture wrote (see
+# tools/pick_panorama.py).
 #
 #   just world-edge L11.cafe--v7
 world-edge edge proj=project: up
@@ -301,10 +302,10 @@ world-edge edge proj=project: up
     if ! compgen -G "$dir/panos/{{edge}}/*.png" >/dev/null; then
         just capture {{edge}} 0.5 {{proj}}
     fi
-    mapfile -t shots < <(find "$dir/panos/{{edge}}" -maxdepth 1 -name '*.png' | sort)
-    pick="${shots[$(( ${#shots[@]} / 2 ))]}"
-    cp "$pick" "$dir/panos/{{edge}}@world.png"
-    echo "generating a world for {{edge}} from $(basename "$pick")"
+    pick=$(docker compose exec -T generator python /opt/tools/pick_panorama.py \
+        /workspace/projects/{{proj}}/panos/{{edge}} | tr -d '\r')
+    cp "$dir/panos/{{edge}}/$pick" "$dir/panos/{{edge}}@world.png"
+    echo "generating a world for {{edge}} from $pick"
     # spacing is inert on this branch — one panorama, so nothing is walked
     just generate "{{edge}}@world" 0.5 {{proj}}
 
