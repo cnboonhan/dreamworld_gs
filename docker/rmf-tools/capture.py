@@ -34,6 +34,7 @@ Ported from the dreamworld pipeline's panorama_gz stage.
 """
 
 import argparse
+import glob
 import hashlib
 import json
 import math
@@ -408,6 +409,15 @@ def main():
     seed = int(hashlib.sha256(a.edge.encode()).hexdigest()[:8], 16)
     points, actual = standpoints(plan, a.edge, a.spacing, seed)
     os.makedirs(a.out_dir, exist_ok=True)
+    # A capture owns its folder. Re-photographing a corridor at a wider spacing
+    # writes fewer standpoints than the last run left behind, and what remains
+    # is a second capture's panoramas under numbers this one never wrote — a
+    # folder that is half one walk and half another. Every corridor in this
+    # building was in that state, and the run that noticed only noticed because
+    # a leftover index was missing from poses.json.
+    for stale in sorted(glob.glob(os.path.join(a.out_dir, "[0-9]*.png"))
+                        + glob.glob(os.path.join(a.out_dir, "[0-9]*.range.npy"))):
+        os.remove(stale)
 
     rclpy.init()
     node = Cam(WORLD, CAM_MODEL)

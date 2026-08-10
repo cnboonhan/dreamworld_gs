@@ -25,6 +25,7 @@ is a world of somewhere else.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -35,9 +36,24 @@ import numpy as np
 BAND = (0.40, 0.60)
 
 
+def standpoints(panos: Path) -> list[str]:
+    """The panoramas this capture wrote, in walk order.
+
+    From poses.json when a simulated capture left one, because the folder can
+    hold more than the capture put there — a corridor re-photographed at a
+    wider spacing used to leave the tail of the previous walk behind, and those
+    files are a different capture under numbers this one never wrote.
+    """
+    record = panos / "poses.json"
+    if record.is_file():
+        return sorted(s["image"] for s in
+                      json.loads(record.read_text())["standpoints"])
+    return sorted(p.name for p in panos.glob("[0-9]*.png"))
+
+
 def pick(panos: Path) -> str:
     """The panorama in `panos` with the most open view."""
-    names = sorted(p.name for p in panos.glob("[0-9]*.png"))
+    names = standpoints(panos)
     if not names:
         raise SystemExit(f"no panoramas in {panos}")
     if len(names) < 3:
