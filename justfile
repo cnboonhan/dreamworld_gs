@@ -146,6 +146,8 @@ down:
 # and `just vertices` the ones on a level.
 #
 # ^C stops following; the job keeps running (watch it at :4200).
+#
+# Generate the world at one waypoint, from its panorama.
 generate id proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
@@ -195,6 +197,8 @@ generate id proj=project: up
 #
 # map defaults to the project's own name, or to the only map in its maps/.
 # proj defaults to the active project (just use <name>).
+#
+# Build the Gazebo world and nav graph from a project's map.
 world map="" proj=project: up
     docker compose exec -T generator python submit.py \
         build-world/dreamworld project={{proj}} map="{{map}}"
@@ -220,6 +224,8 @@ world map="" proj=project: up
 #
 #   just capture L11.cafe--v7        stop every half metre
 #   just capture L11.cafe--v7 0.25   denser, for reconstructing rather than generating
+#
+# Photograph one corridor of the simulated building.
 capture edge spacing="0.5" proj=project: up
     docker compose exec -T generator python submit.py \
         capture-edge/dreamworld \
@@ -228,23 +234,41 @@ capture edge spacing="0.5" proj=project: up
 
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
 # one is a single re-run rather than a lost batch.
+#
+# Photograph every corridor of the simulated building not yet shot.
 capture-all spacing="0.5" proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     plan=$(find {{assets}}/projects/{{proj}}/worlds -name capture_plan.json | head -1)
     [ -n "$plan" ] || { echo "no capture plan — run: just world" >&2; exit 1; }
     todo=$(python3 -c "
-    import json, sys
+    import json
     from pathlib import Path
     root = Path('{{assets}}/projects/{{proj}}')
     doc = json.load(open('$plan'))
-    for c in doc['capture']:
-        if not any((root / c['panos']).glob('*')):
-            print(c['id'])
+    for data in doc['levels'].values():
+        for e in data['edges']:
+            if not any((root / 'panos' / e['id']).glob('*')):
+                print(e['id'])
     ")
     n=$(printf '%s' "$todo" | grep -c . || true)
     echo "$n corridor(s) to photograph"
     for e in $todo; do just capture "$e" {{spacing}} {{proj}}; done
+
+# The panorama alignment tool, on the host rather than in a container: it edits
+# assets/projects/*/panos in place and wants a browser pointed at it.
+#
+# A 360 records no heading, so a panorama arrives turned whichever way the
+# photographer happened to be standing. Rotate it until you are looking down a
+# corridor you can name, save, and the file itself is rewritten facing the
+# building's +X — so everything downstream loads it already right, and nothing
+# has to carry a correction around. Do it before `just generate`: the world is
+# built from the panorama.
+#
+# Turn each panorama to face the building, before generating from it.
+align level="L11" proj=project:
+    @echo "  http://localhost:8085"
+    uv run {{repo}}/scripts/align_panos.py --project {{proj}} --level {{level}}
 
 # Package a project into one tarball, to carry to another node.
 #
@@ -258,6 +282,8 @@ capture-all spacing="0.5" proj=project: up
 #
 #   just bundle                    the active project -> dist/
 #   just bundle htx /tmp           a named project, somewhere else
+#
+# Package a project into one tarball, to carry to another node.
 bundle proj=project dest="dist":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -279,6 +305,8 @@ bundle proj=project dest="dist":
 #
 # Run it on a fresh clone of this repo, then `just up` — the project lands in
 # assets/projects/ and the stack finds it.
+#
+# Restore a bundled project, in place.
 unbundle FILE:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -306,6 +334,8 @@ unbundle FILE:
 #
 #   just vertices          every level
 #   just vertices L11      one level
+#
+# The waypoints of a project's nav graph, with their positions.
 vertices level="" proj=project:
     @python3 {{repo}}/scripts/vertices.py {{proj}} {{level}}
 
@@ -318,6 +348,8 @@ vertices level="" proj=project:
 #
 #   just plan            everything
 #   just plan missing    only what still needs photographing
+#
+# Every waypoint, and how far along it is.
 plan filter="" proj=project:
     @python3 {{repo}}/scripts/plan_report.py {{assets}}/projects/{{proj}} {{filter}}
 

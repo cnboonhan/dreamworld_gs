@@ -648,8 +648,8 @@ function createWorker(self) {
             buffer = e.data.buffer;
             vertexCount = e.data.vertexCount;
             // a different buffer needs a new texture even when it happens to
-            // hold the same number of gaussians — which two windows of a route
-            // could, and the count alone would not notice
+            // hold the same number of gaussians — which the world you cross
+            // into could, and the count alone would not notice
             lastVertexCount = -1;
         } else if (e.data.vertexCount) {
             vertexCount = e.data.vertexCount;
@@ -755,10 +755,9 @@ let viewMatrix = defaultViewMatrix;
 const tour = {
     points: null, t: 0, dir: 1, on: false, playing: false, seconds: 10,
     up: null, a: null, b: null, yaw: 0, pitch: 0, release: null,
-    // a route turns corners, so its heading is the path's own direction here
-    // and yaw is an offset from it. A single capture walk is near enough a
-    // straight line that its own weave would only make the camera wobble, so
-    // there the heading stays fixed — which is what it has always been.
+    // when following, the heading is the path's own direction and yaw is an
+    // offset from it; otherwise the camera keeps whatever heading you gave it
+    // and simply travels the corridor.
     follow: false, look: 0.05,
     // a turn takes time. Choosing a waypoint changes the frame the camera's
     // yaw is measured in, so the view jumps by whatever the two frames differ
@@ -1130,9 +1129,6 @@ function tourPlace(t) {
     viewMatrix = m;
 }
 
-// unnamed vertices, and on a single-level route it is noise
-const shortName = (s) => String(s).replace(/^[^.]*\./, "");
-
 async function main() {
     let carousel = true;
     const params = new URLSearchParams(location.search);
@@ -1159,9 +1155,8 @@ async function main() {
         } catch (err) {}
     }
 
-    // Play, pause, scrub, speed and leave. Wired the same whether the tour runs
-    // along one capture walk or across a whole route: both drive tour.t, which
-    // is the only thing the camera reads.
+    // Play, pause, scrub, speed and leave. All of it drives tour.t, which is
+    // the only thing the camera reads.
     const showTourBar = () => {
         const bar = document.getElementById("tour");
         const play = document.getElementById("tourPlay");
@@ -1396,7 +1391,7 @@ async function main() {
         }
     };
 
-    // ---- streaming a route -------------------------------------------------
+    // ---- crossing into the next world --------------------------------------
     //
     // A second worker, used only to unpack. Parsing a PLY into 32-byte records
     // is the same code the render worker runs on load, but running it there

@@ -167,7 +167,7 @@ by whatever way the photographer happened to be standing, and the world
 generated from it inherits that. The alignment tool puts it right:
 
 ```bash
-uv run scripts/align_panos.py    # http://localhost:8085
+just align                       # http://localhost:8085
 ```
 
 Pick a waypoint, pick a corridor leaving it, and rotate the panorama until you

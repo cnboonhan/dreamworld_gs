@@ -506,36 +506,6 @@ def main() -> None:
         rec.write_text(json.dumps(doc, indent=1))
         return doc
 
-    def place(scene: str, vertex: str, at: list) -> dict:
-        """Where a vertex actually is, in this world's own coordinates.
-
-        Flown to and marked, rather than fitted. A position needs no scale and
-        no bearing — the walk between two of them is a straight line — and the
-        estimator this replaces was off by 2x and direction-dependent by 4.5x
-        across L11.v6's bearings.
-        """
-        marks.mkdir(parents=True, exist_ok=True)
-        rec = marks / f"{scene}.json"
-        doc = json.loads(rec.read_text()) if rec.is_file() else {}
-        doc.setdefault("placed", {})[vertex] = [round(float(v), 5) for v in at]
-        rec.write_text(json.dumps(doc, indent=1))
-        return doc
-
-    def pose(scene: str, height: float, pitch: float) -> dict:
-        """Eye height and tilt for a world, in its own units and degrees.
-
-        One per world, not per lane: a capture is at one tripod height, and the
-        walk should sit at eye level in the corridor rather than at whatever
-        height the generator's origin landed on.
-        """
-        marks.mkdir(parents=True, exist_ok=True)
-        rec = marks / f"{scene}.json"
-        doc = json.loads(rec.read_text()) if rec.is_file() else {"lanes": {}}
-        doc["height"] = round(height, 4)
-        doc["pitch_deg"] = round(pitch, 2)
-        rec.write_text(json.dumps(doc, indent=1))
-        return doc
-
     def preview_of(name: str) -> Path:
         """The downscaled copy the browser gets, made on first ask."""
         f = src / name
