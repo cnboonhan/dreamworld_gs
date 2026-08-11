@@ -794,50 +794,128 @@ async function edgePicker(doc, choose) {
 
     const box = document.createElement("div");
     box.id = "edges";
-    box.innerHTML = `<canvas id="edgePlan" width="220" height="220"></canvas>
-        <div id="edgeList"></div>`;
+    box.innerHTML = `<div class="hint" id="edgeTitle"></div>
+        <canvas id="edgePlan" width="220" height="220"></canvas>
+        <div id="spotRow"></div>
+        <button id="saveSpot"></button>`;
     document.body.appendChild(box);
-    const list = box.querySelector("#edgeList");
-    const cv = box.querySelector("#edgePlan");
-    const cx = cv.getContext("2d");
+    const list = document.getElementById("edgeList");
+    const spotRow = box.querySelector("#spotRow");
+    const saveSpot = box.querySelector("#saveSpot");
+    const cx = box.querySelector("#edgePlan").getContext("2d");
     const here = doc.at;
 
-    const draw = k => {
-        const R = Math.max(6, Math.max(...doc.walks.map(w => w.metres)) * 1.6);
-        const P = q => [110 + (q[0] - here[0]) / R * 100, 110 - (q[1] - here[1]) / R * 100];
+    // Where each vertex actually is, marked by flying to it. Nothing is
+    // assumed: until both ends of a corridor are marked there is no walk for
+    // it, because the alternative is a line drawn from a scale that was wrong
+    // by 2x and direction-dependent by 4.5x.
+    const placed = Object.assign({}, doc.placed || {});
+    const me = doc.waypoint.split(".").pop();
+    const spots = [me].concat(doc.lanes.map(l => l.to));
+    let target = 0, at = 0;
+
+    const draw = () => {
+        const far = Math.max(6, Math.max(...doc.lanes.map(l => l.metres)) * 1.6);
+        const P = q => [110 + (q[0] - here[0]) / far * 100,
+                        110 - (q[1] - here[1]) / far * 100];
         cx.fillStyle = "#0a0d12"; cx.fillRect(0, 0, 220, 220);
         cx.strokeStyle = "#3a4757"; cx.lineWidth = 2; cx.beginPath();
-        for (const w of walls) { const a = P(w[0]), b = P(w[1]); cx.moveTo(a[0], a[1]); cx.lineTo(b[0], b[1]); }
+        for (const w of walls) {
+            const a = P(w[0]), b = P(w[1]);
+            cx.moveTo(a[0], a[1]); cx.lineTo(b[0], b[1]);
+        }
         cx.stroke();
-        doc.walks.forEach((w, j) => {
-            const e = [here[0] + Math.cos(w.bearing) * w.metres,
-                       here[1] + Math.sin(w.bearing) * w.metres];
-            const b = P(e);
-            cx.strokeStyle = j === k ? "#4ea1ff" : "#5d6b7d";
-            cx.lineWidth = j === k ? 3 : 1.5;
+        doc.lanes.forEach((l, j) => {
+            const b = P([here[0] + Math.cos(l.bearing) * l.metres,
+                         here[1] + Math.sin(l.bearing) * l.metres]);
+            const live = spots[target] === l.to;
+            cx.strokeStyle = live ? "#4ea1ff" : (placed[l.to] ? "#3f7d55" : "#5d6b7d");
+            cx.lineWidth = live ? 3 : 1.5;
             cx.beginPath(); cx.moveTo(110, 110); cx.lineTo(b[0], b[1]); cx.stroke();
-            cx.fillStyle = j === k ? "#4ea1ff" : "#8b98a8";
+            cx.fillStyle = live ? "#4ea1ff" : (placed[l.to] ? "#8fd6a6" : "#8b98a8");
             cx.font = "11px system-ui";
-            cx.fillText(w.to, 110 + (b[0] - 110) * 0.62 + 3, 110 + (b[1] - 110) * 0.62 - 3);
+            cx.fillText(l.to, 110 + (b[0] - 110) * 0.62 + 3,
+                        110 + (b[1] - 110) * 0.62 - 3);
         });
-        cx.fillStyle = "#ffd479"; cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
+        cx.fillStyle = target === 0 ? "#4ea1ff" : "#ffd479";
+        cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
     };
 
-    const pick = k => {
-        [...list.children].forEach((el, j) => el.className = j === k ? "on" : "");
-        draw(k); choose(doc.walks[k]);
+    const paintSpots = () => {
+        spotRow.innerHTML = spots.map((v, i) =>
+            `<button data-i="${i}" class="${i === target ? "on" : ""}${
+                placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${v}${
+                i === 0 ? " (here)" : ""}</button>`).join("");
+        saveSpot.textContent = "save position";
+        draw();
     };
-    doc.walks.forEach((w, k) => {
-        const b = document.createElement("button");
-        b.textContent = `${w.to}  ·  ${w.metres} m`;
-        b.onclick = () => pick(k);
-        list.appendChild(b);
-    });
-    const label = document.createElement("div");
-    label.className = "hint";
-    label.textContent = doc.waypoint + "  ·  " + doc.walks.length + " corridor(s)";
-    box.insertBefore(label, cv);
-    pick(0);
+
+    const paintWalks = () => {
+        if (!doc.walks.length) {
+            list.innerHTML = '<option>no walkthroughs yet \u2014 save two vertices</option>';
+            list.disabled = true;
+            return;
+        }
+        list.disabled = false;
+        list.innerHTML = doc.walks.map((w, k) =>
+            `<option value="${k}">walk to ${w.to}  \u00b7  ${w.metres} m</option>`).join("");
+        if (at >= doc.walks.length) at = 0;
+        list.value = at;
+        list.onchange = () => { at = +list.value; choose(doc.walks[at]); };
+        choose(doc.walks[at]);
+    };
+
+    spotRow.onclick = e => {
+        const b = e.target.closest("button");
+        if (b) { target = +b.dataset.i; paintSpots(); }
+    };
+
+    saveSpot.onclick = async () => {
+        const inv = invert4(viewMatrix);
+        saveSpot.textContent = "saving\u2026";
+        try {
+            const r = await fetch("http://localhost:8085/place", {
+                method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({scene: doc.waypoint, vertex: spots[target],
+                                      at: [inv[12], inv[13], inv[14]]})});
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || "refused");
+            Object.assign(placed, j.placed);
+            doc.walks = j.walks || [];
+            paintSpots();
+            paintWalks();
+        } catch (err) {
+            saveSpot.textContent = "could not save \u2014 is 8085 running?";
+        }
+    };
+
+    // every built world, so you can move between them without editing the URL
+    const scenes = document.getElementById("scenePick");
+    if (scenes) {
+        try {
+            const all = await (await fetch("http://localhost:8085/scenes")).json();
+            scenes.innerHTML = all.map(sc =>
+                `<option value="${sc.scene}"${sc.scene === doc.waypoint ? " selected" : ""}>` +
+                `${sc.placed.length ? "\u2713 " : ""}${sc.scene}</option>`).join("");
+            scenes.onchange = () => {
+                const proj = location.search.match(/files\/([^/]+)\//);
+                if (!proj) return;
+                const u = new URL(location.href);
+                u.searchParams.set("url",
+                    `files/${proj[1]}/splats/${scenes.value}/world.ply`);
+                u.hash = "";
+                location.href = u.href;
+            };
+        } catch (err) {
+            scenes.innerHTML = "<option>8085 not running</option>";
+            scenes.disabled = true;
+        }
+    }
+
+    box.querySelector("#edgeTitle").textContent =
+        doc.waypoint + "  \u00b7  " + doc.lanes.length + " corridor(s)";
+    paintSpots();
+    paintWalks();
 }
 
 function tourInit(p, follow) {
@@ -1072,9 +1150,12 @@ async function main() {
             const many = await fetch(url.href.replace(/\.ply$/, "") + ".paths.json");
             if (many.ok) {
                 const doc = await many.json();
-                if (Array.isArray(doc.walks) && doc.walks.length) {
+                if (Array.isArray(doc.lanes) && doc.lanes.length) {
                     edgePicker(doc, w => {
-                        tourInit({points: w.points, up: doc.up});
+                        // follow: yaw is measured from the path, so the camera
+                        // faces the way it is walking rather than wherever it
+                        // happened to be pointing when you picked the corridor
+                        tourInit({points: w.points, up: doc.up}, true);
                         showTourBar();
                     });
                     picked = true;

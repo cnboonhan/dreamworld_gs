@@ -128,7 +128,7 @@ def main() -> None:
     upm = saved.get("units_per_metre") or units_per_metre(scene, here, walls)
     eye = float(saved.get("height") or 0.0)
     pitch = math.radians(float(saved.get("pitch_deg") or 0.0))
-    out = []
+    out, lanes_out = [], []
     for a, b, metres in lanes:
         other = b if a == waypoint else (a if b == waypoint else None)
         if other is None:
@@ -139,14 +139,17 @@ def main() -> None:
         # Two marked positions beat any fit: the walk is the line between
         # them, needing neither scale nor bearing.
         placed = saved.get("placed", {})
-        start = np.asarray(placed.get(waypoint, centre + eye * upw), dtype=np.float64)
-        if other in placed:
-            end = np.asarray(placed[other], dtype=np.float64)
-            direction = unit(end - start)
-        else:
-            span = saved.get("lanes", {}).get(other, {}).get("units") or metres * upm
-            end = start + direction * span
+        lanes_out.append({"to": other, "metres": round(float(metres), 3),
+                          "bearing": round(bearing, 5)})
+        # No walk until both ends are marked. A default one would be drawn from
+        # a scale that was wrong by 2x and direction-dependent by 4.5x, and a
+        # wrong walk is harder to notice than a missing one.
+        if waypoint not in placed or other not in placed:
+            continue
+        start = np.asarray(placed[waypoint], dtype=np.float64)
+        end = np.asarray(placed[other], dtype=np.float64)
         line = np.linspace(start, end, POINTS)
+        direction = unit(end - start)
         look = unit(direction + math.tan(pitch) * upw)
         out.append({"to": other, "metres": round(float(metres), 3),
                     "bearing": round(bearing, 5),
@@ -157,11 +160,10 @@ def main() -> None:
            "up": [round(float(v), 5) for v in upw],
            "units_per_metre": round(upm, 4), "height": round(eye, 4),
            "pitch_deg": round(math.degrees(pitch), 2),
-           "marked": sorted(saved.get("lanes", {})),
-           "placed": saved.get("placed", {}), "walks": out}
+           "lanes": lanes_out, "placed": saved.get("placed", {}), "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
-    print(f"{scene.name}: {upm:.3f} units/m, {len(out)} lane(s) — "
-          + ", ".join(f"{w['to']} {w['metres']}m" for w in out))
+    print(f"{scene.name}: {len(lanes_out)} lane(s), {len(out)} walk(s) from "
+          f"{len(saved.get('placed', {}))} marked vertex/vertices")
 
 
 if __name__ == "__main__":

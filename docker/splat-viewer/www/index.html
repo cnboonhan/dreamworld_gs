@@ -25,7 +25,20 @@
 #edges .hint { color: #8b98a8; margin-bottom: 6px; }
 #edgePlan { display: block; background: #0a0d12; border: 1px solid #232c38;
             border-radius: 6px; }
-#edgeList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#spotRow { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+#spotRow button { background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
+                  border-radius: 5px; padding: 4px 8px; font: inherit; cursor: pointer; }
+#spotRow button:hover { background: #273040; }
+#spotRow button.set { border-color: #3f7d55; color: #8fd6a6; }
+#spotRow button.on { background: #4ea1ff; color: #08121e; border-color: #4ea1ff;
+                     font-weight: 600; }
+#saveSpot { width: 100%; margin-top: 8px; background: #2c6e3f; color: #dfe6ef;
+            border: 1px solid #3a8a52; border-radius: 6px; padding: 6px 9px;
+            font: inherit; cursor: pointer; }
+#saveSpot:hover { background: #35814a; }
+#scenePick, #edgeList { margin-right: 8px; background: #1e2530; color: #dfe6ef;
+            border: 1px solid #2f3a48; border-radius: 6px; padding: 4px 8px;
+            font: inherit; cursor: pointer; max-width: 260px; }
 #edgeList button {
     background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
     border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer;
@@ -330,6 +343,8 @@ other
 		<div id="progress"></div>
 		<!-- tour: appears only when the scene ships a world.path.json -->
 		<div id="tour">
+			<select id="scenePick" title="which world to open"></select>
+			<select id="edgeList" title="which corridor to walk"></select>
 			<button id="tourPlay" title="glide along the capture path">pause</button>
 			<input id="tourAt" type="range" min="0" max="1000" value="0" title="along the capture path">
 			<label>speed <input id="tourSecs" type="range" min="2" max="60" value="10" title="seconds end to end"></label>
