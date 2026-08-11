@@ -755,6 +755,9 @@ let viewMatrix = defaultViewMatrix;
 const tour = {
     points: null, t: 0, dir: 1, on: false, playing: false, seconds: 10,
     up: null, a: null, b: null, yaw: 0, pitch: 0, release: null,
+    // rad/s for an in-place turn, handed over by the interactive server so the
+    // camera and the robot spin at one rate rather than two
+    turnRate: 0,
     // when following, the heading is the path's own direction and yaw is an
     // offset from it; otherwise the camera keeps whatever heading you gave it
     // and simply travels the corridor.
@@ -1081,6 +1084,12 @@ function tourTurn(worldFwd, ms) {
     while (delta > Math.PI) delta -= 2 * Math.PI;
     while (delta < -Math.PI) delta += 2 * Math.PI;
     if (Math.abs(delta) < 0.02) return;
+    // The robot spins at TURN_RATE rad/s, so a turn here takes |arc| / rate to
+    // land at the same moment. Without this the camera swung in a fixed 450 ms
+    // however far it had to go, and a 180 at a junction finished long before the
+    // robot had come round.
+    if (ms == null && tour.turnRate)
+        ms = Math.abs(delta) / tour.turnRate * 1000;
     tour.turn = {from: tour.yaw - delta, to: tour.yaw, at: performance.now(),
                  ms: ms || 450};
     tour.yaw = tour.turn.from;
@@ -1202,7 +1211,15 @@ async function main() {
                 if (old) old.remove();
                 edgePicker(d, window.__rideWalk);
             };
-            window.__rideWalk = (w, d) => {
+            window.__rideWalk = (w, d, pace) => {
+                // Pace from the lane's real length at the robot's own speed, so
+                // the two arrive together. The dream got this for free — its
+                // clips were RENDERED at these rates, so a clip's duration was
+                // its distance over its speed. A live walk has no such duration
+                // until it is given one.
+                if (pace && pace.speed && w.metres)
+                    tour.seconds = Math.max(0.4, w.metres / pace.speed);
+                if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
                 // not follow: the camera keeps the heading you gave it and
                 // simply travels the corridor. Swinging it to face the path
                 // throws away the view you were lining up, which is the work
@@ -1567,15 +1584,19 @@ async function main() {
                         : `${shortOf(to)} is not a lane out of ${here()}`};
                 }
                 const scene = `${here().split(".")[0]}.${shortOf(to)}`;
-                window.__rideWalk(w, window.__paths);
+                window.__rideWalk(w, window.__paths, cmd.pace);
                 tour.playing = true;
                 return await arrivedAt(scene);
             },
             /** Turn in place to face a neighbour, without moving. */
-            async face({to}) {
+            async face({to, pace}) {
                 const lane = laneTo(to);
                 if (!lane) return {ok: false, error: `${shortOf(to)} is not a lane out of ${here()}`};
+                if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
                 tourTurn(lane.dir);
+                // Answer when the swing has finished, not when it was started —
+                // the robot is turning for exactly as long.
+                await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));
                 return {ok: true, at: here(), facing: shortOf(to)};
             },
             /** Jump straight to a world, for a reset or a level change. */

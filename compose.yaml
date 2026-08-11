@@ -241,6 +241,8 @@ services:
       # The mission agent's model, over any OpenAI-compatible endpoint. Defaults
       # to the VLM this stack already runs; point DW_VLM_URL at a cliproxyapi and
       # DW_VLM_MODEL at a Claude model to swap it, no rebuild.
+      DRIVE_SPEED: "${DW_DRIVE_SPEED:-2.0}"
+      TURN_RATE: "${DW_TURN_RATE:-1.25}"
       VLM_BASE_URL: "${DW_VLM_URL:-http://localhost:8000/v1}"
       VLM_API_KEY: "${DW_VLM_KEY:-x}"
       VLM_MODEL: "${DW_VLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}"
@@ -265,6 +267,10 @@ services:
       GZ_IP: 127.0.0.1
       DW_LEVEL: "${DW_LEVEL:-L11}"
       DW_START: "${DW_START:-lift_lobby}"
+      # Pacing, shared with the interactive server so the camera and the robot
+      # cross a corridor in the same number of seconds.
+      DRIVE_SPEED: "${DW_DRIVE_SPEED:-2.0}"
+      TURN_RATE: "${DW_TURN_RATE:-1.25}"
     depends_on:
       rmfsim:
         condition: service_started   # only to order the shared image build

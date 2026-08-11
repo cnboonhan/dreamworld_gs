@@ -57,6 +57,13 @@ def _cors(resp):
     return resp
 
 
+# The robot's pacing, and now the camera's. These are the bridge's own defaults,
+# read from the same environment so there is one source of truth: the splat walk
+# is live rather than rendered, so nothing makes it take the right length of time
+# unless it is told how fast the robot moves.
+DRIVE_SPEED = float(os.environ.get("DRIVE_SPEED", "2.0"))   # m/s along a leg
+TURN_RATE = float(os.environ.get("TURN_RATE", "1.25"))      # rad/s in place
+
 ST = {}                       # the live world state, guarded by ST["lock"]
 TOOLS = {}
 
@@ -225,7 +232,8 @@ def viewer_call(op, timeout=180, **kw):
 
     with ST["lock"]:
         ST["waiting"][cid] = (done, box)
-    VIEWER.send({"id": cid, "op": op, **kw})
+    VIEWER.send({"id": cid, "op": op,
+                 "pace": {"speed": DRIVE_SPEED, "turn_rate": TURN_RATE}, **kw})
     if not done.wait(timeout):
         with ST["lock"]:
             ST["waiting"].pop(cid, None)
@@ -450,13 +458,13 @@ def go_to(vertex):
                                       f"connected ({ST['viewer_url']}) and no robot "
                                       "bridge. Neither would move."}
 
-    # The robot drives the whole polyline at once, the viewer walks it a corridor
-    # at a time — one is a pose-follow along a line, the other is a world per
-    # vertex. Whichever is connected paces the walk; when both are, the viewer
-    # does, because it is the slower and the one being watched.
-    drive_robot(path)
+    # One edge at a time on BOTH sides, started together. Sending the robot the
+    # whole polyline up front and walking the viewer corridor by corridor let the
+    # two drift apart over a long route with nothing to pull them back; per edge,
+    # any difference is bounded by one corridor and is corrected at every vertex.
     walked = []
     for u, v in zip(path, path[1:]):
+        drive_robot([u, v])
         res = viewer_call("walk", to=lab(v))
         if not res.get("ok"):
             # The viewer failed partway. The robot is already driving the whole
@@ -464,7 +472,7 @@ def go_to(vertex):
             # it run on to a destination the state will not agree it reached.
             with ST["lock"]:
                 ST["prev"], ST["cur"], ST["face"] = ST["prev"], u, None
-            drive_robot([u])
+            drive_robot([u])          # stop it where the walk actually reached
             push_state()
             return {"ok": False, "error": res.get("error"), "reached": walked,
                     "at": lab(u)}

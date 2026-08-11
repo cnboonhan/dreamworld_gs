@@ -362,6 +362,21 @@ and the robot stay edge-for-edge in step.
 The two halves read the same `nav_graphs/0.yaml`, which is what makes that true:
 one graph, one set of indices, one metric frame.
 
+**Staying in step** takes one more thing, because a splat walk is live rather than
+rendered. The dream got this for free: `move_gz` rendered every clip at exactly
+`DRIVE_SPEED` and `TURN_RATE`, so a clip's duration *was* its distance over its
+speed and the robot could not fall behind. Nothing forces a live walk to take any
+particular length of time — it ran at a fixed 10 s a corridor, so the robot
+crossed a 1.97 m lane in one second and the camera took ten.
+
+So the pace is handed to the viewer with every command: a walk takes
+`metres / DRIVE_SPEED` from the lane's own recorded length, a turn takes
+`|arc| / TURN_RATE`, and both sides step one edge at a time, started together.
+Per edge rather than per route matters — sending the robot the whole polyline up
+front let the two drift with nothing to pull them back, where now any difference
+is bounded by one corridor and corrected at every vertex. `DW_DRIVE_SPEED` and
+`DW_TURN_RATE` set both halves at once.
+
 **Lifts go through `take_lift`, never by hand.** It installs a fixed eight-step
 template as the subtask plan — `select_lift` → `face` cabin → `call_lift` this level
 → `open_door` → `go_to` cabin → `call_lift` target level → `open_door` → `go_to`
