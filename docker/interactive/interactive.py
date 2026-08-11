@@ -305,13 +305,50 @@ def door_between(u, v):
     return ""
 
 
+def lift_states():
+    """{lift: {floor, door, motion}} from the bridge, or {} without one."""
+    return (bridge("/lift_state") or {}).get("lifts") or {}
+
+
+DOOR_OPEN = 2      # rmf_lift_msgs LiftState.DOOR_OPEN
+
+
+def lift_shut(u, v):
+    """Why a lane into or out of a lift cabin cannot be walked, or "".
+
+    The nav graph's `doors:` section does not list lift doors — the shaft and
+    cabin doors belong to liblift, not to the door plugin — so door_between is
+    blind to them, and a route into a cabin looked as clear as a corridor. It is
+    not: the cabin may be on another floor entirely, and walking in would step
+    into an empty shaft.
+    """
+    cabin = ST["lift_of"].get(v) or ST["lift_of"].get(u)
+    if not cabin:
+        return ""
+    st = lift_states().get(cabin)
+    if st is None:
+        # No bridge to ask. Treat it as shut rather than assume: an unverifiable
+        # lift is exactly the case this exists to stop.
+        return f"{cabin} state is unknown (no robot bridge) — cannot enter it"
+    if st.get("floor") != ST["level"]:
+        return (f"{cabin} is at {st.get('floor')}, not {ST['level']} — "
+                f"call_lift {ST['level']} first")
+    if int(st.get("door", 0)) != DOOR_OPEN:
+        return f"{cabin} is at {ST['level']} but its door is shut — open_door first"
+    return ""
+
+
 def blocked_on(path):
-    """[(u, v, door)] for every closed door the path would walk through."""
+    """[(u, v, why)] for every shut door — hinged or lift — the path crosses."""
     out = []
     for u, v in zip(path, path[1:]):
         name = door_between(u, v)
         if name and name not in ST["open_doors"]:
             out.append((u, v, name))
+            continue
+        why = lift_shut(u, v)
+        if why:
+            out.append((u, v, why))
     return out
 
 
@@ -392,9 +429,12 @@ def go_to(vertex):
         return {"ok": False, "error": f"no path from {lab(cur)} to {lab(tgt)}"}
     shut = blocked_on(path)
     if shut:
-        u, v, name = shut[0]
+        u, v, why = shut[0]
+        if ST["lift_of"].get(v) or ST["lift_of"].get(u):
+            return {"ok": False, "error": f"BLOCKED: {why}. Take the lift with "
+                                          f"take_lift <level> rather than walking in."}
         return {"ok": False,
-                "error": f"BLOCKED: {name} between {lab(u)} and {lab(v)} is shut. "
+                "error": f"BLOCKED: {why} between {lab(u)} and {lab(v)} is shut. "
                          f"go_to {lab(u)}, then face {lab(v)}, then open_door, "
                          f"then go_to {lab(tgt)}."}
 
@@ -583,14 +623,24 @@ def plan_route(to):
         return {"ok": False, "error": f"no path to {to}"}
     steps, walked = [], ST["cur"]
     for u, v in zip(path, path[1:]):
+        cabin = ST["lift_of"].get(v) or ST["lift_of"].get(u)
         name = door_between(u, v)
-        if name and name not in ST["open_doors"]:
+        if cabin:
+            # A lift is not a door with extra steps: it has to be called to this
+            # floor before its door means anything, so it gets its own sequence.
+            if walked != u:
+                steps.append(f"go_to {lab(u)}")
+                walked = u
+            steps += [f"select_lift {cabin}", f"face {lab(v)}",
+                      f"call_lift {ST['level']}", "open_door"]
+        elif name and name not in ST["open_doors"]:
             if walked != u:
                 steps.append(f"go_to {lab(u)}")
                 walked = u
             steps += [f"face {lab(v)}", "open_door"]
     steps.append(f"go_to {lab(tgt)}")
-    return {"ok": True, "route": [lab(i) for i in path], "steps": steps}
+    return {"ok": True, "route": [lab(i) for i in path], "steps": steps,
+            "lifts": sorted({ST["lift_of"][i] for i in path if i in ST["lift_of"]})}
 
 
 @tool("Where you are, what is around you, and what you are carrying.")
