@@ -156,58 +156,14 @@ align level="L11" proj=project:
 #
 # Package a project's deliverables into one tarball, to carry to another node.
 bundle proj=project dest="dist":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src={{assets}}/projects/{{proj}}
-    if [ ! -d "$src" ]; then
-        echo "no such project: {{proj}}" >&2
-        just projects >&2
-        exit 1
-    fi
-    mkdir -p {{dest}}
-    out="$(cd {{dest}} && pwd)/{{proj}}-$(date +%Y%m%d-%H%M%S).tar.gz"
-    rel="assets/projects/{{proj}}"
-    # Named, not excluded. Excluding the intermediates by pattern still swept
-    # up whatever else was sitting in the project — backup copies of panos/ and
-    # splats/, a traversals/ from a pipeline that no longer exists — and made a
-    # 3.4 GB archive of a 1.2 GB project. A list of what to carry cannot do
-    # that: anything unlisted stays behind, including next month's stray folder.
-    cd {{repo}}
-    files=$(find "$rel/maps" "$rel/worlds" "$rel/panos" -maxdepth 3 \
-                 \( -name .previews -prune \) -o -type f -print 2>/dev/null)
-    for f in world.ply world.usdz world.cam.json world.paths.json panorama.png; do
-        files="$files $(find "$rel/splats" -maxdepth 2 -name "$f" 2>/dev/null)"
-    done
-    printf '%s\n' $files | sort -u > /tmp/dw-bundle-$$.txt
-    tar czf "$out" -T /tmp/dw-bundle-$$.txt
-    n=$(wc -l < /tmp/dw-bundle-$$.txt); rm -f /tmp/dw-bundle-$$.txt
-    echo "bundled {{proj}} -> $out"
-    echo "  $n file(s), $(du -h "$out" | cut -f1)"
-    echo "  (training intermediates left behind — 'just generate' rebuilds them)"
-    echo "  restore with: just unbundle $out"
+    @python3 {{repo}}/scripts/bundle.py pack {{assets}} {{proj}} {{dest}}
 
 # Run it on a fresh clone of this repo, then `just up` — the project lands in
 # assets/projects/ and the stack finds it.
 #
 # Restore a bundled project, in place.
 unbundle FILE:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    f="{{FILE}}"; [ -f "$f" ] || f="{{repo}}/{{FILE}}"
-    if [ ! -f "$f" ]; then
-        echo "no such bundle: {{FILE}}" >&2
-        exit 1
-    fi
-    # say what it will land on before it lands on it
-    names=$(tar tzf "$f" | sed -n 's|^assets/projects/\([^/]*\)/.*|\1|p' | sort -u)
-    for n in $names; do
-        [ -d {{assets}}/projects/"$n" ] \
-            && echo "note: assets/projects/$n exists and will be merged into"
-    done
-    tar xzf "$f" -C {{repo}}
-    echo "unbundled into {{repo}}/assets/projects: $(echo $names)"
-    just projects
-
+    @python3 {{repo}}/scripts/bundle.py unpack {{repo}} {{FILE}}
 # Every waypoint's id, and where to find it in the traffic editor.
 #
 # Three numberings exist and none agree: building.yaml numbers all of a level's
@@ -231,26 +187,7 @@ unbundle FILE:
 
 # What's in assets/projects, and what each project has.
 projects:
-    #!/usr/bin/env bash
-    # find, not ls+glob: an unmatched glob leaves `ls` with no argument, and it
-    # then cheerfully counts the current directory instead of reporting zero.
-    count() { find "$1" -mindepth "${3:-1}" -maxdepth "${4:-1}" $2 2>/dev/null | wc -l; }
-    found=0
-    for p in {{assets}}/projects/*/; do
-        [ -d "$p" ] || continue
-        found=1
-        n=$(basename "$p")
-        mark=" "; [ "$n" = "{{project}}" ] && mark="*"
-        printf ' %s %-22s %s map(s)  %s world(s)  %s panorama(s)  %s splat(s)\n' \
-            "$mark" "$n" \
-            "$(count "$p/maps" '-name *.building.yaml')" \
-            "$(count "$p/worlds" '-type d')" \
-            "$(count "$p/panos" '-name *.[jJpP]*[gG]')" \
-            "$(count "$p/splats" '-name world.ply' 2 2)"
-    done
-    [ "$found" = 1 ] || echo "  none yet — run: just _env   (seeds samples/)"
-    echo
-    echo "  * = active (just use <name> to switch)"
+    @python3 {{repo}}/scripts/projects.py {{assets}} {{project}}
 
 # Recent job runs and their state.
 jobs:
