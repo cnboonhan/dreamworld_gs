@@ -304,7 +304,9 @@ world-edge edge proj=project: up
     fi
     pick=$(docker compose exec -T generator python /opt/tools/pick_panorama.py \
         /workspace/projects/{{proj}}/panos/{{edge}} | tr -d '\r')
-    cp "$dir/panos/{{edge}}/$pick" "$dir/panos/{{edge}}@world.png"
+    # keep the extension: a real capture arrives as .jpg, and naming a JPEG
+    # .png works only because PIL sniffs the content rather than the name
+    cp "$dir/panos/{{edge}}/$pick" "$dir/panos/{{edge}}@world.${pick##*.}"
     echo "generating a world for {{edge}} from $pick"
     # spacing is inert on this branch — one panorama, so nothing is walked
     just generate "{{edge}}@world" 0.5 {{proj}}

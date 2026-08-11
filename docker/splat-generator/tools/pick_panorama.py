@@ -48,19 +48,28 @@ def standpoints(panos: Path) -> list[str]:
     if record.is_file():
         return sorted(s["image"] for s in
                       json.loads(record.read_text())["standpoints"])
-    return sorted(p.name for p in panos.glob("[0-9]*.png"))
+    # a real capture arrives as whatever the camera wrote — .JPG, usually
+    return sorted(p.name for p in panos.iterdir()
+                  if p.suffix.lower() in (".png", ".jpg", ".jpeg"))
 
 
 def pick(panos: Path) -> str:
-    """The panorama in `panos` with the most open view."""
+    """The panorama in `panos` with the most open view.
+
+    A real capture has no range maps — a 360 camera measures nothing — so
+    openness cannot be scored and the middle of the walk is taken instead.
+    That is the rule this replaced, and it is the right fallback: it is where
+    a corridor is most likely to be seen along rather than across.
+    """
     names = standpoints(panos)
     if not names:
         raise SystemExit(f"no panoramas in {panos}")
-    if len(names) < 3:
+    ranges = {n: panos / f"{Path(n).stem}.range.npy" for n in names}
+    if len(names) < 3 or not all(p.is_file() for p in ranges.values()):
         return names[len(names) // 2]
 
     def view(name: str) -> float:
-        r = np.load(panos / f"{Path(name).stem}.range.npy", mmap_mode="r")
+        r = np.load(ranges[name], mmap_mode="r")
         band = r[int(BAND[0] * r.shape[0]):int(BAND[1] * r.shape[0]):4]
         return float(np.median(np.asarray(band)))
 

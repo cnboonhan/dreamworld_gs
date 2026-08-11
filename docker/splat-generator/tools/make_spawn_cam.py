@@ -102,7 +102,35 @@ def to_building(scene: Path, panos: Path, pick: str, p0: np.ndarray) -> np.ndarr
     return np.concatenate([M, (centre - M @ p0)[:, None]], 1)
 
 
-def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float]:
+def planned_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float]:
+    """(points, up, length_m) for a world with no capture to align to.
+
+    A real 360 camera records where nothing: no poses, no ranges, so there is
+    no way to place the world in the building and the lane cannot be used.
+    What is left is HY-World's own account of itself — the frame it normalised
+    into, and the cameras it planned over its navmesh. The walk is the line
+    through those, levelled against that frame's up.
+
+    Length is in the world's own units, not metres, because nothing here knows
+    the scale. It still paces the walkthrough sensibly, since the pace is only
+    ever relative to the walk it is on.
+    """
+    meta = json.loads((scene / "gs_result" / "ply"
+                       / "position_meta_info.json").read_text())
+    up, fwd = unit(meta["up_direction"]), unit(meta["facing_direction"])
+    rows, centre, scale = hyworld_frame(scene)
+    cams = json.loads((scene / "gs_data" / "cameras.json").read_text())
+    mats = [np.asarray(e["extrinsic"], dtype=np.float64).reshape(4, 4)
+            for e in (cams.values() if isinstance(cams, dict) else cams)
+            if isinstance(e, dict) and "extrinsic" in e]
+    if not mats:
+        raise SystemExit(f"{scene}: no training cameras to fit a walk through")
+    pts = centre + scale * (np.stack([-m[:3, :3].T @ m[:3, 3] for m in mats]) @ rows)
+    line = fit_walk(pts, up)
+    return line, up, float(np.linalg.norm(line[-1] - line[0]))
+
+
+def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float] | None:
     """(points, up, length_m) tracing this world's lane, in world coordinates.
 
     A generated world is one corridor — `<edge>@world`, built from one
@@ -115,6 +143,10 @@ def building_walk(scene: Path) -> tuple[np.ndarray, np.ndarray, float]:
     edge = scene.name[:-len(GENERATED)]
     root = scene.parent.parent
     panos = root / "panos" / edge
+    # A real capture records no poses, so there is no lane to walk: the only
+    # thing tying a world to the building is what the simulator wrote down.
+    if not (panos / "poses.json").is_file():
+        return None
     plan = json.loads(next(root.glob("worlds/*/capture_plan.json")).read_text())
     levels = plan["levels"].values()
     lane = next((e for data in levels for e in data["edges"] if e["id"] == edge), None)
@@ -253,8 +285,13 @@ def main() -> None:
     else:
         scene = Path(args[0])
         world = scene / "world.ply"
-        line, up, length = building_walk(scene)
-        source = "the lane, out of the building"
+        walk = building_walk(scene)
+        if walk is not None:
+            line, up, length = walk
+            source = "the lane, out of the building"
+        else:
+            line, up, length = planned_walk(scene)
+            source = "fitted through the planned cameras (no capture poses)"
     write_cam(world, write_path(world, line, up, length, source), up)
 
 
