@@ -823,75 +823,21 @@ async function edgePicker(doc, choose) {
         cx.fillStyle = "#ffd479"; cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
     };
 
-    // Where each vertex actually is, marked by flying there. No scale, no
-    // bearing, no fit: a position in the world's own coordinates is the whole
-    // answer, and the walk between two of them is a straight line. The current
-    // vertex starts where the panorama was shot, which is the world's origin.
-    const placed = Object.assign({}, doc.placed || {});
-    const here = doc.waypoint.split(".").pop();
-    const spots = [here].concat(doc.walks.map(w => w.to));
-    let target = 0;
-
-    const spotRow = document.createElement("div");
-    spotRow.id = "spotRow";
-    box.appendChild(spotRow);
-    const saveSpot = document.createElement("button");
-    saveSpot.id = "saveSpot";
-    box.appendChild(saveSpot);
-
-    const eyeNow = () => {
-        const inv = invert4(viewMatrix);
-        return [inv[12], inv[13], inv[14]];
-    };
-    const paintSpots = () => {
-        spotRow.innerHTML = spots.map((v, i) =>
-            `<button data-i="${i}" class="${i === target ? "on" : ""}${
-                placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${
-                v}${i === 0 ? " (here)" : ""}</button>`).join("");
-        saveSpot.textContent = `save ${spots[target]} at the camera`;
-    };
-    spotRow.onclick = e => {
-        const b = e.target.closest("button");
-        if (b) { target = +b.dataset.i; paintSpots(); }
-    };
-    saveSpot.onclick = async () => {
-        saveSpot.textContent = "saving\u2026";
-        try {
-            const r = await fetch("http://localhost:8085/place", {
-                method: "POST", headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({scene: doc.waypoint, vertex: spots[target],
-                                      at: eyeNow()})});
-            const j = await r.json();
-            if (!j.ok) throw new Error(j.error);
-            placed[spots[target]] = j.placed[spots[target]];
-            // the walks are rebuilt from the marks, so the tour follows at once
-            if (j.walks) { doc.walks = j.walks; rebuild(); }
-            paintSpots();
-        } catch (err) { saveSpot.textContent = "could not save \u2014 8085?"; }
-    };
-
-    let at = 0;
     const pick = k => {
         [...list.children].forEach((el, j) => el.className = j === k ? "on" : "");
-        at = k; draw(k); choose(doc.walks[k]);
+        draw(k); choose(doc.walks[k]);
     };
-
-    const rebuild = () => {
-        list.innerHTML = "";
-        doc.walks.forEach((w, k) => {
-            const b = document.createElement("button");
-            b.textContent = `${w.to}  ·  ${w.metres} m`;
-            b.onclick = () => pick(k);
-            list.appendChild(b);
-        });
-        pick(Math.min(at, doc.walks.length - 1));
-    };
-    rebuild();
-    paintSpots();
+    doc.walks.forEach((w, k) => {
+        const b = document.createElement("button");
+        b.textContent = `${w.to}  ·  ${w.metres} m`;
+        b.onclick = () => pick(k);
+        list.appendChild(b);
+    });
     const label = document.createElement("div");
     label.className = "hint";
     label.textContent = doc.waypoint + "  ·  " + doc.walks.length + " corridor(s)";
     box.insertBefore(label, cv);
+    pick(0);
 }
 
 function tourInit(p, follow) {
