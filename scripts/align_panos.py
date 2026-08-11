@@ -491,7 +491,10 @@ def main() -> None:
             walks = []
             paths = d / "world.paths.json"
             if paths.is_file():
-                walks = [w["to"] for w in json.loads(paths.read_text())["walks"]]
+                doc = json.loads(paths.read_text())
+                # lanes, not walks: a world has its corridors from the map, and
+                # a walk only once both ends of one are marked
+                walks = [l["to"] for l in doc.get("lanes", doc.get("walks", []))]
             out.append({"scene": d.name, "lanes": walks,
                         "marked": sorted(saved.get("lanes", {})),
                         "units_per_metre": saved.get("units_per_metre"),

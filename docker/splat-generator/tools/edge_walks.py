@@ -172,6 +172,19 @@ def main() -> None:
            "pitch_deg": round(math.degrees(pitch), 2),
            "lanes": lanes_out, "placed": saved.get("placed", {}), "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
+
+    # the viewer's world list, served by nginx like everything else, so the
+    # browser needs nothing but the files it is already reading
+    index = []
+    for d in sorted(scene.parent.iterdir()):
+        paths = d / "world.paths.json"
+        if not (d / "world.ply").is_file() or not paths.is_file():
+            continue
+        p = json.loads(paths.read_text())
+        index.append({"scene": d.name, "lanes": len(p.get("lanes", [])),
+                      "walks": len(p.get("walks", [])),
+                      "placed": len(p.get("placed", {}))})
+    (scene.parent / "scenes.json").write_text(json.dumps(index))
     print(f"{scene.name}: {len(lanes_out)} lane(s), {len(out)} walk(s) from "
           f"{len(saved.get('placed', {}))} marked vertex/vertices")
 

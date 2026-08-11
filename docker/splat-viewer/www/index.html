@@ -36,7 +36,15 @@
             border: 1px solid #3a8a52; border-radius: 6px; padding: 6px 9px;
             font: inherit; cursor: pointer; }
 #saveSpot:hover { background: #35814a; }
-#scenePick, #edgeList { margin-right: 8px; background: #1e2530; color: #dfe6ef;
+#scenePick a { color: #9bd; text-decoration: none; border: 1px solid #2f3a48;
+               border-radius: 5px; padding: 2px 7px; margin-right: 4px; font-size: 12px; }
+#scenePick a:hover { background: #273040; }
+#scenePick a.on { background: #4ea1ff; color: #08121e; border-color: #4ea1ff; }
+#scenePick a { color: #9bd; text-decoration: none; border: 1px solid #2f3a48;
+               border-radius: 5px; padding: 2px 7px; margin-right: 4px; font-size: 12px; }
+#scenePick a:hover { background: #273040; }
+#scenePick a.on { background: #4ea1ff; color: #08121e; border-color: #4ea1ff; }
+#edgeList { margin-right: 8px; background: #1e2530; color: #dfe6ef;
             border: 1px solid #2f3a48; border-radius: 6px; padding: 4px 8px;
             font: inherit; cursor: pointer; max-width: 260px; }
 #edgeList button {
@@ -343,8 +351,7 @@ other
 		<div id="progress"></div>
 		<!-- tour: appears only when the scene ships a world.path.json -->
 		<div id="tour">
-			<select id="scenePick" title="which world to open"></select>
-			<select id="edgeList" title="which corridor to walk"></select>
+			<span id="scenePick" title="which world to open"></span>
 			<button id="tourPlay" title="glide along the capture path">pause</button>
 			<input id="tourAt" type="range" min="0" max="1000" value="0" title="along the capture path">
 			<label>speed <input id="tourSecs" type="range" min="2" max="60" value="10" title="seconds end to end"></label>

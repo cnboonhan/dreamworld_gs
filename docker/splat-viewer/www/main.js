@@ -783,14 +783,22 @@ function norm3(v) {
 // the walls around it, and every lane leaving it. Picking a lane switches the
 // tour to that corridor's walk rather than loading another scene.
 async function edgePicker(doc, choose) {
-    let walls = [];
+    // The alignment tool draws these same walls correctly, so when the plan
+    // comes up bare the data is fine and the fetch is not — which an empty
+    // catch hid. Say which, rather than drawing an empty box in silence.
+    const proj = location.search.match(/files\/([^/]+)\//);
+    const level = doc.waypoint.split(".")[0];
+    let walls = [], why = "";
     try {
-        const proj = location.search.match(/files\/([^/]+)\//);
-        if (proj) {
-            const r = await fetch(`files/${proj[1]}/worlds/${proj[1]}/plan_walls.json`);
-            if (r.ok) walls = (await r.json())[doc.waypoint.split(".")[0]] || [];
-        }
-    } catch (err) {}
+        if (!proj) throw new Error("no project in the url");
+        const at = new URL(`files/${proj[1]}/worlds/${proj[1]}/plan_walls.json`,
+                           location.href).href;
+        const r = await fetch(at);
+        if (!r.ok) throw new Error(`${r.status} from ${at}`);
+        const all = await r.json();
+        walls = all[level] || [];
+        if (!walls.length) why = `plan_walls.json has ${Object.keys(all)} not ${level}`;
+    } catch (err) { why = String(err.message || err); }
 
     const box = document.createElement("div");
     box.id = "edges";
@@ -799,7 +807,6 @@ async function edgePicker(doc, choose) {
         <div id="spotRow"></div>
         <button id="saveSpot"></button>`;
     document.body.appendChild(box);
-    const list = document.getElementById("edgeList");
     const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
     const cx = box.querySelector("#edgePlan").getContext("2d");
@@ -850,24 +857,8 @@ async function edgePicker(doc, choose) {
         draw();
     };
 
-    const paintWalks = () => {
-        if (!doc.walks.length) {
-            list.innerHTML = '<option>no walkthroughs yet \u2014 save two vertices</option>';
-            list.disabled = true;
-            return;
-        }
-        list.disabled = false;
-        list.innerHTML = doc.walks.map((w, k) =>
-            `<option value="${k}">walk to ${w.to}  \u00b7  ${w.metres} m</option>`).join("");
-        if (at >= doc.walks.length) at = 0;
-        list.value = at;
-        list.onchange = () => { at = +list.value; choose(doc.walks[at]); };
-        choose(doc.walks[at]);
-    };
+    const paintWalks = () => {};
 
-    // After a save, walk the corridor that was just completed rather than
-    // whichever happened to be selected. Marking the far end of one is how you
-    // finish it, so that is the one worth seeing.
     const walkTo = who => {
         const k = doc.walks.findIndex(w => w.to === who);
         if (k < 0) return false;
@@ -905,8 +896,10 @@ async function edgePicker(doc, choose) {
         // walk it only when its far end is already marked; otherwise stand at
         // home looking down it, which is what you need to go and mark it
         const lane = doc.lanes[target - 1];
+        // `list` was the walk dropdown; it is gone, and the vertex buttons
+        // are the only way a corridor is chosen now
         const k = lane ? doc.walks.findIndex(w => w.to === lane.to) : -1;
-        if (k >= 0) { at = k; list.value = k; choose(doc.walks[k]); }
+        if (k >= 0) { at = k; choose(doc.walks[k]); }
         else goHome();
     };
 
@@ -935,31 +928,32 @@ async function edgePicker(doc, choose) {
         }
     };
 
-    // every built world, so you can move between them without editing the URL
-    const scenes = document.getElementById("scenePick");
-    if (scenes) {
+    // Every built world, as links from a file nginx already serves. Two
+    // things this stops depending on: a <select> whose onchange listed the
+    // worlds but never navigated, with no console error to go on — a link
+    // needs no handler, the browser follows an href — and port 8085, which
+    // the browser had to reach separately and which only writing needs.
+    (async () => {
+        const bar = document.getElementById("scenePick");
+        const proj = location.search.match(/files\/([^/]+)\//);
+        if (!bar || !proj) return;
         try {
-            const all = await (await fetch("http://localhost:8085/scenes")).json();
-            scenes.innerHTML = all.map(sc =>
-                `<option value="${sc.scene}"${sc.scene === doc.waypoint ? " selected" : ""}>` +
-                `${sc.placed.length ? "\u2713 " : ""}${sc.scene}</option>`).join("");
-            scenes.onchange = () => {
-                const proj = location.search.match(/files\/([^/]+)\//);
-                if (!proj) return;
-                const u = new URL(location.href);
-                u.searchParams.set("url",
-                    `files/${proj[1]}/splats/${scenes.value}/world.ply`);
-                u.hash = "";
-                location.href = u.href;
-            };
+            const r = await fetch(new URL(`files/${proj[1]}/splats/scenes.json`,
+                                          location.href).href);
+            if (!r.ok) throw new Error(r.status);
+            const all = await r.json();
+            bar.innerHTML = all.map(sc =>
+                `<a href="?url=files/${proj[1]}/splats/${sc.scene}/world.ply"` +
+                ` class="${sc.scene === doc.waypoint ? "on" : ""}">` +
+                `${sc.placed ? "\u2713 " : ""}${sc.scene}</a>`).join(" ");
         } catch (err) {
-            scenes.innerHTML = "<option>8085 not running</option>";
-            scenes.disabled = true;
+            bar.textContent = "no scenes.json yet";
         }
-    }
+    })();
 
     box.querySelector("#edgeTitle").textContent =
-        doc.waypoint + "  \u00b7  " + doc.lanes.length + " corridor(s)";
+        doc.waypoint + "  \u00b7  " + doc.lanes.length + " corridor(s)"
+        + (why ? "  \u00b7  no plan: " + why : "");
     paintSpots();
     paintWalks();
 }
