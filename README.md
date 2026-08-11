@@ -98,8 +98,7 @@ list of splats and worlds rather than random adjectives:
 
 | Job | Runs in | Stages | Produces |
 | --- | --- | --- | --- |
-| `build-world` | `worldjobs` | generate → inspect → plan | one world + nav graph + capture plan |
-| `capture-edge` | `worldjobs` | capture | one corridor's panoramas, in simulation |
+| `build-world` | `worldjobs` | generate → inspect → plan | one Gazebo world + nav graph + capture plan |
 | `generate-world` | `generator` | 6 HY-World stages | one waypoint's world |
 
 Two workers, because the work needs different machines: world generation wants
@@ -113,14 +112,14 @@ there: levels, waypoints, lanes, and which lanes cross a door.
 
 ```bash
 just jobs                  # recent runs and their state
-just plan                  # what the map defines vs what has been captured
+just plan                  # every waypoint, and how far along it is
 ```
 
 Ctrl-C stops following; the job keeps running.
 
 ## Making things
 
-**A world**, from the project's map:
+**The building in simulation**, from the project's map:
 
 ```bash
 just world
@@ -130,24 +129,7 @@ just world
 `sim.launch.xml`, and `nav_graphs/0.yaml`. The sim also generates it on first
 start if it is missing, so a fresh checkout comes up with something to look at.
 
-**Panoramas of a corridor, without walking it.** The simulated building can be
-photographed, so there is something to compare a real capture against:
-
-```bash
-just capture L11.cafe--v7        # -> panos/L11.cafe--v7/000.png ...
-just capture-all                 # every corridor not yet shot, one job each
-```
-
-A camera weaves along the lane, stopping every half metre and taking a full 360
-at each, alternating between 1.25 m and 1.95 m so every surface is seen from two
-angles rather than ten nearly identical ones. Doors and lifts on the lane are
-opened first, since a closed one is a wall the camera cannot see past.
-
-It writes **panoramas and nothing else** — no poses, no positions, no marker
-that it came from a simulator — because a synthetic run that leaked what a real
-capture cannot would be testing the pipeline under conditions it never faces.
-
-**A world**, from one panorama of one waypoint:
+**A world you can look at**, from one panorama of one waypoint:
 
 ```bash
 just generate L11.v6             # panos/L11.v6.jpg -> splats/L11.v6/

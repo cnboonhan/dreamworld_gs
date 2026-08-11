@@ -73,57 +73,6 @@ def strip_lift_plugin(text):
     return text
 
 
-def inject_rec_cam(text):
-    """Add the capture camera the panorama stage drives.
-
-    It has to exist when the world loads: a sensor spawned at runtime never
-    renders in server-only mode, so there is no way to add it later. It sits
-    idle until `capture.py` teleports it, and publishes on /rec_cam. The
-    horizontal FOV must match what capture.py reprojects with (2.2 rad), and
-    the image has to be at least as fine as the panorama it feeds: 2688 px
-    over 2.2 rad is 21.3 px/degree, which is what the 7680x3840 equirect wants
-    and what the real 360 camera this stands in for actually delivers. At
-    640x480 it was 5.1 px/degree, so every splat was reconstructed from a
-    quarter of the detail a real capture carries and then rendered at three
-    times that — which is what made them look soft.
-
-    A depth camera rides alongside it, on the same link and the same frustum
-    but half the width, publishing to /rec_depth. It feeds a range map, which
-    is geometry rather than a picture: at 1344 px over 2.2 rad it is 10.7
-    px/degree, which already exceeds the training views it supervises, and a
-    float32 depth frame costs more to move than the colour one it accompanies. A 360 camera in a real building produces no such
-    thing — this is the simulator telling us where its surfaces are, and it is
-    used only by the simulated pipeline, to start gaussian splatting from real
-    geometry rather than from noise. Without it the corridor reconstructs as
-    soup: every camera centre sits on one walked line, so depth along a ray is
-    nearly free and gaussians settle wherever they were initialised.
-    """
-    if 'name="rec_cam"' in text:
-        return text
-    cam = """
-    <model name="rec_cam"><pose>0 0 2 0 0 0</pose>
-      <link name="link"><gravity>false</gravity>
-        <sensor name="rec_cam_sensor" type="camera">
-          <camera><horizontal_fov>2.2</horizontal_fov>
-            <image><width>2688</width><height>2016</height></image>
-            <clip><near>0.1</near><far>500</far></clip></camera>
-          <always_on>1</always_on><update_rate>30</update_rate>
-          <topic>rec_cam</topic>
-        </sensor>
-        <sensor name="rec_depth_sensor" type="depth_camera">
-          <camera><horizontal_fov>2.2</horizontal_fov>
-            <image><width>1344</width><height>1008</height></image>
-            <clip><near>0.1</near><far>100</far></clip></camera>
-          <always_on>1</always_on><update_rate>30</update_rate>
-          <topic>rec_depth</topic>
-        </sensor></link>
-    </model>
-"""
-    text = text.replace("</world>", cam + "  </world>", 1)
-    print("  injected the capture camera (rec_cam) and its depth camera")
-    return text
-
-
 def make_doors_opaque(text):
     """The generator gives doors alpha 0.6. Half-transparent doors read as open
     when they are shut, which is exactly the state you are watching for here."""
@@ -154,7 +103,6 @@ def main():
     text = inject_sensors_plugin(text)
     if not building.get("lifts"):
         text = strip_lift_plugin(text)
-    text = inject_rec_cam(text)
     text = make_doors_opaque(text)
 
     open(path, "w").write(text)

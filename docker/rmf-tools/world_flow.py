@@ -11,6 +11,7 @@ Three stages:
                 generator, which is a ROS entrypoint, not a library)
   2. inspect    read the nav graph back: levels, waypoints, lanes, doors
   3. plan       name every vertex and edge, and write the capture plan
+                (one panorama per waypoint — that is what `just plan` reads)
 
 Stages 2 and 3 are the point of running this as a job rather than a script: the
 nav graph is the contract the splat side keys against, so what it holds — and
@@ -18,10 +19,6 @@ what still needs photographing — is worth recording per run.
 
   python submit.py build-world/dreamworld project=<p> [map=<m>]
 
-Also serves capture-edge: photograph one corridor of the simulated building, so
-the splat pipeline can be exercised end to end without anyone walking it.
-
-  python submit.py capture-edge/dreamworld project=<p> edge=<id> [spacing=0.5]
 """
 
 from __future__ import annotations
@@ -36,13 +33,6 @@ from prefect import flow, get_run_logger, serve, task
 from prefect.artifacts import create_table_artifact
 
 PROJECTS = Path(os.environ.get("DW_PROJECTS_DIR", "/projects"))
-# How many corridors may be photographed at once. Each capture is a whole
-# Gazebo rendering 2688x2016 frames, which measured around eight cores apiece,
-# and each now runs on its own partition and ROS domain so they cannot see one
-# another. Capped at seven: past that they contend for the box, not for a bus.
-CAPTURES = max(1, min(7, (os.cpu_count() or 8) // 8))
-
-
 def resolve_map(project: str, map_name: str) -> str:
     """One map per project is the common case, so name it only when there is
     a choice. Resolved here rather than parsed back out of the script's log."""
@@ -235,106 +225,7 @@ def build_world(project: str, map: str = "") -> dict:
     return plan(project, resolved, rows)
 
 
-def _capture_name() -> str:
-    """One run, one corridor — named for it."""
-    from prefect.runtime import flow_run
-
-    p = flow_run.parameters
-    return f"{p.get('project', '?')}/{p.get('edge', '?')}"
-
-
-# The ceiling before a run is called stuck rather than slow. Generous on
-# purpose: at 0.25 m spacing the longest corridor is twenty-two standpoints of
-# twenty-four views each, and several sims share the box, so forty minutes is
-# ordinary. This has now been the third constant sized for a sparser capture —
-# a value that was comfortable at 0.5 m spacing is a hard failure at 0.25.
-CAPTURE_TIMEOUT_S = 120 * 60
-
-
-@task(name="capture", retries=1)
-def photograph(project: str, map_name: str, edge: str, spacing: float) -> dict:
-    """Walk the corridor in sim, writing panoramas and nothing else."""
-    logger = get_run_logger()
-    try:
-        proc = subprocess.run(
-            ["/app/capture.sh", project, map_name, edge, str(spacing)],
-            capture_output=True, text=True, timeout=CAPTURE_TIMEOUT_S)
-    except subprocess.TimeoutExpired as err:
-        # capture.sh's own trap does not run when it is killed from outside, so
-        # clear the sim and the bridge here — otherwise the survivors spin on a
-        # CPU and starve every capture that follows.
-        subprocess.run(["pkill", "-f", "ruby.*gz sim"], check=False)
-        subprocess.run(["pkill", "-f", "ros_gz_bridge/parameter_bridge"], check=False)
-        raise RuntimeError(
-            f"capture of {project}/{edge} still running after "
-            f"{CAPTURE_TIMEOUT_S // 60} min — killed") from err
-    walked = spacing
-    for line in (proc.stdout + proc.stderr).splitlines():
-        if line.startswith("SPACING "):
-            walked = float(line.split()[1])
-            continue
-        logger.info("%s", line)
-    if proc.returncode != 0:
-        raise RuntimeError(f"capture failed for {project}/{edge}")
-    out = PROJECTS / project / "panos" / edge
-    shots = sorted(p.name for p in out.glob("*.png"))
-    if len(shots) < 3:
-        raise RuntimeError(f"only {len(shots)} panorama(s) in {out}; need 3+")
-    # A corridor's length is rarely a whole number of strides, so the interval
-    # actually walked differs a little from the one asked for. It is what makes
-    # the reconstruction metric, so it is reported rather than assumed.
-    logger.info("%d panoramas, walked %.3f m apart -> "
-                "reconstruct with: just generate %s %.3f",
-                len(shots), walked, edge, walked)
-
-    # Then check the panoramas against each other, because a capture can come
-    # back the right size and shape and still be wrong. Nineteen corridors were
-    # photographed from stale frames and nothing noticed for a day.
-    import pano_check
-
-    faithful = pano_check.check(out)
-    if not faithful["judged"]:
-        logger.info("not checked: %s", faithful["why"])
-    elif faithful["corrupt"]:
-        raise RuntimeError(
-            f"{project}/{edge}: the panoramas disagree with each other by "
-            f"{faithful['difference']}/255 over {100 * faithful['overlap']:.0f}% "
-            f"of what both standpoints can see — a faithful capture scores under "
-            f"{pano_check.MAX_DIFFERENCE}. Something is composing them from the "
-            f"wrong poses; re-run before building anything on this.")
-    else:
-        logger.info("panoramas agree to %.1f/255 over %.0f%% shared, "
-                    "%.2f m apart", faithful["difference"],
-                    100 * faithful["overlap"], faithful["baseline_m"])
-    return {"panos": f"{project}/panos/{edge}", "count": len(shots),
-            "spacing_m": round(walked, 4), "first": shots[0], "last": shots[-1],
-            "agreement": faithful.get("difference")}
-
-
-@flow(name="capture-edge", log_prints=True, flow_run_name=_capture_name)
-def capture_edge(project: str, edge: str, spacing: float = 0.5,
-                 map: str = "") -> dict:
-    """Photograph one corridor. One run, one corridor, one folder of images.
-
-    The output is a folder of numbered equirectangular panoramas — the same
-    thing a person hands over after walking it with a 360 camera. Nothing about
-    where the camera stood is written down, so the pipeline downstream gets no
-    help it would not have from a real capture.
-    """
-    resolved = resolve_map(project, map)
-    return photograph(project, resolved, edge, spacing)
-
-
 if __name__ == "__main__":
-    # one at a time apiece: build-world rewrites the world directory in place,
-    # and a capture boots its own Gazebo
-    # Captures run several at a time: each brings up its own Gazebo on its own
-    # partition and its own ROS domain, so they cannot see each other. World
-    # generation stays alone — it rewrites the very files a capture reads.
-    #
-    # `limit` is the runner's own cap and overrides the per-deployment ones
-    # beneath it; leaving it at 1 serialises everything whatever they say.
+    # One at a time: build-world rewrites the world directory in place.
     serve(build_world.to_deployment(name="dreamworld", concurrency_limit=1),
-          capture_edge.to_deployment(name="dreamworld",
-                                     concurrency_limit=CAPTURES),
-          limit=CAPTURES)
+          limit=1)

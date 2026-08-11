@@ -3,7 +3,6 @@
 #
 #   entrypoint.sh jobs                     serve build-world to the job queue
 #   entrypoint.sh world  <project> [map]   building.yaml -> world + nav graph
-#   entrypoint.sh capture <project> <edge> [spacing] [map]  photograph a corridor
 #   entrypoint.sh sim    <project> [map]   run it headless under RMF, over noVNC
 #   entrypoint.sh editor <project> [map]   the traffic editor, over noVNC
 #
@@ -73,15 +72,6 @@ jobs)
 
 world)
     exec /app/generate_world.sh "$PROJECT" "$MAP"
-    ;;
-
-capture)
-    # direct capture, for when the job server itself is what's broken;
-    # normally this arrives as a capture-edge job
-    EDGE="${3:?usage: entrypoint.sh capture <project> <edge> [spacing] [map]}"
-    MAP="${5:-}"
-    resolve_map
-    exec /app/capture.sh "$PROJECT" "$MAP" "$EDGE" "${4:-0.5}"
     ;;
 
 sim)

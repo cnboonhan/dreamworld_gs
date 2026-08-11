@@ -205,49 +205,6 @@ world map="" proj=project: up
         build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
 
-# Stands a camera at points along the lane and captures a 360 panorama at each,
-# writing panos/<edge>/000.png ... — the numbered images someone hands over
-# after walking a corridor, plus the poses and range maps the simulator alone
-# can know, which pano_check.py uses to prove a capture is not corrupt.
-#
-# spacing is how far apart you stop, as when walking — the number of stops
-# follows from the corridor's length. This is the sim reference to compare a
-# generated world against, not an input to one: worlds are generated from a
-# single panorama taken at a waypoint (`just generate`).
-#
-#   just capture L11.cafe--v7        stop every half metre
-#   just capture L11.cafe--v7 0.25   denser
-#
-# Photograph one corridor of the simulated building.
-capture edge spacing="0.5" proj=project: up
-    docker compose exec -T generator python submit.py \
-        capture-edge/dreamworld \
-        project={{proj}} edge={{edge}} spacing={{spacing}}
-    @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
-
-# Photograph every corridor that has no panoramas yet — one job each, so a bad
-# one is a single re-run rather than a lost batch.
-#
-# Photograph every corridor of the simulated building not yet shot.
-capture-all spacing="0.5" proj=project: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    plan=$(find {{assets}}/projects/{{proj}}/worlds -name capture_plan.json | head -1)
-    [ -n "$plan" ] || { echo "no capture plan — run: just world" >&2; exit 1; }
-    todo=$(python3 -c "
-    import json
-    from pathlib import Path
-    root = Path('{{assets}}/projects/{{proj}}')
-    doc = json.load(open('$plan'))
-    for data in doc['levels'].values():
-        for e in data['edges']:
-            if not any((root / 'panos' / e['id']).glob('*')):
-                print(e['id'])
-    ")
-    n=$(printf '%s' "$todo" | grep -c . || true)
-    echo "$n corridor(s) to photograph"
-    for e in $todo; do just capture "$e" {{spacing}} {{proj}}; done
-
 # The panorama alignment tool, on the host rather than in a container: it edits
 # assets/projects/*/panos in place and wants a browser pointed at it.
 #

@@ -14,9 +14,9 @@ bearings over the panorama and lets you turn it until they land on the
 corridors. One angle, by eye, from what the building already knows.
 
 Saving rolls the image itself rather than writing the angle down beside it. A
-rolled equirect is still an equirect, so every reader downstream — reprojection,
-HunyuanWorld, the range grid in capture.py — gets a panorama already in the
-building's frame, with no new field to plumb through and nothing to forget.
+rolled equirect is still an equirect, so every reader downstream — HunyuanWorld,
+the viewer, the walks — gets a panorama already in the building's frame, with
+no new field to plumb through and nothing to forget.
 
     python scripts/align_panos.py [--project multilevel_office] [--port 8085]
 
