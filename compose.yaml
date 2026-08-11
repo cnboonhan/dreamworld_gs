@@ -74,6 +74,12 @@ services:
       - --max-model-len=32768
       - --trust-remote-code
       - --gpu-memory-utilization=0.80
+      # Tool calling, for the interactive mission agent. vllm serves tools only
+      # when both are set: without them an agent's first tool call comes back
+      # 400 '"auto" tool choice requires --enable-auto-tool-choice'. Harmless to
+      # the trajectory planner, which never calls a tool.
+      - --enable-auto-tool-choice
+      - --tool-call-parser=hermes
     deploy:
       resources:
         reservations:
@@ -171,6 +177,12 @@ services:
       # Unset and the viewer walks alone — which is the whole system minus the
       # robot, and the way to run this on a box with no Gazebo.
       GALAXEA_URL: "http://localhost:${DW_GALAXEA_PORT:-8090}"
+      # The mission agent's model, over any OpenAI-compatible endpoint. Defaults
+      # to the VLM this stack already runs; point DW_VLM_URL at a cliproxyapi and
+      # DW_VLM_MODEL at a Claude model to swap it, no rebuild.
+      VLM_BASE_URL: "${DW_VLM_URL:-http://localhost:8000/v1}"
+      VLM_API_KEY: "${DW_VLM_KEY:-x}"
+      VLM_MODEL: "${DW_VLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}"
     restart: unless-stopped
 
   # The Galaxea R1 in its own Gazebo, driven over HTTP. Its own transport

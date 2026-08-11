@@ -57,6 +57,7 @@ Five web UIs come up and stay up:
 | http://localhost:8082 | 360 viewer for input panoramas |
 | http://localhost:8083 | the building simulated under RMF (Gazebo, over noVNC) |
 | http://localhost:8084 | the traffic editor — author the map (over noVNC) |
+| http://localhost:8086 | the dashboard — tools, mission agent, viewer embedded |
 
 (Eight containers: those five plus the VLM and the two job workers.)
 
@@ -71,7 +72,8 @@ Remotely:
 
 ```bash
 ssh -L 4200:localhost:4200 -L 8081:localhost:8081 -L 8082:localhost:8082 \
-    -L 8083:localhost:8083 -L 8084:localhost:8084 -L 8085:localhost:8085 <this-host>
+    -L 8083:localhost:8083 -L 8084:localhost:8084 -L 8085:localhost:8085 \
+    -L 8086:localhost:8086 -L 8090:localhost:8090 <this-host>
 ```
 
 Open splats in a **real browser tab** — embedded IDE browsers abort the
@@ -283,6 +285,10 @@ dashboard drives this one unchanged:
 | items | `pick` `place` |
 | planning | `plan_route` `where` `get_path` `get_graph` `write_mission` `write_todos` |
 
+The dashboard is at **http://localhost:8086** — the tool palette, the live log, the
+world model the agent reads, and the splat viewer embedded as the rollout, already
+carrying the `?agent=` parameter that hands over its camera.
+
 ```bash
 just interactive
 curl localhost:8086/tools
@@ -312,6 +318,25 @@ and the robot stay edge-for-edge in step.
 
 The two halves read the same `nav_graphs/0.yaml`, which is what makes that true:
 one graph, one set of indices, one metric frame.
+
+**The mission agent** (`POST /agent`) is the deepagents graph over these same tools,
+with `/pause`, `/resume` and `/cancel`. The harness owns subtask status, as it did in
+the dream: `write_todos` rejects anything that is not exactly one tool call, a call
+out of turn is rejected as `out_of_order`, and a subtask completes only when its
+verify passes — which here means the viewer reporting where it stands *and* the
+bridge's RMF state putting the robot within 0.8 m of the waypoint. An agent cannot
+mark its own work done.
+
+It speaks to any OpenAI-compatible endpoint, so the model is configuration rather
+than code:
+
+```bash
+DW_VLM_URL=http://localhost:3000/v1 DW_VLM_MODEL=claude-opus-4-8 \
+DW_VLM_KEY=<key> docker compose up -d interactive
+```
+
+It defaults to the Qwen3-VL the stack already runs; point it at a cliproxyapi and a
+Claude model and nothing else changes.
 
 `GALAXEA_URL` unset runs the viewer half alone, on a box with no Gazebo. The Galaxea
 R1 meshes are ~32 MB and live at `assets/projects/<p>/GalaxeaR1/`, outside git.

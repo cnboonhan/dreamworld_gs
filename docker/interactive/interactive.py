@@ -29,6 +29,8 @@ GALAXEA_URL to enable it; with it unset the viewer walks alone.
 """
 
 import argparse
+import collections
+import functools
 import heapq
 import json
 import math
@@ -162,6 +164,7 @@ class Bus:
 
     def __init__(self):
         self.qs, self.lock = [], threading.Lock()
+        self.recent = collections.deque(maxlen=60)
 
     def listen(self):
         q = queue.Queue(maxsize=64)
@@ -174,7 +177,14 @@ class Bus:
             if q in self.qs:
                 self.qs.remove(q)
 
+    def recent_log(self, n=12):
+        return list(self.recent)[-n:]
+
     def send(self, msg):
+        if msg.get("type") in ("log", "tool"):
+            with self.lock:
+                self.recent.append(msg.get("text") or
+                                   f"{msg.get('tool')} -> {json.dumps(msg.get('result'))[:160]}")
         with self.lock:
             targets = list(self.qs)
         for q in targets:
@@ -561,9 +571,20 @@ def write_todos(todos=None):
     items = todos or []
     if isinstance(items, str):
         items = [s.strip() for s in items.split("\n") if s.strip()]
+    bad = [x for x in items if not _subtask_tool(x)]
+    if bad:
+        return {"ok": False, "rejected": True,
+                "error": "Every subtask must be exactly one control-tool call, starting "
+                         "with the tool name. Not valid: " + "; ".join(bad),
+                "allowed_tools": sorted(SUBTASK_TOOLS),
+                "example": ["go_to lift_lobby_north", "face v0", "open_door",
+                            "go_to apex_lab", "pick apple"]}
     with ST["lock"]:
-        ST["todos"] = [{"step": s, "status": "pending"} for s in items]
+        ST["todos"] = [{"step": x, "status": "pending"} for x in items]
+        if ST["todos"]:
+            ST["todos"][0]["status"] = "in_progress"
     push_state()
+    _push_context()
     return {"ok": True, "todos": ST["todos"]}
 
 
@@ -598,7 +619,407 @@ def handle(text):
                                   f"open door, where."}
 
 
+# ---- verification: a subtask completes when the world says it did ------------
+# Ported from the dream harness, and kept for the same reason: an agent that marks
+# its own work done will mark it done. Here the world is the viewer's reported
+# position and the bridge's RMF state, so a subtask cannot complete unverified.
+
+VERIFY = {}
+SUBTASK_TOOLS = {"go_to", "turn", "face", "open_door", "close_door",
+                 "select_lift", "call_lift", "pick", "place"}
+
+
+def verifies(*names):
+    def deco(fn):
+        for n in names:
+            VERIFY[n] = fn
+        return fn
+    return deco
+
+
+def _arg(args, key):
+    if isinstance(args, dict):
+        return args.get(key)
+    if isinstance(args, (list, tuple)):
+        return args[0] if args else None
+    return args
+
+
+@verifies("go_to")
+def _v_go_to(args, r):
+    if not r.get("ok"):
+        return False, str(r.get("error") or "did not move")
+    try:
+        tgt = find_vertex(ST["verts"], str(_arg(args, "vertex")))
+    except SystemExit:
+        return False, "no such waypoint"
+    if ST["cur"] != tgt:
+        return False, f"still at {lab(ST['cur'])}"
+    if ST.get("galaxea"):
+        st = robot_state()
+        if st.get("x") is not None:
+            d = math.hypot(st["x"] - ST["verts"][tgt][1], st["y"] - ST["verts"][tgt][2])
+            if d > 0.8:
+                return False, f"robot is {d:.1f} m from {lab(tgt)}"
+    return True, f"at {lab(tgt)}"
+
+
+@verifies("face", "turn")
+def _v_face(args, r):
+    if not r.get("ok"):
+        return False, str(r.get("error") or "did not turn")
+    return True, f"facing {r.get('facing')}"
+
+
+@verifies("open_door", "close_door")
+def _v_door(args, r):
+    if not r.get("ok"):
+        return False, str(r.get("error") or "no door")
+    name, want = r.get("door"), r.get("mode") == "open"
+    if ST.get("galaxea"):
+        # The bridge owns the real door; ask it rather than trusting our own record.
+        st = (bridge("/state") or {}).get("doors") or {}
+        if name in st and bool(st[name]) != want:
+            return False, f"{name} did not reach {r.get('mode')}"
+    return True, f"{name} {r.get('mode')}"
+
+
+@verifies("pick", "place")
+def _v_item(args, r):
+    if not r.get("ok"):
+        return False, str(r.get("error") or "failed")
+    item, held = str(_arg(args, "item")), r.get("inventory") or []
+    ok = (item in held) if r.get("_pick", True) else (item not in held)
+    return ok, f"inventory: {', '.join(held) or 'empty'}"
+
+
+@verifies("select_lift", "call_lift")
+def _v_lift(args, r):
+    return bool(r.get("ok")), str(r.get("error") or r.get("lift") or "ok")
+
+
+def _subtask_tool(text):
+    """The tool a subtask names, or "" when it is prose rather than a call."""
+    head = str(text).strip().split()
+    return head[0] if head and head[0] in SUBTASK_TOOLS else ""
+
+
+def _record_verify(name, args, result):
+    """Run this tool's verify against the current subtask and advance the plan."""
+    if name not in VERIFY or not isinstance(result, dict):
+        return
+    try:
+        passed, note = VERIFY[name](args, result)
+    except Exception as e:
+        passed, note = False, f"verify raised {type(e).__name__}: {e}"
+    with ST["lock"]:
+        todos = ST.get("todos") or []
+        cur = next((t for t in todos if t["status"] == "in_progress"), None) or \
+              next((t for t in todos if t["status"] == "pending"), None)
+        if cur is None or _subtask_tool(cur["step"]) != name:
+            return
+        cur["verify"] = {"passed": passed, "note": note}
+        if passed:
+            cur["status"] = "completed"
+            nxt = next((t for t in todos if t["status"] == "pending"), None)
+            if nxt:
+                nxt["status"] = "in_progress"
+        else:
+            cur["status"] = "in_progress"
+    BUS.send({"type": "log", "level": "ok" if passed else "err",
+              "text": f"  ↳ verify {'✓' if passed else '✗'} {note}"})
+    push_state()
+    _push_context()
+
+
+def _mission_gate(name):
+    """Reject a tool call that is not the subtask now due.
+
+    The harness owns the order, so an agent cannot work ahead into a world it has
+    not walked to yet. Report tools are always allowed — looking is free.
+    """
+    if name not in SUBTASK_TOOLS:
+        return None
+    todos = ST.get("todos") or []
+    due = next((t for t in todos if t["status"] in ("in_progress", "pending")), None)
+    if due is None:
+        return None
+    want = _subtask_tool(due["step"])
+    if want and want != name:
+        return {"ok": False, "out_of_order": True,
+                "error": f"the subtask due now is {due['step']!r} — call {want}, not {name}"}
+    return None
+
+
+def _post_tool(name, args, result):
+    """Shared by every path into a tool: verify, then hand back the fresh log as
+    state so the caller (agent or operator) reacts to what actually happened."""
+    if isinstance(result, dict):
+        _record_verify(name, args, result)
+        if name != "write_todos":
+            result = {**result, "recent_log": BUS.recent_log(12)}
+    return result
+
+
+# ---- the world model the agent reads each turn ------------------------------
+def build_context():
+    s = state_dict()
+    icon = {"completed": "✓", "in_progress": "▶", "pending": "○"}
+    L = ["## Mission", ST.get("mission") or "(none)", "", "## Subtasks"]
+    todos = ST.get("todos") or []
+    for t in todos:
+        line = f"{icon.get(t['status'], '○')} {t['step']}"
+        v = t.get("verify")
+        if v:
+            line += "\n    ↳ verify " + ("✓ " if v["passed"] else "✗ ") + (v.get("note") or "")
+        L.append(line)
+    if not todos:
+        L.append("(none)")
+    L += ["", "## Robot", f"- at {s['at']}  ·  level {s['level']}",
+          f"- facing {s['face'] or '(nothing)'}",
+          f"- neighbours: {', '.join(s['neighbours'])}",
+          f"- doors open: {', '.join(s['open_doors']) or 'none'}",
+          f"- splat world on screen: {s['scene']}"]
+    if ST.get("galaxea"):
+        st = robot_state()
+        if st.get("x") is not None:
+            L.append(f"- gazebo r1 at ({st['x']:.2f}, {st['y']:.2f}) on {st.get('level')}")
+    here = (ST.get("items") or {}).get(s["at"]) or []
+    if here:
+        L += ["", "## Interactable here", "- " + ", ".join(here) + "  (use `pick <item>`)"]
+    L += ["", "## Robot inventory", "- " + (", ".join(s["inventory"]) or "(empty)")]
+    lifts = {v: ST["lift_of"][v] for v in ST["lift_of"]}
+    if lifts:
+        L += ["", "## Lifts",
+              "(these are LIFTS; 'lift1' is a lift, its floor is a LEVEL like L1)"]
+        L += [f"- {name} at cabin {lab(v)}" for v, name in sorted(lifts.items())]
+    L += ["", "## Recent log"] + ["- " + x for x in BUS.recent_log(12)] or ["- (none)"]
+    return "\n".join(L)
+
+
+def _push_context():
+    BUS.send({"type": "statemodel", "text": build_context()})
+
+
+# ---- the mission agent ------------------------------------------------------
+# Optional: it needs deepagents installed AND a VLM endpoint. Without either, every
+# tool stays directly callable — the agent is a driver of this surface, not a part
+# of it.
+VLM_BASE_URL = os.environ.get("VLM_BASE_URL", "")
+VLM_API_KEY = os.environ.get("VLM_API_KEY", "x")
+VLM_MODEL = os.environ.get("VLM_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
+
+AGENT_PROMPT = (
+    "You are an agent that walks a building to carry out missions. The building is "
+    "real: you see it as gaussian-splat worlds photographed at each waypoint, and a "
+    "Galaxea R1 robot walks the same route in a Gazebo simulation of it.\n"
+    "You act ONLY through the CONTROL tools, one action each: go_to, turn, face, "
+    "open_door, close_door, select_lift, call_lift, pick, place. There is NO 'forward' "
+    "— ALL movement is a go_to. get_graph/where/get_path/plan_route report; "
+    "write_mission/write_todos track.\n"
+    "HOW NAVIGATION WORKS: go_to walks ONLY fully-UNBLOCKED paths. Do NOT probe for "
+    "obstacles by trying a go_to and waiting for BLOCKED — that wastes a turn. Call "
+    "plan_route <dest> FIRST: it returns the obstacle-aware 'steps' list (go_to -> face "
+    "-> open_door -> go_to ...) that already opens every closed door on the route, and "
+    "you feed that straight into write_todos.\n"
+    "WORKFLOW:\n"
+    "1. write_mission with the goal. Then plan_route <destination>, and write_todos with "
+    "the steps it returns (adding pick/place where the mission needs them). Every subtask "
+    "MUST be exactly one control-tool call and start with the tool name.\n"
+    "2. Execute STRICTLY IN ORDER, one tool call at a time. You do NOT set statuses — the "
+    "HARNESS owns them: the moment a call's verify passes it auto-marks that subtask "
+    "completed and moves the next to in_progress. Calling any tool other than the one due "
+    "is REJECTED as out_of_order.\n"
+    "3. VERIFY IS AUTOMATIC: after each control call the harness checks the world — where "
+    "the viewer says it stands, and where the robot's RMF state says it is. On ✗ the "
+    "subtask stays in_progress; re-check with 'where' and retry that same call.\n"
+    "Every tool result carries 'recent_log' — read it, and call write_todos to revise the "
+    "plan when it reveals something new. Do not end while any subtask is unfinished. "
+    "Keep replies short."
+)
+
+_AGENT = {"graph": None, "err": "not built"}
+_RUN = threading.Event()      # set = running, cleared = paused
+_RUN.set()
+_CANCEL = threading.Event()   # set = cancelled; tool calls become no-ops
+
+
+def _gate(fn):
+    """Wrap a tool so it blocks while paused, no-ops once cancelled, refuses to run
+    out of order, and verifies afterwards. functools.wraps keeps the signature, which
+    is what langchain infers the argument schema from."""
+    @functools.wraps(fn)
+    def w(*a, **k):
+        _RUN.wait()
+        if _CANCEL.is_set():
+            return {"ok": False, "cancelled": True,
+                    "error": "mission cancelled by the operator — stop, do nothing further"}
+        blocked = _mission_gate(fn.__name__)
+        if blocked is not None:
+            return blocked
+        return _post_tool(fn.__name__, k or list(a), fn(*a, **k))
+    return w
+
+
+def build_agent():
+    if not VLM_BASE_URL:
+        _AGENT["err"] = "no VLM_BASE_URL configured"
+        return None
+    try:
+        from deepagents import create_deep_agent
+        from langchain_core.tools import StructuredTool
+        from langchain_openai import ChatOpenAI
+        from langgraph.checkpoint.memory import MemorySaver
+    except Exception as e:
+        _AGENT["err"] = f"deepagents/langchain not installed ({e})"
+        return None
+    tools = [StructuredTool.from_function(_gate(t["fn"]), name=n, description=t["desc"])
+             for n, t in TOOLS.items()]
+    llm = ChatOpenAI(base_url=VLM_BASE_URL, api_key=VLM_API_KEY, model=VLM_MODEL,
+                     streaming=True, max_retries=1, timeout=120)
+    _AGENT["graph"] = create_deep_agent(model=llm, tools=tools,
+                                        system_prompt=AGENT_PROMPT,
+                                        checkpointer=MemorySaver())
+    _AGENT["err"] = ""
+    return _AGENT["graph"]
+
+
+PAGE = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
+<title>interactive — walk the building</title>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--dim:#8b98a8;--line:#22303f;--ok:#6ea8fe;--err:#ff7b72}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;height:100vh;display:flex}
+#left{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
+#right{flex:0 0 380px;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+iframe{flex:1 1 auto;border:0;width:100%;background:#000}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0;padding:8px 10px;border-bottom:1px solid var(--line)}
+.pane{display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--line)}
+.pane.grow{flex:1 1 0}
+pre{margin:0;padding:8px 10px;overflow:auto;white-space:pre-wrap;font-size:12px;flex:1 1 auto}
+#bar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line);background:#0b0f14}
+input,button,select{background:#161b22;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px 8px;font:inherit}
+input{flex:1 1 auto;min-width:0}
+button{cursor:pointer;white-space:nowrap}
+button:hover{border-color:var(--ok);color:var(--ok)}
+#tools{display:flex;flex-wrap:wrap;gap:4px;padding:8px}
+#tools button{font-size:11px;padding:3px 7px}
+.log div{padding:1px 10px}
+.log .err{color:var(--err)} .log .warn{color:#e3b341} .log .mission{color:var(--ok)}
+#status{padding:6px 10px;color:var(--dim);border-bottom:1px solid var(--line);font-size:12px}
+#status b{color:var(--fg);font-weight:600}
+canvas{display:block;width:100%;background:#0b0f14}
+</style></head><body>
+<div id=left>
+  <div id=status>connecting…</div>
+  <iframe id=view></iframe>
+  <div id=bar>
+    <input id=cmd placeholder="go to apex_lab   ·   face v0   ·   open door   ·   where">
+    <button onclick=send()>run</button>
+    <button onclick=mission()>mission</button>
+    <button onclick=post('/pause')>pause</button>
+    <button onclick=post('/resume')>resume</button>
+    <button onclick=post('/cancel')>cancel</button>
+  </div>
+</div>
+<div id=right>
+  <div class=pane><h2>tools</h2><div id=tools></div></div>
+  <div class="pane grow"><h2>world model</h2><pre id=model>…</pre></div>
+  <div class="pane grow"><h2>log</h2><pre class=log id=log></pre></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let ST = {};
+
+const say = (text, level) => {
+  const d = document.createElement("div");
+  d.className = level || "ok"; d.textContent = text;
+  $("log").appendChild(d); $("log").scrollTop = 1e9;
+};
+
+const post = (path, body) =>
+  fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
+               body: JSON.stringify(body || {})}).then((r) => r.json());
+
+function send() {
+  const text = $("cmd").value.trim();
+  if (!text) return;
+  $("cmd").value = "";
+  say("> " + text);
+  post("/command", {text}).then((r) => { if (!r.ok) say(r.error, "err"); });
+}
+function mission() {
+  const text = $("cmd").value.trim() || prompt("mission?");
+  if (!text) return;
+  $("cmd").value = "";
+  say("mission: " + text, "mission");
+  post("/agent", {text}).then((r) => { if (!r.ok) say(r.error, "err"); });
+}
+$("cmd").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+// The viewer is the rollout, embedded rather than linked: one page, and the
+// ?agent= parameter is what hands its camera to this server.
+function openView(scene) {
+  const url = `${VIEWER}/?url=files/${PROJECT}/splats/${scene}/world.ply` +
+              `&agent=${encodeURIComponent(location.origin)}`;
+  if ($("view").dataset.scene !== scene) {
+    $("view").dataset.scene = scene;
+    $("view").src = url;
+  }
+}
+
+function paint(s) {
+  ST = s;
+  $("status").innerHTML =
+    `at <b>${s.at}</b> · ${s.level} · facing ${s.face || "—"} · ` +
+    `neighbours ${s.neighbours.join(", ")} · ` +
+    `viewer ${s.viewer ? "<b>on</b>" : "off"} · robot ${s.galaxea ? "<b>on</b>" : "off"}`;
+  if (!$("view").dataset.scene) openView(s.scene);
+}
+
+fetch("/tools").then((r) => r.json()).then((tools) => {
+  for (const name of Object.keys(tools).sort()) {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.title = tools[name].desc;
+    b.onclick = () => {
+      const args = {};
+      for (const p of tools[name].params) {
+        const v = prompt(`${name}: ${p.name}\n${p.desc}`);
+        if (v === null) return;
+        if (v !== "") args[p.name] = v;
+      }
+      say(`> ${name}(${JSON.stringify(args)})`);
+      post("/tool", {tool: name, args}).then((r) => {
+        if (!r.ok) say(r.error || JSON.stringify(r), "err");
+      });
+    };
+    $("tools").appendChild(b);
+  }
+});
+
+const es = new EventSource("/events");
+es.onmessage = (e) => {
+  const m = JSON.parse(e.data);
+  if (m.type === "state") paint(m);
+  else if (m.type === "log") say(m.text, m.level);
+  else if (m.type === "statemodel") $("model").textContent = m.text;
+  else if (m.type === "tool") say(`  ${m.tool} -> ${JSON.stringify(m.result).slice(0, 200)}`);
+};
+es.onerror = () => say("dashboard disconnected — retrying", "err");
+fetch("/statemodel").then((r) => r.json()).then((d) => { $("model").textContent = d.text; });
+</script></body></html>"""
+
+
 # ---- HTTP -------------------------------------------------------------------
+@app.route("/")
+def r_index():
+    """The dashboard: the splat viewer as the rollout, the tools beside it."""
+    return (PAGE.replace("VIEWER", json.dumps(ST["viewer_base"]))
+                .replace("PROJECT", json.dumps(ST["project"])),
+            200, {"Content-Type": "text/html; charset=utf-8"})
+
+
 @app.route("/state")
 def r_state():
     return jsonify(state_dict())
@@ -624,7 +1045,8 @@ def r_tool():
         return jsonify(ok=False, error=f"no such tool: {name}",
                        tools=sorted(TOOLS)), 400
     log(f"{name}({', '.join(f'{k}={v!r}' for k, v in args.items())})")
-    res = t["fn"](**args)
+    blocked = _mission_gate(name)
+    res = blocked if blocked is not None else _post_tool(name, args, t["fn"](**args))
     BUS.send({"type": "tool", "tool": name, "args": args, "result": res})
     return jsonify(res)
 
@@ -706,6 +1128,74 @@ def r_viewer_hello():
     return jsonify(ok=True, expect=scene_of(ST["cur"]))
 
 
+@app.route("/statemodel")
+def r_statemodel():
+    return jsonify(text=build_context())
+
+
+@app.route("/agent", methods=["POST", "OPTIONS"])
+def r_agent():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if _AGENT["graph"] is None and build_agent() is None:
+        return jsonify(ok=False, error=f"agent unavailable: {_AGENT['err']}")
+    from langchain_core.messages import HumanMessage
+    text = (request.get_json(force=True, silent=True) or {}).get("text", "")
+    _CANCEL.clear()
+    _RUN.set()
+    log(f"agent ▶ {text}", "mission")
+    prompt = (f"New mission from the operator: {text}\n\nCurrent world model:\n"
+              f"{build_context()}\n\nSet the mission and subtasks, then execute them.")
+    cfg = {"configurable": {"thread_id": "interactive"}, "recursion_limit": 300}
+
+    def run():
+        try:
+            out = _AGENT["graph"].invoke({"messages": [HumanMessage(content=prompt)]}, cfg)
+            final = out["messages"][-1].content if out.get("messages") else ""
+            todos = ST.get("todos") or []
+            if todos and all(t["status"] == "completed" for t in todos):
+                log("✓ mission complete — every subtask verified")
+            log(str(final)[:400])
+        except Exception as e:
+            log(f"agent error: {e}", "err")
+        finally:
+            _RUN.set()
+            _push_context()
+
+    # In a thread: a mission is many walks long, and the operator needs /pause and
+    # /cancel to be answerable while it runs.
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(ok=True, started=True)
+
+
+@app.route("/pause", methods=["POST", "OPTIONS"])
+def r_pause():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    _RUN.clear()
+    log("⏸ paused — the agent's next tool call will block", "warn")
+    return jsonify(ok=True, paused=True)
+
+
+@app.route("/resume", methods=["POST", "OPTIONS"])
+def r_resume():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    _RUN.set()
+    log("▶ resumed")
+    return jsonify(ok=True, paused=False)
+
+
+@app.route("/cancel", methods=["POST", "OPTIONS"])
+def r_cancel():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    _CANCEL.set()
+    _RUN.set()      # unblock a paused agent so it can see the cancel and stop
+    log("✖ mission cancelled", "err")
+    return jsonify(ok=True, cancelled=True)
+
+
 @app.route("/health")
 def r_health():
     return jsonify(ok=True, viewer=bool(ST.get("viewer_up")),
@@ -734,6 +1224,7 @@ def main():
         "project": a.project,
     })
     ST["cur"] = find_vertex(verts, a.start)
+    ST["viewer_base"] = a.viewer.rstrip("/")
     ST["viewer_url"] = (f"{a.viewer}/?url=files/{a.project}/splats/"
                         f"{scene_of(ST['cur'])}/world.ply"
                         f"&agent=http://localhost:{a.port}")

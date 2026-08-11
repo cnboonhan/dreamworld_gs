@@ -122,10 +122,12 @@ up: _env
     echo "  rmf sim       http://localhost:8083"
     echo "  traffic ed    http://localhost:8084"
     echo "  align panos   http://localhost:8085   ($align)"
+    echo "  interactive   http://localhost:{{iport}}   (tools + agent, viewer embedded)"
     echo
     echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
     echo "              -L 8082:localhost:8082 -L 8083:localhost:8083 \\"
-    echo "              -L 8084:localhost:8084 -L 8085:localhost:8085 <this-host>"
+    echo "              -L 8084:localhost:8084 -L 8085:localhost:8085 \\"
+    echo "              -L {{iport}}:localhost:{{iport}} -L 8090:localhost:8090 <this-host>"
 
 # Point the whole stack at another project and restart the services that care.
 #
