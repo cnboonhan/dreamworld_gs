@@ -226,25 +226,6 @@ generate id spacing="0.25" proj=project: up
     echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .path.json)"
     echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
 
-# Render a walkthrough of one splat, riding the walk it was built from.
-#
-# Paced at walking speed from the length the splat's sidecar records, so a one
-# metre corridor and a six metre one are watched at the same speed.
-#
-#   just video L11.cafe--v7@world
-video id proj=project: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir={{assets}}/projects/{{proj}}
-    if [ ! -f "$dir/splats/{{id}}/world.ply" ]; then
-        echo "no splat built for '{{id}}' in {{proj}} — run: just generate {{id}}" >&2
-        exit 1
-    fi
-    docker compose exec -T generator python submit.py \
-        render-video/dreamworld \
-        scene=/workspace/projects/{{proj}}/splats/{{id}}
-    echo "-> assets/projects/{{proj}}/splats/{{id}}/walkthrough.mp4"
-
 # Build the Gazebo world + nav graph from a project's building map.
 #
 # Submitted as the build-world job. The nav graph it produces

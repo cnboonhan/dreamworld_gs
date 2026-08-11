@@ -1,20 +1,14 @@
-"""Render a walkthrough video of a built world.
+"""Rasterising a camera path into a video, for routes.
 
-The camera rides `world.path.json`, the walk make_spawn_cam wrote beside the
-splat — a generated world's corridor out of the building map, a reconstructed
-one's walk through its own standpoints. Either way it is where the scene was
-actually observed, and off it is what makes gaussian splats look bad, since
-those regions were never constrained by any view.
-
-    python render_video.py <scene-dir>
-
-Writes <scene>/walkthrough.mp4.
+Per-splat walkthroughs are gone: a world is toured in the browser now, where
+the corridor is chosen from a dropdown and the camera driven, and a rendered
+mp4 of one fixed line through it answered the same question worse. What is
+left is what a route still needs — walking a polyline, pointing the camera
+along it, and encoding the frames.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import subprocess
 from pathlib import Path
 
@@ -167,18 +161,6 @@ def look_at(eye: np.ndarray, target: np.ndarray, up: np.ndarray) -> np.ndarray:
     return m
 
 
-def plan_path(scene: Path, n_frames: int):
-    """(eyes, targets, up) for the camera, one entry per frame.
-
-    `world.path.json` is the walk itself, written by make_spawn_cam whichever
-    way it knew it: a generated world's corridor comes out of the building map,
-    a reconstructed one's out of its COLMAP model. One source for both, so the
-    camera here only has to ride it.
-    """
-    doc = json.loads((scene / "world.path.json").read_text())
-    return route_path(doc, n_frames)
-
-
 def render_frames(eyes, targets, up, out: Path, plys: list[Path]) -> Path:
     """Rasterise every frame of the path into a raw mp4; returns its path."""
     import cv2
@@ -221,28 +203,9 @@ def encode(tmp: Path, out: Path) -> None:
 
 
 def frames_for(metres: float) -> int:
-    """How many frames a walk of this length earns.
-
-    A corridor here is between one and six metres and a route is tens, so one
-    duration for all of them is a crawl through some and a dash through
-    others. Walking speed instead, floored so the shortest is still watchable.
-    """
+    """How many frames a walk of this length earns, at walking speed."""
     return int(max(6.0, metres / WALK_MS) * FPS)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("scene", type=Path)
-    args = ap.parse_args()
-
-    doc = json.loads((args.scene / "world.path.json").read_text())
-    n_frames = frames_for(doc["length_m"])
-    out = args.scene / "walkthrough.mp4"
-    eyes, targets, up = plan_path(args.scene, n_frames)
-    tmp = render_frames(eyes, targets, up, out, [args.scene / "world.ply"])
-    encode(tmp, out)
-    print(f"wrote {out} ({out.stat().st_size / 1e6:.1f}MB, {n_frames} frames)")
-
-
 if __name__ == "__main__":
-    main()
+    raise SystemExit("render_video is a library now; routes render via video.py")

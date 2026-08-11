@@ -5,7 +5,6 @@
                      inferred (SfM), then the splat is aligned into the building
   reconstruct-simulated  panoramas from the simulator, which recorded where it
                      stood -> no solve, no alignment; placed by construction
-  render-video       a built splat -> a walkthrough riding its recorded walk
   render-route       a planned route -> a walkthrough of the whole traversal,
                      rendered from the union of the corridors it crosses
   plan-route         two waypoints -> the walk between them, as a route the
@@ -33,7 +32,7 @@ RECONSTRUCTIONS = max(1, len(
 from flow import generate_world
 from reconstruct import reconstruct_simulated, reconstruct_world
 from route import plan_route
-from video import render_route, render_walkthrough
+from video import render_route
 
 if __name__ == "__main__":
     serve(
@@ -42,7 +41,6 @@ if __name__ == "__main__":
                                         concurrency_limit=RECONSTRUCTIONS),
         reconstruct_simulated.to_deployment(name="dreamworld",
                                             concurrency_limit=RECONSTRUCTIONS),
-        render_walkthrough.to_deployment(name="dreamworld", concurrency_limit=1),
         render_route.to_deployment(name="dreamworld", concurrency_limit=1),
         plan_route.to_deployment(name="dreamworld", concurrency_limit=1),
         # The runner's own cap, which overrides every per-deployment limit

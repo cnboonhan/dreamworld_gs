@@ -1,18 +1,16 @@
-"""render-video — a walkthrough of a built splat, as a job.
+"""render-route — a whole traversal as a video, for showing someone elsewhere.
 
-The camera rides `world.path.json`: for a generated world that is the corridor
-it was built from, straight out of the building map; for a reconstructed one it
-is the walk the panoramas were shot along. Either way it is where the scene was
-actually observed, and straying from it is where a gaussian splat looks worst.
+The viewer walks a route live and needs no render, so this exists only to hand
+someone a file. Per-splat walkthroughs are gone: a world is toured in the
+browser now, where the corridor can be chosen and the camera driven, and a
+rendered mp4 of one fixed line through it was a worse answer to the same
+question.
 
 Three stages, so a long render reports where it is rather than going quiet:
 
-  1. plan       the walk -> one camera pose per frame
+  1. plan       the route -> one camera pose per frame
   2. render     rasterise every frame (GPU)
   3. encode     H.264, so browsers and players accept it
-
-  python submit.py render-video/dreamworld \
-      scene=/workspace/projects/<p>/splats/<s>
 """
 
 from __future__ import annotations
@@ -25,14 +23,6 @@ from prefect import flow, get_run_logger, task
 
 sys.path.insert(0, str(Path(__file__).parent / "tools"))
 import render_video as rv  # noqa: E402
-
-
-@task(name="1. plan path")
-def plan(scene: str, n_frames: int) -> dict:
-    logger = get_run_logger()
-    eyes, targets, up = rv.plan_path(Path(scene), n_frames)
-    logger.info("the walk, %d frames", n_frames)
-    return {"eyes": eyes.tolist(), "targets": targets.tolist(), "up": up.tolist()}
 
 
 @task(name="2. render")
@@ -55,42 +45,6 @@ def encode(tmp: str, out: str) -> dict:
     mb = Path(out).stat().st_size / 1e6
     logger.info("wrote %s (%.1f MB)", out, mb)
     return {"video": out, "mb": round(mb, 1)}
-
-
-def _run_name() -> str:
-    """Name the run after the one thing it produces, so the queue at :4200 reads
-    as a list of places in a building rather than a list of random adjectives.
-    One run, one artifact — that is the tracking unit."""
-    from prefect.runtime import flow_run
-
-    parts = Path(flow_run.parameters.get("scene", "?")).parts
-    # .../<project>/splats/<id>
-    if len(parts) >= 3 and parts[-2] == "splats":
-        return f"{parts[-3]}/{parts[-1]}"
-    return "/".join(parts[-2:]) if len(parts) > 1 else str(parts[-1])
-
-
-@flow(name="render-video", log_prints=True, flow_run_name=_run_name)
-def render_walkthrough(scene: str) -> dict:
-    """scene: a splats/<name> directory holding world.ply and world.path.json.
-
-    The walk is paced at walking speed from the length the sidecar records, so
-    a one-metre corridor and a six-metre one are watched at the same speed
-    rather than stretched to a common duration.
-    """
-    logger = get_run_logger()
-    if not (Path(scene) / "world.ply").is_file():
-        raise SystemExit(f"no world.ply in {scene} — build the splat first")
-    out = str(Path(scene) / "walkthrough.mp4")
-    doc = json.loads((Path(scene) / "world.path.json").read_text())
-    n_frames = rv.frames_for(doc["length_m"])
-    logger.info("rendering %s -> %s", scene, out)
-
-    p = plan(scene, n_frames)
-    p["plys"] = [str(Path(scene) / "world.ply")]
-    result = encode(render(p, out), out)
-    result["frames"] = n_frames
-    return result
 
 
 @task(name="1. plan route")
