@@ -823,9 +823,54 @@ async function edgePicker(doc, choose) {
         cx.fillStyle = "#ffd479"; cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
     };
 
+    // Scale is marked, not fitted. Across 62 bearings of L11.v6 the geometry
+    // implies anywhere from 0.65 to 2.95 units per metre, so no single number
+    // comes out of the world reliably. Walking to where the neighbour actually
+    // stands and saying so is one number per lane, from what you can see.
+    const marked = {};
+    let at = 0;
+    const scaleBox = document.createElement("div");
+    scaleBox.className = "hint";
+    box.appendChild(scaleBox);
+    const markBtn = document.createElement("button");
+    markBtn.id = "markHere";
+    markBtn.textContent = "mark: I am at the next vertex";
+    box.appendChild(markBtn);
+
+    const say = k => {
+        const w = doc.walks[k], m = marked[w.to];
+        scaleBox.innerHTML = m
+            ? `<span style="color:#8fd6a6">\u2713 ${w.to} marked at ${m.units.toFixed(2)}` +
+              ` units \u2014 ${m.units_per_metre.toFixed(3)} units/m</span>`
+            : `walk to ${w.to} and mark it \u00b7 lane is ${w.metres} m`;
+    };
+
     const pick = k => {
         [...list.children].forEach((el, j) => el.className = j === k ? "on" : "");
-        draw(k); choose(doc.walks[k]);
+        at = k; draw(k); choose(doc.walks[k]); say(k);
+    };
+
+    markBtn.onclick = async () => {
+        const w = doc.walks[at];
+        const pts = w.points;
+        const full = Math.hypot(pts[pts.length - 1][0] - pts[0][0],
+                                pts[pts.length - 1][1] - pts[0][1],
+                                pts[pts.length - 1][2] - pts[0][2]);
+        const units = full * Math.min(Math.max(tour.t, 0), 1);
+        scaleBox.textContent = "saving\u2026";
+        try {
+            const r = await fetch("http://localhost:8085/mark", {
+                method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({scene: doc.waypoint, lane: w.to,
+                                      units, metres: w.metres})});
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || "refused");
+            marked[w.to] = j.lanes[w.to];
+            say(at);
+        } catch (err) {
+            scaleBox.innerHTML = `<span style="color:#f0a35e">could not save` +
+                ` \u2014 is the alignment tool running on 8085?</span>`;
+        }
     };
     doc.walks.forEach((w, k) => {
         const b = document.createElement("button");

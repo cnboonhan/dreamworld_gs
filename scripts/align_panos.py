@@ -320,12 +320,18 @@ class Handler(BaseHTTPRequestHandler):
         # roll rewrites the panorama, a rename moves it to another vertex. A
         # held copy shows the previous state and reads as the tool being wrong.
         self.send_header("Cache-Control", "no-store, must-revalidate")
+        # the viewer is served from another port and posts marks here
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         if self.path == "/":
             return self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+        if self.path == "/scenes":
+            return self._send(200, json.dumps(self.server.scenes()).encode(),
+                              "application/json")
         if self.path == "/meta":
             doc = {"panos": self.server.scan(), "walls": self.server.walls}
             return self._send(200, json.dumps(doc).encode(), "application/json")
@@ -340,10 +346,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, buf.getvalue(), "image/jpeg")
         self._send(404, b"?", "text/plain")
 
+    def do_OPTIONS(self):
+        self._send(204, b"", "text/plain")
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
         try:
+            if self.path == "/mark":
+                doc = self.server.mark(req["scene"], req["lane"],
+                                       float(req["units"]), float(req["metres"]))
+                body = json.dumps({"ok": True, **doc})
+                return self._send(200, body.encode(), "application/json")
             px = self.server.apply(req["file"], float(req["degrees"]))
             body = json.dumps({"ok": True, "pixels": px})
         except Exception as err:                       # surfaced in the page
@@ -445,6 +459,47 @@ def main() -> None:
         i = min(verts, key=lambda k: np.linalg.norm(verts[k] - named[want]))
         return i, want
 
+    splats = root / "splats"
+    marks = splats / ".aligned"
+
+    def scenes() -> list[dict]:
+        """Every built world, with the lane marks placed in it so far.
+
+        A world generated at a waypoint is in HunyuanWorld's own units, and no
+        fit relates them to metres reliably — measured across 62 bearings of
+        L11.v6 the implied scale spans 4.5x. So the scale is marked by hand,
+        one number per lane: walk to where the neighbour actually is and say
+        so. Kept beside the splats the way .aligned is kept beside the panos.
+        """
+        out = []
+        for d in sorted(splats.iterdir()) if splats.is_dir() else []:
+            if not (d / "world.ply").is_file():
+                continue
+            rec = marks / f"{d.name}.json"
+            saved = json.loads(rec.read_text()) if rec.is_file() else {}
+            walks = []
+            paths = d / "world.paths.json"
+            if paths.is_file():
+                walks = [w["to"] for w in json.loads(paths.read_text())["walks"]]
+            out.append({"scene": d.name, "lanes": walks,
+                        "marked": sorted(saved.get("lanes", {})),
+                        "units_per_metre": saved.get("units_per_metre"),
+                        "done": bool(walks) and all(w in saved.get("lanes", {}) for w in walks)})
+        return out
+
+    def mark(scene: str, lane: str, units: float, metres: float) -> dict:
+        """Record where one neighbour actually is, in this world's units."""
+        marks.mkdir(parents=True, exist_ok=True)
+        rec = marks / f"{scene}.json"
+        doc = json.loads(rec.read_text()) if rec.is_file() else {"lanes": {}}
+        doc["lanes"][lane] = {"units": round(units, 4), "metres": round(metres, 3),
+                              "units_per_metre": round(units / max(metres, 1e-6), 4)}
+        per = [v["units_per_metre"] for v in doc["lanes"].values()]
+        doc["units_per_metre"] = round(float(np.median(per)), 4)
+        doc["spread"] = round(max(per) / min(per), 3) if len(per) > 1 else 1.0
+        rec.write_text(json.dumps(doc, indent=1))
+        return doc
+
     def preview_of(name: str) -> Path:
         """The downscaled copy the browser gets, made on first ask."""
         f = src / name
@@ -475,6 +530,7 @@ def main() -> None:
     srv = ThreadingHTTPServer(("0.0.0.0", a.port), Handler)
     srv.daemon_threads = True
     srv.scan, srv.walls, srv.preview_of, srv.apply = scan, walls, preview_of, apply
+    srv.scenes, srv.mark = scenes, mark
     found = scan()
     print(f"{len(found)} panoramas — http://localhost:{a.port}")
     for m in found:
