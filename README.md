@@ -253,9 +253,12 @@ bidirectional, so the endpoints are sorted and the edge gets one name whichever
 way you walk it. The level is written once, since lanes never cross levels.
 
 ```bash
+just summary L11     # all of the below, in the order you want them
 just plan            # every waypoint and how far along it is
 just plan missing    # only what is unfinished
+just quality         # how good each built world came out
 just vertices L11    # the waypoints on one level, with their positions
+just urls            # every address, and whether it is answering
 ```
 
 `just quality` scores every built world against views the trainer held out of

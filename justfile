@@ -275,6 +275,30 @@ interactive: up
     echo "  open that viewer URL, then drive it:"
     echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
 
+# Everything about the project in one screen: where each waypoint is, how good
+# its world came out, and what to open.
+#
+# Calls the three recipes rather than reimplementing them, so there is still one
+# place each answer comes from — this is the order you want them in when picking
+# up work, not a fourth report.
+#
+# The whole project in one screen.
+summary level="" proj=project:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    echo
+    echo "── waypoints ──────────────────────────────────────────────────────────"
+    just vertices "{{level}}" "{{proj}}"
+    echo
+    echo "── splat quality ──────────────────────────────────────────────────────"
+    just quality
+    echo
+    echo "── progress ───────────────────────────────────────────────────────────"
+    just plan "" "{{proj}}" | tail -4
+    echo
+    echo "── where to open it ───────────────────────────────────────────────────"
+    just urls "{{proj}}"
+
 # How good each generated world came out, measured rather than eyeballed.
 #
 # The 3DGS trainer holds views out of training and scores itself on them; this
