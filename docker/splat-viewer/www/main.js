@@ -776,6 +776,70 @@ function norm3(v) {
     return [v[0] / n, v[1] / n, v[2] / n];
 }
 
+
+// ---- which corridor to walk, and where it is on the floor plan ----------
+//
+// The same view the alignment tool gives: the waypoint you are standing at,
+// the walls around it, and every lane leaving it. Picking a lane switches the
+// tour to that corridor's walk rather than loading another scene.
+async function edgePicker(doc, choose) {
+    let walls = [];
+    try {
+        const proj = location.search.match(/files\/([^/]+)\//);
+        if (proj) {
+            const r = await fetch(`files/${proj[1]}/worlds/${proj[1]}/plan_walls.json`);
+            if (r.ok) walls = (await r.json())[doc.waypoint.split(".")[0]] || [];
+        }
+    } catch (err) {}
+
+    const box = document.createElement("div");
+    box.id = "edges";
+    box.innerHTML = `<canvas id="edgePlan" width="220" height="220"></canvas>
+        <div id="edgeList"></div>`;
+    document.body.appendChild(box);
+    const list = box.querySelector("#edgeList");
+    const cv = box.querySelector("#edgePlan");
+    const cx = cv.getContext("2d");
+    const here = doc.at;
+
+    const draw = k => {
+        const R = Math.max(6, Math.max(...doc.walks.map(w => w.metres)) * 1.6);
+        const P = q => [110 + (q[0] - here[0]) / R * 100, 110 - (q[1] - here[1]) / R * 100];
+        cx.fillStyle = "#0a0d12"; cx.fillRect(0, 0, 220, 220);
+        cx.strokeStyle = "#3a4757"; cx.lineWidth = 2; cx.beginPath();
+        for (const w of walls) { const a = P(w[0]), b = P(w[1]); cx.moveTo(a[0], a[1]); cx.lineTo(b[0], b[1]); }
+        cx.stroke();
+        doc.walks.forEach((w, j) => {
+            const e = [here[0] + Math.cos(w.bearing) * w.metres,
+                       here[1] + Math.sin(w.bearing) * w.metres];
+            const b = P(e);
+            cx.strokeStyle = j === k ? "#4ea1ff" : "#5d6b7d";
+            cx.lineWidth = j === k ? 3 : 1.5;
+            cx.beginPath(); cx.moveTo(110, 110); cx.lineTo(b[0], b[1]); cx.stroke();
+            cx.fillStyle = j === k ? "#4ea1ff" : "#8b98a8";
+            cx.font = "11px system-ui";
+            cx.fillText(w.to, 110 + (b[0] - 110) * 0.62 + 3, 110 + (b[1] - 110) * 0.62 - 3);
+        });
+        cx.fillStyle = "#ffd479"; cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
+    };
+
+    const pick = k => {
+        [...list.children].forEach((el, j) => el.className = j === k ? "on" : "");
+        draw(k); choose(doc.walks[k]);
+    };
+    doc.walks.forEach((w, k) => {
+        const b = document.createElement("button");
+        b.textContent = `${w.to}  ·  ${w.metres} m`;
+        b.onclick = () => pick(k);
+        list.appendChild(b);
+    });
+    const label = document.createElement("div");
+    label.className = "hint";
+    label.textContent = doc.waypoint + "  ·  " + doc.walks.length + " corridor(s)";
+    box.insertBefore(label, cv);
+    pick(0);
+}
+
 function tourInit(p, follow) {
     tour.points = p.points;
     const n = p.points.length;
@@ -1000,7 +1064,25 @@ async function main() {
         // the line the panoramas were shot from. That is the only part of the
         // world any camera actually observed, so it is where the splat looks
         // right.
+        // A world generated at a waypoint has no single walk: it has one per
+        // corridor leaving it, in world.paths.json. Riding one line through a
+        // junction picks a corridor arbitrarily and ignores the rest.
+        let picked = false;
         try {
+            const many = await fetch(url.href.replace(/\.ply$/, "") + ".paths.json");
+            if (many.ok) {
+                const doc = await many.json();
+                if (Array.isArray(doc.walks) && doc.walks.length) {
+                    edgePicker(doc, w => {
+                        tourInit({points: w.points, up: doc.up});
+                        showTourBar();
+                    });
+                    picked = true;
+                }
+            }
+        } catch (err) {}
+        try {
+            if (picked) throw 0;
             const pathRes = await fetch(url.href.replace(/\.ply$/, "") + ".path.json");
             if (pathRes.ok) {
                 const p = await pathRes.json();

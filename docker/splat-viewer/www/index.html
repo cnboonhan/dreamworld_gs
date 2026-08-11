@@ -13,6 +13,27 @@
 			content="black-translucent"
 		/>
 		<style>
+/* Which corridor to walk, and where it is on the floor plan. A world generated
+   at a waypoint has one walk per lane leaving it, so the tour needs a choice
+   rather than a single line. */
+#edges {
+    position: absolute; right: 12px; top: 12px; z-index: 30;
+    background: rgba(14, 18, 24, .92); border: 1px solid #232c38;
+    border-radius: 8px; padding: 10px; width: 242px;
+    font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; color: #dfe6ef;
+}
+#edges .hint { color: #8b98a8; margin-bottom: 6px; }
+#edgePlan { display: block; background: #0a0d12; border: 1px solid #232c38;
+            border-radius: 6px; }
+#edgeList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#edgeList button {
+    background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
+    border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer;
+}
+#edgeList button:hover { background: #273040; }
+#edgeList button.on { background: #4ea1ff; color: #08121e;
+                      border-color: #4ea1ff; font-weight: 600; }
+
 			body {
 				overflow: hidden;
 				margin: 0;
