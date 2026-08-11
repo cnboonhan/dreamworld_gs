@@ -868,11 +868,24 @@ async function edgePicker(doc, choose) {
     // current: the first on load, and after a save the one that save
     // completed. Selecting a vertex no longer touches it, which is the point —
     // you are lining up a view, not changing where you are walking.
+    // Only ever called to switch corridors. A scene does not open on a walk:
+    // it opens standing at its own waypoint, because that is where the work
+    // starts and a tour playing under you is something to stop first.
     const paintWalks = () => {
-        if (doc.walks.length) {
-            if (at >= doc.walks.length) at = 0;
-            choose(doc.walks[at]);
-        }
+        if (doc.walks.length && at < doc.walks.length) choose(doc.walks[at]);
+    };
+
+    const standHome = () => {
+        const p = placed[me];
+        if (!p) return false;
+        const d = (doc.lanes[0] && doc.lanes[0].dir) || [1, 0, 0];
+        tourInit({points: [p, p.map((v, i) => v + d[i] * 0.01)], up: doc.up},
+                 false);
+        tour.t = 0;
+        tour.playing = false;
+        const play = document.getElementById("tourPlay");
+        if (play) play.textContent = "play";
+        return true;
     };
 
     const walkTo = who => {
@@ -896,14 +909,7 @@ async function edgePicker(doc, choose) {
         if (target === 0) {
             // home is a place, not a journey: stand on the point that was
             // saved for it, keeping the heading you already had
-            const p = placed[me];
-            if (!p) return;
-            const d = (doc.lanes[0] && doc.lanes[0].dir) || [1, 0, 0];
-            tourInit({points: [p, p.map((v, i) => v + d[i] * 0.01)],
-                      up: doc.up}, false);
-            tour.t = 0;
-            tour.playing = false;
-            if (play) play.textContent = "play";
+            standHome();
             return;
         }
         // a neighbour is a journey: ride that corridor if it has a walk. The
@@ -997,7 +1003,7 @@ async function edgePicker(doc, choose) {
         + (from ? "  \u00b7  from " + from : "")
         + (why ? "  \u00b7  no plan: " + why : "");
     paintSpots();
-    paintWalks();
+    standHome();
 }
 
 function tourInit(p, follow) {
@@ -1234,10 +1240,11 @@ async function main() {
                 const doc = await many.json();
                 if (Array.isArray(doc.lanes) && doc.lanes.length) {
                     edgePicker(doc, w => {
-                        // follow: yaw is measured from the path, so the camera
-                        // faces the way it is walking rather than wherever it
-                        // happened to be pointing when you picked the corridor
-                        tourInit({points: w.points, up: doc.up}, true);
+                        // not follow: the camera keeps the heading you gave it
+                        // and simply travels the corridor. Swinging it to face
+                        // the path throws away the view you were lining up,
+                        // which is the work this panel exists for.
+                        tourInit({points: w.points, up: doc.up}, false);
                         showTourBar();
                     });
                     picked = true;
@@ -1970,8 +1977,14 @@ async function main() {
                     : 0;
                 tour.t += dt / tour.seconds * tour.dir;
                 if (tour.t >= 1 || tour.t <= 0) {
-                    tour.dir *= -1;                 // walk back, do not cut
+                    // stop at the end. Walking back was for a scene that had
+                    // one line through it and nothing to do at either end; a
+                    // corridor ends at its neighbour, and reversing there
+                    // undoes the view you walked it to check.
                     tour.t = Math.min(Math.max(tour.t, 0), 1);
+                    tour.playing = false;
+                    const play = document.getElementById("tourPlay");
+                    if (play) play.textContent = "play";
                 }
                 document.getElementById("tourAt").value = tour.t * 1000;
             }
