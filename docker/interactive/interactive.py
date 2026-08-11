@@ -662,27 +662,27 @@ def handle(text):
     if not t:
         return {"ok": False, "error": "say something"}
     if t in ("where", "where am i", "look"):
-        return where()
+        return {**(where()), "_tool": "where"}
     m = re.fullmatch(r"(?:go|walk|go to|walk to)\s+(?:to\s+)?(.+)", t)
     if m:
-        return go_to(m.group(1))
+        return {**(go_to(m.group(1))), "_tool": "go_to"}
     m = re.fullmatch(r"face\s+(.+)", t)
     if m:
-        return face(m.group(1))
+        return {**(face(m.group(1))), "_tool": "face"}
     if t == "forward":
-        return go_to(lab(choose_forward()))
+        return {**(go_to(lab(choose_forward()))), "_tool": "go_to"}
     m = re.fullmatch(r"turn\s+(left|right)", t)
     if m:
-        return turn(m.group(1))
+        return {**(turn(m.group(1))), "_tool": "turn"}
     m = re.fullmatch(r"open\s+door(?:\s+to\s+(.+))?", t)
     if m:
-        return open_door(m.group(1) or "")
+        return {**(open_door(m.group(1) or "")), "_tool": "open_door"}
     m = re.fullmatch(r"close\s+door(?:\s+to\s+(.+))?", t)
     if m:
-        return close_door(m.group(1) or "")
+        return {**(close_door(m.group(1) or "")), "_tool": "close_door"}
     m = re.fullmatch(r"call\s+lift\s*(.*)", t)
     if m:
-        return call_lift(m.group(1))
+        return {**(call_lift(m.group(1))), "_tool": "call_lift"}
     return {"ok": False, "error": f"did not understand {text!r}. "
                                   f"Try: go to <waypoint>, face <waypoint>, turn left, "
                                   f"open door, where."}
@@ -1334,6 +1334,48 @@ connect();
 </script></body></html>"""
 
 
+def as_message(name, res):
+    """A tool result as one human line — the `message` the dashboard logs.
+
+    Every tool returns a dict shaped for the caller that needs it; this is the one
+    place that renders it for someone reading. Without it the page logged
+    `undefined`, because it asks for a field the dream's routes supplied and mine
+    did not.
+    """
+    if not isinstance(res, dict):
+        return str(res)
+    if not res.get("ok"):
+        return str(res.get("error") or res.get("message") or "failed")
+    if res.get("message"):
+        return str(res["message"])
+    if name == "go_to":
+        return f"arrived {res.get('at')}" + (
+            f" via {' -> '.join(res.get('route', [])[1:-1])}"
+            if len(res.get("route") or []) > 2 else "")
+    if name in ("face", "turn"):
+        return f"facing {res.get('facing')}"
+    if name in ("open_door", "close_door"):
+        return f"{res.get('door')} {res.get('mode')}"
+    if name == "plan_route":
+        return f"{len(res.get('steps') or [])} step(s): " + "; ".join(res.get("steps") or [])
+    if name == "get_path":
+        return " -> ".join(res.get("path") or [])
+    if name == "where":
+        return (f"at {res.get('at')} on {res.get('level')}, facing "
+                f"{res.get('face') or 'nothing'}; neighbours "
+                f"{', '.join(res.get('neighbours') or [])}")
+    if name == "get_graph":
+        return f"{len(res.get('vertices') or [])} waypoints on {res.get('level')}"
+    if name in ("pick", "place"):
+        return f"{name} {res.get('item')} — carrying {', '.join(res.get('inventory') or []) or 'nothing'}"
+    if name == "write_todos":
+        return f"{len(res.get('todos') or [])} subtask(s)"
+    if name == "write_mission":
+        return f"mission: {res.get('mission')}"
+    return json.dumps({k: v for k, v in res.items()
+                       if k not in ("recent_log", "ok")})[:200]
+
+
 # ---- HTTP -------------------------------------------------------------------
 @app.route("/")
 def r_index():
@@ -1377,8 +1419,9 @@ def r_tool():
     log(f"{name}({', '.join(f'{k}={v!r}' for k, v in args.items())})")
     blocked = _mission_gate(name)
     res = blocked if blocked is not None else _post_tool(name, args, t["fn"](**args))
-    BUS.send({"type": "tool", "tool": name, "args": args, "result": res})
-    return jsonify(res)
+    msg = as_message(name, res)
+    log(("" if res.get("ok") else "! ") + msg, "ok" if res.get("ok") else "err")
+    return jsonify({**res, "message": msg})
 
 
 @app.route("/command", methods=["POST", "OPTIONS"])
@@ -1386,7 +1429,9 @@ def r_command():
     if request.method == "OPTIONS":
         return ("", 204)
     body = request.get_json(force=True, silent=True) or {}
-    return jsonify(handle(body.get("text") or body.get("command") or ""))
+    text = body.get("text") or body.get("command") or ""
+    res = handle(text)
+    return jsonify({**res, "message": as_message(res.pop("_tool", ""), res)})
 
 
 @app.route("/graph")
