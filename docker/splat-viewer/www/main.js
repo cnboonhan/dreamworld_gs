@@ -807,7 +807,9 @@ async function edgePicker(doc, choose) {
 
     const box = document.createElement("div");
     box.id = "edges";
-    box.innerHTML = `<div class="hint" id="edgeTitle"></div>
+    box.innerHTML = `<div class="hint">neighbours</div>
+        <div id="sceneLinks"></div>
+        <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
         <button id="saveSpot"></button>`;
@@ -862,7 +864,16 @@ async function edgePicker(doc, choose) {
         draw();
     };
 
-    const paintWalks = () => {};
+    // With the walk list gone, the tour simply rides whichever corridor is
+    // current: the first on load, and after a save the one that save
+    // completed. Selecting a vertex no longer touches it, which is the point —
+    // you are lining up a view, not changing where you are walking.
+    const paintWalks = () => {
+        if (doc.walks.length) {
+            if (at >= doc.walks.length) at = 0;
+            choose(doc.walks[at]);
+        }
+    };
 
     const walkTo = who => {
         const k = doc.walks.findIndex(w => w.to === who);
@@ -876,36 +887,30 @@ async function edgePicker(doc, choose) {
         return true;
     };
 
-    // Standing at home and facing the corridor is where you start from to
-    // mark its far end, so selecting a neighbour puts you back there rather
-    // than leaving you wherever the last one ended.
-    const goHome = () => {
-        const from = placed[me];
-        if (!from) return;                       // home is not marked yet
-        const lane = doc.lanes[target - 1];
-        const dir = lane ? lane.dir : doc.lanes[0] && doc.lanes[0].dir;
-        if (!dir) return;
-        const far = from.map((v, i) => v + dir[i] * 2);
-        tourInit({points: [from, far], up: doc.up}, true);
-        tour.t = 0;
-        tour.playing = false;
-        const play = document.getElementById("tourPlay");
-        if (play) play.textContent = "play";
-    };
-
     spotRow.onclick = e => {
         const b = e.target.closest("button");
         if (!b) return;
         target = +b.dataset.i;
         paintSpots();
-        // walk it only when its far end is already marked; otherwise stand at
-        // home looking down it, which is what you need to go and mark it
+        const play = document.getElementById("tourPlay");
+        if (target === 0) {
+            // home is a place, not a journey: stand on the point that was
+            // saved for it, keeping the heading you already had
+            const p = placed[me];
+            if (!p) return;
+            const d = (doc.lanes[0] && doc.lanes[0].dir) || [1, 0, 0];
+            tourInit({points: [p, p.map((v, i) => v + d[i] * 0.01)],
+                      up: doc.up}, false);
+            tour.t = 0;
+            tour.playing = false;
+            if (play) play.textContent = "play";
+            return;
+        }
+        // a neighbour is a journey: ride that corridor if it has a walk. The
+        // camera is not moved or turned — only which corridor the tour rides.
         const lane = doc.lanes[target - 1];
-        // `list` was the walk dropdown; it is gone, and the vertex buttons
-        // are the only way a corridor is chosen now
         const k = lane ? doc.walks.findIndex(w => w.to === lane.to) : -1;
         if (k >= 0) { at = k; choose(doc.walks[k]); }
-        else goHome();
     };
 
     saveSpot.onclick = async () => {
@@ -939,25 +944,57 @@ async function edgePicker(doc, choose) {
     // needs no handler, the browser follows an href — and port 8085, which
     // the browser had to reach separately and which only writing needs.
     (async () => {
-        const bar = document.getElementById("scenePick");
-        const proj = location.search.match(/files\/([^/]+)\//);
-        if (!bar || !proj) return;
+        const bar = box.querySelector("#sceneLinks");
+        if (!bar) return;
+        if (!proj) { bar.textContent = "no world list: " + why; return; }
         try {
             const r = await fetch(new URL(`files/${proj[1]}/splats/scenes.json`,
                                           location.href).href);
             if (!r.ok) throw new Error(r.status);
-            const all = await r.json();
+            // only where you can actually go from here: a world you cannot
+            // walk to is not a step in a traversal, and the whole building
+            // listed at every waypoint is a list you have to read rather than
+            // a choice you can make
+            const near = new Set(doc.lanes.map(l => `${level}.${l.to}`));
+            const all = (await r.json()).filter(sc => near.has(sc.scene));
+            if (!all.length) {
+                bar.textContent = "no neighbouring world built yet";
+                return;
+            }
             bar.innerHTML = all.map(sc =>
-                `<a href="?url=files/${proj[1]}/splats/${sc.scene}/world.ply"` +
+                `<a href="?url=files/${proj[1]}/splats/${sc.scene}/world.ply` +
+                `&from=${doc.waypoint}"` +
                 ` class="${sc.scene === doc.waypoint ? "on" : ""}">` +
                 `${sc.placed ? "\u2713 " : ""}${sc.scene}</a>`).join(" ");
         } catch (err) {
-            bar.textContent = "no scenes.json yet";
+            bar.textContent = "no world list: " + String(err.message || err);
         }
     })();
 
+    // Arriving from a neighbour, stand at this waypoint looking back the way
+    // you came. Positions and scales differ between two generated worlds, but
+    // every panorama was turned to face the building, so a heading means the
+    // same thing in both — which is what lets one corridor be recognised from
+    // either end and its two records lined up by eye.
+    const from = new URLSearchParams(decodeURIComponent(location.search)).get("from");
+    if (from) {
+        const back = from.split(".").pop();
+        const lane = doc.lanes.find(l => l.to === back);
+        const stand = placed[me] || (doc.walks[0] && doc.walks[0].points[0]);
+        if (lane && stand) {
+            tourInit({points: [stand, stand.map((v, i) => v + lane.dir[i] * 2)],
+                      up: doc.up}, true);
+            tour.t = 0;
+            tour.playing = false;
+            const play = document.getElementById("tourPlay");
+            if (play) play.textContent = "play";
+            target = doc.lanes.indexOf(lane) + 1;
+        }
+    }
+
     box.querySelector("#edgeTitle").textContent =
         doc.waypoint + "  \u00b7  " + doc.lanes.length + " corridor(s)"
+        + (from ? "  \u00b7  from " + from : "")
         + (why ? "  \u00b7  no plan: " + why : "");
     paintSpots();
     paintWalks();
