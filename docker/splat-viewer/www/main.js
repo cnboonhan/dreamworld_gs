@@ -786,7 +786,12 @@ async function edgePicker(doc, choose) {
     // The alignment tool draws these same walls correctly, so when the plan
     // comes up bare the data is fine and the fetch is not — which an empty
     // catch hid. Say which, rather than drawing an empty box in silence.
-    const proj = location.search.match(/files\/([^/]+)\//);
+    // decoded first: a url built with URLSearchParams comes back as
+    // ?url=files%2F<project>%2F..., and a regex looking for a literal slash
+    // finds nothing. The viewer still loads the splat, because the param is
+    // decoded before use — so this failed silently while everything around it
+    // worked, and took the floor plan and the world list down with it.
+    const proj = decodeURIComponent(location.search).match(/files\/([^/]+)\//);
     const level = doc.waypoint.split(".")[0];
     let walls = [], why = "";
     try {
