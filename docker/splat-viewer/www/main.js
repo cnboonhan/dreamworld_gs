@@ -1486,13 +1486,43 @@ async function main() {
     const arrival = {to: null, scene: null, records: null, doc: null,
                      project: null};
 
-    const unpackPly = async (href) => {
+    const say = (text) => {
+        let el = document.getElementById("arriveNote");
+        if (!el) {
+            el = document.createElement("div");
+            el.id = "arriveNote";
+            document.body.appendChild(el);
+        }
+        el.textContent = text || "";
+        el.style.display = text ? "" : "none";
+    };
+
+    // Read the body in chunks so the wait is visible. Sixty megabytes is quick
+    // on localhost and slow over a tunnel, and "nothing happened when I got
+    // there" is the same picture whether the fetch never started or had not
+    // finished.
+    const unpackPly = async (href, label) => {
         const res = await fetch(href);
         if (!res.ok) throw new Error(`${res.status} ${href}`);
-        const ply = await res.arrayBuffer();
+        const total = +res.headers.get("content-length") || 0;
+        const reader = res.body.getReader();
+        const parts = [];
+        let got = 0;
+        for (;;) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            parts.push(value);
+            got += value.length;
+            say(total ? `${label}: ${Math.round(got / total * 100)}%`
+                      : `${label}: ${(got / 1e6).toFixed(0)} MB`);
+        }
+        const ply = new Uint8Array(got);
+        let at = 0;
+        for (const q of parts) { ply.set(q, at); at += q.length; }
+        say(`${label}: unpacking`);
         return await new Promise((resolve) => {
-            unpacking = resolve;
-            unpacker.postMessage({ply}, [ply]);
+            unpacking = (recs) => { say(`${label}: ready`); resolve(recs); };
+            unpacker.postMessage({ply: ply.buffer}, [ply.buffer]);
         });
     };
 
@@ -1504,9 +1534,10 @@ async function main() {
             const base = new URL(`files/${project}/splats/${scene}/`, location.href);
             const paths = await fetch(new URL("world.paths.json", base).href);
             arrival.doc = paths.ok ? await paths.json() : null;
-            arrival.records = await unpackPly(new URL("world.ply", base).href);
+            arrival.records = await unpackPly(new URL("world.ply", base).href, scene);
         } catch (err) {
             arrival.records = null;
+            say(`${scene}: ${err.message || err}`);
         }
     };
 
@@ -1532,7 +1563,7 @@ async function main() {
         tour.t = 0; tour.playing = false;
         history.replaceState(null, "",
             `?url=files/${a.project}/splats/${a.scene}/world.ply&from=${window.__cameFrom || ""}`);
-        console.log(`stepped through to ${a.scene}`);
+        say("");
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here
         if (window.__openPanel) window.__openPanel(a.doc);

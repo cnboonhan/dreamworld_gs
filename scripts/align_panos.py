@@ -359,16 +359,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(
                     {"ok": True, "placed": doc["placed"], "walks": walks}).encode(),
                     "application/json")
-            if self.path == "/pose":
-                doc = self.server.pose(req["scene"], float(req["height"]),
-                                       float(req["pitch"]))
-                return self._send(200, json.dumps({"ok": True, **doc}).encode(),
-                                  "application/json")
-            if self.path == "/mark":
-                doc = self.server.mark(req["scene"], req["lane"],
-                                       float(req["units"]), float(req["metres"]))
-                body = json.dumps({"ok": True, **doc})
-                return self._send(200, body.encode(), "application/json")
             px = self.server.apply(req["file"], float(req["degrees"]))
             body = json.dumps({"ok": True, "pixels": px})
         except Exception as err:                       # surfaced in the page
@@ -496,11 +486,25 @@ def main() -> None:
                 # a walk only once both ends of one are marked
                 walks = [l["to"] for l in doc.get("lanes", doc.get("walks", []))]
             out.append({"scene": d.name, "lanes": walks,
-                        "marked": sorted(saved.get("lanes", {})),
-                        "units_per_metre": saved.get("units_per_metre"),
                         "placed": sorted(saved.get("placed", {})),
-                        "done": bool(walks) and all(w in saved.get("lanes", {}) for w in walks)})
+                        "done": bool(walks) and all(
+                            w in saved.get("placed", {}) for w in walks)})
         return out
+
+    def place(scene: str, vertex: str, at: list) -> dict:
+        """Where a vertex actually is, in this world's own coordinates.
+
+        Flown to and marked, rather than fitted. A position needs no scale and
+        no bearing — the walk between two of them is a straight line — and the
+        estimator this replaces was off by 2x and direction-dependent by 4.5x
+        across L11.v6's bearings.
+        """
+        marks.mkdir(parents=True, exist_ok=True)
+        rec = marks / f"{scene}.json"
+        doc = json.loads(rec.read_text()) if rec.is_file() else {}
+        doc.setdefault("placed", {})[vertex] = [round(float(v), 5) for v in at]
+        rec.write_text(json.dumps(doc, indent=1))
+        return doc
 
     def place(scene: str, vertex: str, at: list) -> dict:
         """Where a vertex actually is, in this world's own coordinates.
@@ -529,19 +533,6 @@ def main() -> None:
         doc = json.loads(rec.read_text()) if rec.is_file() else {"lanes": {}}
         doc["height"] = round(height, 4)
         doc["pitch_deg"] = round(pitch, 2)
-        rec.write_text(json.dumps(doc, indent=1))
-        return doc
-
-    def mark(scene: str, lane: str, units: float, metres: float) -> dict:
-        """Record where one neighbour actually is, in this world's units."""
-        marks.mkdir(parents=True, exist_ok=True)
-        rec = marks / f"{scene}.json"
-        doc = json.loads(rec.read_text()) if rec.is_file() else {"lanes": {}}
-        doc["lanes"][lane] = {"units": round(units, 4), "metres": round(metres, 3),
-                              "units_per_metre": round(units / max(metres, 1e-6), 4)}
-        per = [v["units_per_metre"] for v in doc["lanes"].values()]
-        doc["units_per_metre"] = round(float(np.median(per)), 4)
-        doc["spread"] = round(max(per) / min(per), 3) if len(per) > 1 else 1.0
         rec.write_text(json.dumps(doc, indent=1))
         return doc
 
@@ -585,7 +576,7 @@ def main() -> None:
         f = splats / scene / "world.paths.json"
         return json.loads(f.read_text())["walks"] if f.is_file() else None
 
-    srv.scenes, srv.mark, srv.pose = scenes, mark, pose
+    srv.scenes = scenes
     srv.place, srv.rewalk = place, rewalk
     found = scan()
     print(f"{len(found)} panoramas — http://localhost:{a.port}")
