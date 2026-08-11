@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>dream_editor</title>
+<title>pano_editor</title>
 <style>
   :root{--ground:#0b0e13;--panel:#12161dcc;--hair:#232a34;--text:#c8cfd8;--muted:#6b7480;
     --accent:#e0922f;--go:#1f6feb;--mono:ui-monospace,Menlo,Consolas,monospace;
@@ -62,7 +62,7 @@
 <div id="err"></div>
 <div id="app">
   <div id="side">
-    <div class="ph">dream_editor <select id="lvl"></select></div>
+    <div class="ph">pano_editor <select id="lvl"></select></div>
     <div class="sec"><label class=f>floorplan — click a vertex</label>
       <div id="fpwrap"><canvas id="fp"></canvas></div>
       <div class="row" style="margin-top:6px"><select id="vsel"><option value="">— select vertex —</option></select></div>
@@ -77,7 +77,6 @@
     </div>
     <div class="sec">
       <label class=f>save</label>
-      <div class="kv">will regenerate: <span id="blast">—</span></div>
       <div class="row">
         <button class="go" id="revert" style="display:none;flex:0 0 auto;background:#30363d">↶ undo edit</button>
         <button class="go save" id="save" disabled>Save panorama</button>
@@ -295,7 +294,6 @@ $("save").onclick=async()=>{if(SEL===null||!hasCand)return;
     else{status(j.message,"ok");hasCand=false;reflectCand();layout();select(SEL);}}
   catch(e){status("! "+e,"err");$("save").disabled=false;}};
 
-// ── regeneration progress ─────────────────────────────────────────────────────────
 // build_library recreates the deleted artifacts by name; /progress reports how many exist
 // Save writes panos/<id> and stops. Rebuilding the splat world from it is
 // `just generate <id>` — 20 minutes of GPU, which belongs on the queue at :4200
@@ -315,7 +313,6 @@ function switchLevel(lv){fetch("/level",{method:"POST",headers:{"Content-Type":"
 fetch("/levels").then(r=>r.json()).then(d=>{const sel=$("lvl");
   sel.innerHTML=d.levels.map(l=>`<option${l===d.current?" selected":""}>${l}</option>`).join("");
   sel.onchange=()=>switchLevel(sel.value);loadGraph();});
-// resume the progress panel if a regeneration from a previous save is still running
 // style anchor (per-vertex when one is selected, else building-wide); recorded in the manifest
 </script>
 </body>

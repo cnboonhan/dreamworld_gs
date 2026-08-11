@@ -21,8 +21,8 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import struct
-import subprocess
 import sys
 import threading
 
@@ -426,6 +426,47 @@ def edit():
                              view=b.get("view"), mask_b64=b.get("mask"),
                              from_candidate=bool(b.get("from_candidate")))
     return jsonify(ok=ok, error=None if ok else msg, v=v)
+
+
+@app.route("/save", methods=["POST"])
+def save():
+    """Adopt the candidate as the waypoint's panorama.
+
+    It writes the file and stops. It does NOT rebuild the splat world: that is
+    `just generate <id>`, twenty minutes on four GPUs, which belongs on the queue
+    at :4200 where it can be watched and retried — not inside a click here. The
+    response says which command to run.
+
+    The panorama it replaces is kept beside it, because it is a photograph of a
+    real place and an edit is not obviously an improvement until it is looked at.
+    """
+    b = request.get_json(force=True) or {}
+    v = int(b["v"])
+    cand = pano_path(v, "candidate")
+    if not os.path.isfile(cand):
+        return jsonify(ok=False, error="nothing to save — make an edit first")
+    live = live_pano(v)
+    ident = vid(v)
+    dest = live or os.path.join(G["base"], "panos", ident + ".JPG")
+    if live:
+        kept = os.path.join(G["base"], "panos", ".before-edit")
+        os.makedirs(kept, exist_ok=True)
+        shutil.copy2(live, os.path.join(kept, os.path.basename(live)))
+    # Write in the extension already on disk: the pipeline finds the file by stem
+    # and PIL sniffs content, but a .JPG holding a PNG confuses anything reading
+    # it by name.
+    from PIL import Image
+    im = Image.open(cand).convert("RGB")
+    im.save(dest, quality=95) if dest.lower().endswith((".jpg", ".jpeg")) else im.save(dest)
+    os.remove(cand)
+    _clear_hist(v)
+    # The alignment record is about how the panorama was TURNED, and an edit does
+    # not turn it — so it stays, and a regenerated world keeps the same heading.
+    return jsonify(ok=True, saved=os.path.relpath(dest, G["base"]), id=ident,
+                   kept=".before-edit/" + os.path.basename(dest),
+                   next=f"just generate {ident}",
+                   message=f"saved {ident} — its splat world is now out of date; "
+                           f"run `just generate {ident}` to rebuild it")
 
 
 @app.route("/revert", methods=["POST"])
