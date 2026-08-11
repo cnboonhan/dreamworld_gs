@@ -136,10 +136,17 @@ def main() -> None:
         d = named[other] - here
         bearing = math.atan2(d[1], d[0])
         direction = unit(M @ [math.cos(bearing), math.sin(bearing), 0.0])
-        # a lane marked by hand overrides the fit for its own corridor
-        span = saved.get("lanes", {}).get(other, {}).get("units") or metres * upm
-        line = (centre + eye * upw
-                + np.outer(np.linspace(0, span, POINTS), direction))
+        # Two marked positions beat any fit: the walk is the line between
+        # them, needing neither scale nor bearing.
+        placed = saved.get("placed", {})
+        start = np.asarray(placed.get(waypoint, centre + eye * upw), dtype=np.float64)
+        if other in placed:
+            end = np.asarray(placed[other], dtype=np.float64)
+            direction = unit(end - start)
+        else:
+            span = saved.get("lanes", {}).get(other, {}).get("units") or metres * upm
+            end = start + direction * span
+        line = np.linspace(start, end, POINTS)
         look = unit(direction + math.tan(pitch) * upw)
         out.append({"to": other, "metres": round(float(metres), 3),
                     "bearing": round(bearing, 5),
@@ -150,7 +157,8 @@ def main() -> None:
            "up": [round(float(v), 5) for v in upw],
            "units_per_metre": round(upm, 4), "height": round(eye, 4),
            "pitch_deg": round(math.degrees(pitch), 2),
-           "marked": sorted(saved.get("lanes", {})), "walks": out}
+           "marked": sorted(saved.get("lanes", {})),
+           "placed": saved.get("placed", {}), "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
     print(f"{scene.name}: {upm:.3f} units/m, {len(out)} lane(s) — "
           + ", ".join(f"{w['to']} {w['metres']}m" for w in out))

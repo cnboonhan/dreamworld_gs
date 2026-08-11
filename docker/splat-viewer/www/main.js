@@ -823,108 +823,69 @@ async function edgePicker(doc, choose) {
         cx.fillStyle = "#ffd479"; cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
     };
 
-    // Scale is marked, not fitted. Across 62 bearings of L11.v6 the geometry
-    // implies anywhere from 0.65 to 2.95 units per metre, so no single number
-    // comes out of the world reliably. Walking to where the neighbour actually
-    // stands and saying so is one number per lane, from what you can see.
-    const marked = {};
-    let at = 0;
-    const scaleBox = document.createElement("div");
-    scaleBox.className = "hint";
-    box.appendChild(scaleBox);
-    const markBtn = document.createElement("button");
-    markBtn.id = "markHere";
-    markBtn.textContent = "mark: I am at the next vertex";
-    box.appendChild(markBtn);
+    // Where each vertex actually is, marked by flying there. No scale, no
+    // bearing, no fit: a position in the world's own coordinates is the whole
+    // answer, and the walk between two of them is a straight line. The current
+    // vertex starts where the panorama was shot, which is the world's origin.
+    const placed = Object.assign({}, doc.placed || {});
+    const here = doc.waypoint.split(".").pop();
+    const spots = [here].concat(doc.walks.map(w => w.to));
+    let target = 0;
 
-    // Eye height and tilt, one pair per world. The generator's origin lands
-    // wherever it lands, which is rarely eye level in the corridor, and a walk
-    // that looks at the floor or the ceiling shows neither.
-    let eye = doc.height || 0, pitch = doc.pitch_deg || 0;
-    const pose = document.createElement("div");
-    pose.id = "poseRow";
-    pose.innerHTML = `<span class=k>height</span>
-      <button data-h="-0.05">\u2193</button><b id=eyeAt></b><button data-h="0.05">\u2191</button>
-      <span class=k>tilt</span>
-      <button data-p="-2">\u2193</button><b id=pitchAt></b><button data-p="2">\u2191</button>
-      <button id=savePose>save view</button>`;
-    box.appendChild(pose);
-    const upv = doc.up;
-    const shown = () => {
-        document.getElementById("eyeAt").textContent = eye.toFixed(2);
-        document.getElementById("pitchAt").textContent = pitch.toFixed(0) + "\u00b0";
+    const spotRow = document.createElement("div");
+    spotRow.id = "spotRow";
+    box.appendChild(spotRow);
+    const saveSpot = document.createElement("button");
+    saveSpot.id = "saveSpot";
+    box.appendChild(saveSpot);
+
+    const eyeNow = () => {
+        const inv = invert4(viewMatrix);
+        return [inv[12], inv[13], inv[14]];
     };
-    const reride = () => {
-        const w = doc.walks[at];
-        tourInit({points: w.points.map(q => [q[0] + upv[0] * eye,
-                                             q[1] + upv[1] * eye,
-                                             q[2] + upv[2] * eye]),
-                  up: upv, pitch: pitch});
+    const paintSpots = () => {
+        spotRow.innerHTML = spots.map((v, i) =>
+            `<button data-i="${i}" class="${i === target ? "on" : ""}${
+                placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${
+                v}${i === 0 ? " (here)" : ""}</button>`).join("");
+        saveSpot.textContent = `save ${spots[target]} at the camera`;
     };
-    pose.onclick = async e => {
+    spotRow.onclick = e => {
         const b = e.target.closest("button");
-        if (!b) return;
-        if (b.dataset.h) { eye += parseFloat(b.dataset.h); shown(); reride(); }
-        else if (b.dataset.p) { pitch += parseFloat(b.dataset.p); shown(); reride(); }
-        else if (b.id === "savePose") {
-            b.textContent = "saving\u2026";
-            try {
-                const r = await fetch("http://localhost:8085/pose", {
-                    method: "POST", headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({scene: doc.waypoint, height: eye, pitch})});
-                b.textContent = (await r.json()).ok ? "\u2713 saved" : "refused";
-            } catch (err) { b.textContent = "8085?"; }
-            setTimeout(() => b.textContent = "save view", 1500);
-        }
+        if (b) { target = +b.dataset.i; paintSpots(); }
     };
-    shown();
-
-    const say = k => {
-        const w = doc.walks[k], m = marked[w.to];
-        scaleBox.innerHTML = m
-            ? `<span style="color:#8fd6a6">\u2713 ${w.to} marked at ${m.units.toFixed(2)}` +
-              ` units \u2014 ${m.units_per_metre.toFixed(3)} units/m</span>`
-            : `walk to ${w.to} and mark it \u00b7 lane is ${w.metres} m`;
-    };
-
-    const pick = k => {
-        [...list.children].forEach((el, j) => el.className = j === k ? "on" : "");
-        at = k; draw(k); choose(doc.walks[k]); say(k);
-    };
-
-    markBtn.onclick = async () => {
-        const w = doc.walks[at];
-        const pts = w.points;
-        const full = Math.hypot(pts[pts.length - 1][0] - pts[0][0],
-                                pts[pts.length - 1][1] - pts[0][1],
-                                pts[pts.length - 1][2] - pts[0][2]);
-        const units = full * Math.min(Math.max(tour.t, 0), 1);
-        scaleBox.textContent = "saving\u2026";
+    saveSpot.onclick = async () => {
+        saveSpot.textContent = "saving\u2026";
         try {
-            const r = await fetch("http://localhost:8085/mark", {
+            const r = await fetch("http://localhost:8085/place", {
                 method: "POST", headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({scene: doc.waypoint, lane: w.to,
-                                      units, metres: w.metres})});
+                body: JSON.stringify({scene: doc.waypoint, vertex: spots[target],
+                                      at: eyeNow()})});
             const j = await r.json();
-            if (!j.ok) throw new Error(j.error || "refused");
-            marked[w.to] = j.lanes[w.to];
-            say(at);
-        } catch (err) {
-            scaleBox.innerHTML = `<span style="color:#f0a35e">could not save` +
-                ` \u2014 is the alignment tool running on 8085?</span>`;
-        }
+            if (!j.ok) throw new Error(j.error);
+            placed[spots[target]] = j.placed[spots[target]];
+            // the walks are rebuilt from the marks, so the tour follows at once
+            if (j.walks) { doc.walks = j.walks; rebuild(); }
+            paintSpots();
+        } catch (err) { saveSpot.textContent = "could not save \u2014 8085?"; }
     };
-    doc.walks.forEach((w, k) => {
-        const b = document.createElement("button");
-        b.textContent = `${w.to}  ·  ${w.metres} m`;
-        b.onclick = () => pick(k);
-        list.appendChild(b);
-    });
+
+    const rebuild = () => {
+        list.innerHTML = "";
+        doc.walks.forEach((w, k) => {
+            const b = document.createElement("button");
+            b.textContent = `${w.to}  ·  ${w.metres} m`;
+            b.onclick = () => pick(k);
+            list.appendChild(b);
+        });
+        pick(Math.min(at, doc.walks.length - 1));
+    };
+    rebuild();
+    paintSpots();
     const label = document.createElement("div");
     label.className = "hint";
     label.textContent = doc.waypoint + "  ·  " + doc.walks.length + " corridor(s)";
     box.insertBefore(label, cv);
-    pick(0);
 }
 
 function tourInit(p, follow) {

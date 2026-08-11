@@ -353,6 +353,12 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
         try:
+            if self.path == "/place":
+                doc = self.server.place(req["scene"], req["vertex"], req["at"])
+                walks = self.server.rewalk(req["scene"])
+                return self._send(200, json.dumps(
+                    {"ok": True, "placed": doc["placed"], "walks": walks}).encode(),
+                    "application/json")
             if self.path == "/pose":
                 doc = self.server.pose(req["scene"], float(req["height"]),
                                        float(req["pitch"]))
@@ -489,9 +495,24 @@ def main() -> None:
             out.append({"scene": d.name, "lanes": walks,
                         "marked": sorted(saved.get("lanes", {})),
                         "units_per_metre": saved.get("units_per_metre"),
-                        "height": saved.get("height"), "pitch_deg": saved.get("pitch_deg"),
+                        "placed": sorted(saved.get("placed", {})),
                         "done": bool(walks) and all(w in saved.get("lanes", {}) for w in walks)})
         return out
+
+    def place(scene: str, vertex: str, at: list) -> dict:
+        """Where a vertex actually is, in this world's own coordinates.
+
+        Flown to and marked, rather than fitted. A position needs no scale and
+        no bearing — the walk between two of them is a straight line — and the
+        estimator this replaces was off by 2x and direction-dependent by 4.5x
+        across L11.v6's bearings.
+        """
+        marks.mkdir(parents=True, exist_ok=True)
+        rec = marks / f"{scene}.json"
+        doc = json.loads(rec.read_text()) if rec.is_file() else {}
+        doc.setdefault("placed", {})[vertex] = [round(float(v), 5) for v in at]
+        rec.write_text(json.dumps(doc, indent=1))
+        return doc
 
     def pose(scene: str, height: float, pitch: float) -> dict:
         """Eye height and tilt for a world, in its own units and degrees.
@@ -551,7 +572,18 @@ def main() -> None:
     srv = ThreadingHTTPServer(("0.0.0.0", a.port), Handler)
     srv.daemon_threads = True
     srv.scan, srv.walls, srv.preview_of, srv.apply = scan, walls, preview_of, apply
+    def rewalk(scene: str):
+        """Rebuild the walks from the marks, so the tour follows a save at once."""
+        import subprocess
+        subprocess.run(["docker", "compose", "exec", "-T", "generator", "python",
+                        "/opt/tools/edge_walks.py",
+                        f"/workspace/projects/{a.project}/splats/{scene}"],
+                       cwd=REPO, capture_output=True, timeout=180)
+        f = splats / scene / "world.paths.json"
+        return json.loads(f.read_text())["walks"] if f.is_file() else None
+
     srv.scenes, srv.mark, srv.pose = scenes, mark, pose
+    srv.place, srv.rewalk = place, rewalk
     found = scan()
     print(f"{len(found)} panoramas — http://localhost:{a.port}")
     for m in found:
