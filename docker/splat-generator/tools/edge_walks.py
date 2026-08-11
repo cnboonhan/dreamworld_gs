@@ -118,7 +118,16 @@ def main() -> None:
     M = rows.T @ A
     upw = unit(M @ [0.0, 0.0, 1.0])
 
-    upm = units_per_metre(scene, here, walls)
+    # Marked by hand where that has been done: no fit relates a generated
+    # world to metres reliably, and across 62 bearings of L11.v6 the geometry
+    # implied anywhere from 0.65 to 2.95 units per metre.
+    saved = {}
+    rec = scene.parent / ".aligned" / f"{scene.name}.json"
+    if rec.is_file():
+        saved = json.loads(rec.read_text())
+    upm = saved.get("units_per_metre") or units_per_metre(scene, here, walls)
+    eye = float(saved.get("height") or 0.0)
+    pitch = math.radians(float(saved.get("pitch_deg") or 0.0))
     out = []
     for a, b, metres in lanes:
         other = b if a == waypoint else (a if b == waypoint else None)
@@ -127,14 +136,21 @@ def main() -> None:
         d = named[other] - here
         bearing = math.atan2(d[1], d[0])
         direction = unit(M @ [math.cos(bearing), math.sin(bearing), 0.0])
-        line = centre + np.outer(np.linspace(0, metres * upm, POINTS), direction)
+        # a lane marked by hand overrides the fit for its own corridor
+        span = saved.get("lanes", {}).get(other, {}).get("units") or metres * upm
+        line = (centre + eye * upw
+                + np.outer(np.linspace(0, span, POINTS), direction))
+        look = unit(direction + math.tan(pitch) * upw)
         out.append({"to": other, "metres": round(float(metres), 3),
                     "bearing": round(bearing, 5),
+                    "look": [round(float(v), 5) for v in look],
                     "points": [[round(float(v), 5) for v in p] for p in line]})
 
     doc = {"waypoint": f"{level}.{waypoint}", "at": [round(float(v), 3) for v in here],
            "up": [round(float(v), 5) for v in upw],
-           "units_per_metre": round(upm, 4), "walks": out}
+           "units_per_metre": round(upm, 4), "height": round(eye, 4),
+           "pitch_deg": round(math.degrees(pitch), 2),
+           "marked": sorted(saved.get("lanes", {})), "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
     print(f"{scene.name}: {upm:.3f} units/m, {len(out)} lane(s) — "
           + ", ".join(f"{w['to']} {w['metres']}m" for w in out))

@@ -837,6 +837,48 @@ async function edgePicker(doc, choose) {
     markBtn.textContent = "mark: I am at the next vertex";
     box.appendChild(markBtn);
 
+    // Eye height and tilt, one pair per world. The generator's origin lands
+    // wherever it lands, which is rarely eye level in the corridor, and a walk
+    // that looks at the floor or the ceiling shows neither.
+    let eye = doc.height || 0, pitch = doc.pitch_deg || 0;
+    const pose = document.createElement("div");
+    pose.id = "poseRow";
+    pose.innerHTML = `<span class=k>height</span>
+      <button data-h="-0.05">\u2193</button><b id=eyeAt></b><button data-h="0.05">\u2191</button>
+      <span class=k>tilt</span>
+      <button data-p="-2">\u2193</button><b id=pitchAt></b><button data-p="2">\u2191</button>
+      <button id=savePose>save view</button>`;
+    box.appendChild(pose);
+    const upv = doc.up;
+    const shown = () => {
+        document.getElementById("eyeAt").textContent = eye.toFixed(2);
+        document.getElementById("pitchAt").textContent = pitch.toFixed(0) + "\u00b0";
+    };
+    const reride = () => {
+        const w = doc.walks[at];
+        tourInit({points: w.points.map(q => [q[0] + upv[0] * eye,
+                                             q[1] + upv[1] * eye,
+                                             q[2] + upv[2] * eye]),
+                  up: upv, pitch: pitch});
+    };
+    pose.onclick = async e => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        if (b.dataset.h) { eye += parseFloat(b.dataset.h); shown(); reride(); }
+        else if (b.dataset.p) { pitch += parseFloat(b.dataset.p); shown(); reride(); }
+        else if (b.id === "savePose") {
+            b.textContent = "saving\u2026";
+            try {
+                const r = await fetch("http://localhost:8085/pose", {
+                    method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({scene: doc.waypoint, height: eye, pitch})});
+                b.textContent = (await r.json()).ok ? "\u2713 saved" : "refused";
+            } catch (err) { b.textContent = "8085?"; }
+            setTimeout(() => b.textContent = "save view", 1500);
+        }
+    };
+    shown();
+
     const say = k => {
         const w = doc.walks[k], m = marked[w.to];
         scaleBox.innerHTML = m

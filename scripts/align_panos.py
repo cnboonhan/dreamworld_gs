@@ -353,6 +353,11 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
         try:
+            if self.path == "/pose":
+                doc = self.server.pose(req["scene"], float(req["height"]),
+                                       float(req["pitch"]))
+                return self._send(200, json.dumps({"ok": True, **doc}).encode(),
+                                  "application/json")
             if self.path == "/mark":
                 doc = self.server.mark(req["scene"], req["lane"],
                                        float(req["units"]), float(req["metres"]))
@@ -484,8 +489,24 @@ def main() -> None:
             out.append({"scene": d.name, "lanes": walks,
                         "marked": sorted(saved.get("lanes", {})),
                         "units_per_metre": saved.get("units_per_metre"),
+                        "height": saved.get("height"), "pitch_deg": saved.get("pitch_deg"),
                         "done": bool(walks) and all(w in saved.get("lanes", {}) for w in walks)})
         return out
+
+    def pose(scene: str, height: float, pitch: float) -> dict:
+        """Eye height and tilt for a world, in its own units and degrees.
+
+        One per world, not per lane: a capture is at one tripod height, and the
+        walk should sit at eye level in the corridor rather than at whatever
+        height the generator's origin landed on.
+        """
+        marks.mkdir(parents=True, exist_ok=True)
+        rec = marks / f"{scene}.json"
+        doc = json.loads(rec.read_text()) if rec.is_file() else {"lanes": {}}
+        doc["height"] = round(height, 4)
+        doc["pitch_deg"] = round(pitch, 2)
+        rec.write_text(json.dumps(doc, indent=1))
+        return doc
 
     def mark(scene: str, lane: str, units: float, metres: float) -> dict:
         """Record where one neighbour actually is, in this world's units."""
@@ -530,7 +551,7 @@ def main() -> None:
     srv = ThreadingHTTPServer(("0.0.0.0", a.port), Handler)
     srv.daemon_threads = True
     srv.scan, srv.walls, srv.preview_of, srv.apply = scan, walls, preview_of, apply
-    srv.scenes, srv.mark = scenes, mark
+    srv.scenes, srv.mark, srv.pose = scenes, mark, pose
     found = scan()
     print(f"{len(found)} panoramas — http://localhost:{a.port}")
     for m in found:
