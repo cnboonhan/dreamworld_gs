@@ -104,10 +104,17 @@ def units_per_metre(scene: Path, here: np.ndarray, walls: np.ndarray) -> float:
 def main() -> None:
     scene = Path(sys.argv[1])
     project = scene.parent.parent.name
+    if "." not in scene.name:
+        print(f"{scene.name}: not a waypoint id, no lanes")
+        return
     level, waypoint = scene.name.split(".", 1)
     named, lanes, walls = building(project, level)
     if waypoint not in named:
-        raise SystemExit(f"{scene.name} is not a waypoint of {level}")
+        # an edge world, or a loose panorama: no lanes leave it, so there is
+        # nothing to walk between. Not a failure — most scenes are not
+        # waypoints, and export runs this over all of them.
+        print(f"{scene.name}: not a waypoint of {level}, no lanes")
+        return
     here = named[waypoint]
 
     rows, centre, _ = hyworld_frame(scene)

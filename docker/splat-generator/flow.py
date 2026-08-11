@@ -109,6 +109,10 @@ def export_world(scene: str) -> dict:
 
     sh(["python", TOOLS / "ply_to_isaac.py", world, f"{scene}/world.usdz"], logger)
     sh(["python", TOOLS / "make_spawn_cam.py", scene], logger)
+    # A world generated at a waypoint has one walk per corridor leaving it, and
+    # the viewer needs the lanes before any of them can be marked. Derived and
+    # idempotent, so it belongs here rather than in whatever ran the build.
+    sh(["python", TOOLS / "edge_walks.py", scene], logger)
     return {"ply": str(world), "usdz": f"{scene}/world.usdz"}
 
 
