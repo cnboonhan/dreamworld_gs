@@ -879,7 +879,7 @@ async function edgePicker(doc, choose) {
     // it opens standing at its own waypoint, because that is where the work
     // starts and a tour playing under you is something to stop first.
     const paintWalks = () => {
-        if (doc.walks.length && at < doc.walks.length) choose(doc.walks[at]);
+        if (doc.walks.length && at < doc.walks.length) choose(doc.walks[at], doc);
     };
 
     const standHome = () => {
@@ -925,7 +925,7 @@ async function edgePicker(doc, choose) {
         // camera is not moved or turned — only which corridor the tour rides.
         const lane = doc.lanes[target - 1];
         const k = lane ? doc.walks.findIndex(w => w.to === lane.to) : -1;
-        if (k >= 0) { at = k; choose(doc.walks[k]); }
+        if (k >= 0) { at = k; choose(doc.walks[k], doc); }
     };
 
     saveSpot.onclick = async () => {
@@ -1281,21 +1281,21 @@ async function main() {
                         if (old) old.remove();
                         edgePicker(d, window.__rideWalk);
                     };
-                    window.__rideWalk = w => {
+                    window.__rideWalk = (w, d) => {
                         // not follow: the camera keeps the heading you gave it
                         // and simply travels the corridor. Swinging it to face
                         // the path throws away the view you were lining up,
                         // which is the work this panel exists for.
                         const was = cameraForward();
-                        tourInit({points: w.points, up: doc.up}, true);
+                        tourInit({points: w.points, up: d.up}, true);
                         if (was) tourTurn(was);
                         showTourBar();
                         // start fetching the world this corridor ends at, so it
                         // is ready before the walk is
                         const proj = decodeURIComponent(location.search)
                             .match(/files\/([^/]+)\//);
-                        const level = doc.waypoint.split(".")[0];
-                        window.__cameFrom = doc.waypoint;
+                        const level = d.waypoint.split(".")[0];
+                        window.__cameFrom = d.waypoint;
                         if (proj && window.prepareArrival)
                             window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
                     };
