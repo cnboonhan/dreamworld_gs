@@ -208,9 +208,11 @@ def log(text, level="ok"):
 # call blocks on that answer, because a tool that returned before the camera moved
 # would let an agent queue its next step into a world it has not reached.
 def viewer_call(op, timeout=180, **kw):
+    # No viewer is a fine state, not an error: it is one of two rollouts, and the
+    # robot is the other. Saying "ok, but nothing was shown" lets the walk proceed
+    # on the robot alone — which is what a box with no browser open should do.
     if not ST.get("viewer_up"):
-        return {"ok": False, "error": "no splat viewer connected — open "
-                                      f"{ST['viewer_url']} in a browser"}
+        return {"ok": True, "no_viewer": True}
     cid = f"c{int(time.time() * 1000)}_{ST['seq']}"
     ST["seq"] += 1
     done = threading.Event()
@@ -396,24 +398,40 @@ def go_to(vertex):
                          f"go_to {lab(u)}, then face {lab(v)}, then open_door, "
                          f"then go_to {lab(tgt)}."}
 
-    # The robot drives the whole polyline at once, the viewer walks it a corridor at
-    # a time — one is a pose-follow along a line, the other is a world per vertex.
+    if not ST.get("viewer_up") and not ST.get("galaxea"):
+        return {"ok": False, "error": "nothing to walk with — no splat viewer "
+                                      f"connected ({ST['viewer_url']}) and no robot "
+                                      "bridge. Neither would move."}
+
+    # The robot drives the whole polyline at once, the viewer walks it a corridor
+    # at a time — one is a pose-follow along a line, the other is a world per
+    # vertex. Whichever is connected paces the walk; when both are, the viewer
+    # does, because it is the slower and the one being watched.
     drive_robot(path)
     walked = []
     for u, v in zip(path, path[1:]):
         res = viewer_call("walk", to=lab(v))
         if not res.get("ok"):
+            # The viewer failed partway. The robot is already driving the whole
+            # line, so stop it where the walk actually got to rather than letting
+            # it run on to a destination the state will not agree it reached.
             with ST["lock"]:
-                ST["cur"], ST["prev"] = u, ST["prev"]
+                ST["prev"], ST["cur"], ST["face"] = ST["prev"], u, None
+            drive_robot([u])
             push_state()
-            return {"ok": False, "error": res.get("error"), "reached": walked}
+            return {"ok": False, "error": res.get("error"), "reached": walked,
+                    "at": lab(u)}
+        if res.get("no_viewer"):
+            # No viewer to pace against, so the robot's own RMF state is the gate.
+            wait_robot(ST["verts"][v][1], ST["verts"][v][2])
         with ST["lock"]:
             ST["prev"], ST["cur"], ST["face"] = u, v, None
         walked.append(lab(v))
         push_state()
     if not wait_robot(ST["verts"][tgt][1], ST["verts"][tgt][2]):
         log(f"robot has not reported reaching {lab(tgt)}", "err")
-    return {"ok": True, "at": lab(tgt), "route": [lab(i) for i in path]}
+    return {"ok": True, "at": lab(tgt), "route": [lab(i) for i in path],
+            "shown": not res.get("no_viewer")}
 
 
 @tool("Turn in place to FACE an adjacent waypoint, without moving.",
@@ -428,6 +446,9 @@ def face(target):
         return {"ok": False,
                 "error": f"{lab(tgt)} is not adjacent to {lab(cur)}. "
                          f"Neighbours: {', '.join(lab(v) for v, _ in ST['adj'][cur])}."}
+    if not ST.get("viewer_up") and not ST.get("galaxea"):
+        return {"ok": False, "error": "nothing to turn — no splat viewer connected "
+                                      "and no robot bridge"}
     yaw = _az(cur, tgt)
     turn_robot(yaw)
     res = viewer_call("face", to=lab(tgt), timeout=30)
@@ -1349,11 +1370,15 @@ def as_message(name, res):
     if res.get("message"):
         return str(res["message"])
     if name == "go_to":
+        if res.get("shown") is False:
+            return f"arrived {res.get('at')} — robot only, no viewer connected"
         return f"arrived {res.get('at')}" + (
             f" via {' -> '.join(res.get('route', [])[1:-1])}"
             if len(res.get("route") or []) > 2 else "")
     if name in ("face", "turn"):
         return f"facing {res.get('facing')}"
+    if name == "go_to" and res.get("shown") is False:
+        return f"arrived {res.get('at')} (robot only — no viewer connected)"
     if name in ("open_door", "close_door"):
         return f"{res.get('door')} {res.get('mode')}"
     if name == "plan_route":
