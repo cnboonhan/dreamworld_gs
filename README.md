@@ -57,7 +57,8 @@ Five web UIs come up and stay up:
 | http://localhost:8082 | 360 viewer for input panoramas |
 | http://localhost:8083 | the building simulated under RMF (Gazebo, over noVNC) |
 | http://localhost:8084 | the traffic editor — author the map (over noVNC) |
-| http://localhost:8086 | the dashboard — tools, mission agent, viewer embedded |
+| http://localhost:8086 | the dashboard — tools, mission agent, minimap |
+| http://localhost:8087 | the panorama editor — face a view, prompt an edit, save |
 
 (Eight containers: those five plus the VLM and the two job workers.)
 
@@ -152,6 +153,24 @@ with Wan2.1, and trains a splat on the ~400 views that come out. Output is
 `generate` skips a waypoint that already has a `world.ply` — delete the splat
 directory to rebuild. One waypoint per job, so each gets its own run to inspect,
 retry or compare.
+
+**Editing what a place looks like.** `just up` brings up a panorama editor at
+**http://localhost:8087**, ported from `dreamworld/docker/dream_editor`. Pick a
+waypoint on the floorplan, look around its 360 with the mouse, type what to change,
+and it crops what you are facing, edits that undistorted crop through
+Qwen-Image-Edit-2509, reprojects it back into the equirect and composites only the
+pixels that changed. Stack several edits, compare before and after in the synced
+viewer, then **Save**.
+
+Save writes `panos/<id>` — keeping what it replaced under `panos/.before-edit/`,
+since that is a photograph of a real place and an edit is not obviously an
+improvement until you have looked at it. Nothing else happens: the panorama is the
+input to everything, so the propagation is `just generate <id>`, which rebuilds
+that waypoint's splat world from the file you just wrote. That is 20 minutes of GPU
+and belongs on the queue, not inside a click.
+
+The model needs ~45 GB and gets a card of its own — `DW_EDIT_GPU`, default 5,
+which is off the four world generation uses.
 
 **Facing the right way.** A 360 records no heading, so a panorama arrives turned
 by whatever way the photographer happened to be standing, and the world

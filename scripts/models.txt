@@ -10,6 +10,9 @@ Qwen/Qwen-Image-Edit
 # base video model WorldStereo builds on
 Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
 
+# the panorama editor's model (Qwen-Image-Edit-2509, ~54GB, bf16 needs ~45GB VRAM)
+Qwen/Qwen-Image-Edit-2509
+
 # perception models the trajectory planner loads
 naver-iv/zim-anything-vitl
 IDEA-Research/grounding-dino-tiny
