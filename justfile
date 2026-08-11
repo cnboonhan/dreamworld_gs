@@ -95,14 +95,23 @@ build:
 up: _env
     #!/usr/bin/env bash
     set -euo pipefail
-    # Serialised. Every recipe that submits a job depends on this, so a batch
-    # running seven captures at once calls it seven times together — and two
-    # `docker compose up` racing on the same container leave one of them with
-    # "removal already in progress" and a failed capture. It is a no-op once
-    # everything is running, which is why this only bites after a restart.
+    # Serialised. Every recipe that submits a job depends on this, so several
+    # called together each call it too — and two `docker compose up` racing on
+    # the same container leave one with "removal already in progress" and a
+    # failed job. It is a no-op once everything is running, which is why this
+    # only bites after a restart.
     exec 9>>{{repo}}/.up.lock
     flock 9
     docker compose up -d --wait
+    # The aligner is the one tool that is not a container: it rewrites files in
+    # assets/ in place and runs on the host, so `up` cannot start it. Listed
+    # anyway, because a port you have to know about is a port you forget to
+    # forward — and it says which, so the line is never wrong about it.
+    if (exec 3<>/dev/tcp/127.0.0.1/8085) 2>/dev/null; then
+        align="running"
+    else
+        align="not running — start it with: just align"
+    fi
     echo
     echo "  project       {{project}}   (just use <name> to switch)"
     echo "  jobs + logs   http://localhost:4200"
@@ -110,10 +119,11 @@ up: _env
     echo "  panoramas     http://localhost:8082"
     echo "  rmf sim       http://localhost:8083"
     echo "  traffic ed    http://localhost:8084"
+    echo "  align panos   http://localhost:8085   ($align)"
     echo
     echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
     echo "              -L 8082:localhost:8082 -L 8083:localhost:8083 \\"
-    echo "              -L 8084:localhost:8084 <this-host>"
+    echo "              -L 8084:localhost:8084 -L 8085:localhost:8085 <this-host>"
 
 # Point the whole stack at another project and restart the services that care.
 #

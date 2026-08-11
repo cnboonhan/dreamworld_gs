@@ -48,7 +48,7 @@ just setup      # one-time: model weights + images (~500GB, needs network)
 just up         # start everything, print the URLs
 ```
 
-Seven services come up and stay up:
+Five web UIs come up and stay up:
 
 | | |
 | --- | --- |
@@ -58,13 +58,20 @@ Seven services come up and stay up:
 | http://localhost:8083 | the building simulated under RMF (Gazebo, over noVNC) |
 | http://localhost:8084 | the traffic editor — author the map (over noVNC) |
 
-(Eight services: those five plus the VLM and the two job workers.)
+(Eight containers: those five plus the VLM and the two job workers.)
+
+One more runs on the host rather than in a container, because it rewrites files
+in `assets/` in place:
+
+| | |
+| --- | --- |
+| http://localhost:8085 | the panorama aligner — `just align` starts it |
 
 Remotely:
 
 ```bash
 ssh -L 4200:localhost:4200 -L 8081:localhost:8081 -L 8082:localhost:8082 \
-    -L 8083:localhost:8083 -L 8084:localhost:8084 <this-host>
+    -L 8083:localhost:8083 -L 8084:localhost:8084 -L 8085:localhost:8085 <this-host>
 ```
 
 Open splats in a **real browser tab** — embedded IDE browsers abort the
