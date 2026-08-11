@@ -65,29 +65,80 @@ PY
 )
 ceil_z=$(awk "BEGIN{print ${elevation}+2.45}")
 ceil_world="/tmp/${MAP}_${SLOT}_ceil.world"
-# The door this lane passes through is opened by taking it out of the world.
+# Whatever this lane passes through is opened by taking it out of the world.
 # A closed door is a wall, and a corridor photographed from one side of one is
 # a dead end: the generator has nothing to put behind it, so the walk goes
-# through the leaf into nothing. Five of this building's lanes cross a door,
-# and RMF opens every one of them for anything traversing the lane — closed is
-# the state no traversal ever sees. Only the door on this lane goes; doors
-# elsewhere in shot stay shut, because they are.
-python3 - "$world" "$ceil_world" "$ceil_z" "$plan" "$EDGE" <<'PY'
+# through the leaf into nothing. RMF opens every one of them for anything
+# traversing the lane — closed is the state no traversal ever sees. Only what
+# this lane crosses is opened; doors elsewhere in shot stay shut, because they
+# are.
+#
+# Two kinds. Five lanes cross an ordinary door, which the capture plan names.
+# Four more end inside a lift car, which it does not: RMF models a lift apart
+# from its doors, so those lanes carry no door at all and were photographed
+# facing shut lift doors — 82 and 89 per cent blank wall. There the shaft door
+# and the cabin door both open, and the car is parked at this level first,
+# because an open shaft door on a floor the car has left is a hole.
+python3 - "$world" "$ceil_world" "$ceil_z" "$plan" "$EDGE" "$elev" "$elevation" <<'PY'
 import json
+import math
 import sys
 import xml.etree.ElementTree as ET
 
-src, dst, cz, plan_path, edge_id = sys.argv[1:6]
-door = next((e.get("door") for data in json.load(open(plan_path))["levels"].values()
-             for e in data["edges"] if e["id"] == edge_id), "")
+src, dst, cz, plan_path, edge_id, level, elevation = sys.argv[1:8]
+plan = json.load(open(plan_path))
+door, ends = "", []
+for data in plan["levels"].values():
+    pos = {v["id"]: (v["x"], v["y"]) for v in data["vertices"]}
+    for e in data["edges"]:
+        if e["id"] == edge_id:
+            door = e.get("door") or ""
+            ends = [pos[e["a"]], pos[e["b"]]]
 
 tree = ET.parse(src)
 world = tree.getroot().find("world")
+
+
+def open_leaves(parent, what):
+    """Take out a door's two leaves, leaving its frame, ramp and car behind.
+
+    A cabin door is a model nested inside its lift, a shaft door's leaves are
+    links of its own model, so this looks for both rather than assuming.
+    """
+    gone = [el for el in parent.iter()
+            if el.tag in ("link", "model") and el.get("name") in ("left_door", "right_door")]
+    owners = {c: p for p in parent.iter() for c in p}
+    for el in gone:
+        owners[el].remove(el)
+    print(f"opened {what}" if gone else f"nothing to open on {what}")
+
+
 if door:
-    gone = [m for m in world.findall("model") if m.get("name") == door]
-    for m in gone:
+    dead = [m for m in world.findall("model") if m.get("name") == door]
+    for m in dead:
         world.remove(m)
-    print(f"opened {door}" if gone else f"no model named {door} to open")
+    print(f"opened {door}" if dead else f"no model named {door} to open")
+
+# A lane that ends in a lift car is a lane into the lift. Lifts are the models
+# that have a cabin to move, not the ones whose name happens to start "lift" —
+# that matched lift_lobby_south_door, which is a door in a lobby and nothing to
+# do with a lift.
+for lift in [m for m in world.findall("model")
+             if any(j.get("name") == "cabin_joint" for j in m.iter("joint"))]:
+    pose = lift.find("pose")
+    if pose is None:
+        continue
+    lx, ly, _ = (float(v) for v in pose.text.split()[:3])
+    if not any(math.dist(end, (lx, ly)) < 1.0 for end in ends):
+        continue
+    rest = pose.text.split()[3:]
+    pose.text = " ".join([f"{lx}", f"{ly}", elevation] + rest)
+    print(f"brought {lift.get('name')} to {level} at z={elevation}")
+    open_leaves(lift, f"{lift.get('name')} cabin door")
+    shaft = f"ShaftDoor_{lift.get('name')}_{level}_name"
+    for m in world.findall("model"):
+        if m.get("name") == shaft:
+            open_leaves(m, shaft)
 
 ceiling = ET.fromstring(
     f'<model name="injected_ceiling"><static>true</static>'
