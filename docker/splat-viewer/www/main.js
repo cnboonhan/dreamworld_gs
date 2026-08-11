@@ -760,6 +760,10 @@ const tour = {
     // straight line that its own weave would only make the camera wobble, so
     // there the heading stays fixed — which is what it has always been.
     follow: false, look: 0.05,
+    // a turn takes time. Choosing a waypoint changes the frame the camera's
+    // yaw is measured in, so the view jumps by whatever the two frames differ
+    // by — which reads as the world moving, not you turning.
+    turn: null,
 };
 const MOVE_KEYS = new Set([
     "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF",
@@ -882,8 +886,10 @@ async function edgePicker(doc, choose) {
         const p = placed[me];
         if (!p) return false;
         const d = (doc.lanes[0] && doc.lanes[0].dir) || [1, 0, 0];
+        const was = cameraForward();
         tourInit({points: [p, p.map((v, i) => v + d[i] * 0.01)], up: doc.up},
                  false);
+        if (was) tourTurn(was);
         tour.t = 0;
         tour.playing = false;
         const play = document.getElementById("tourPlay");
@@ -1059,7 +1065,36 @@ function pathAt(u) {
             A[2] + (B[2] - A[2]) * k];
 }
 
+/** Swing to a new heading instead of cutting to it. */
+/** Where the camera is looking now, in world terms. */
+function cameraForward() {
+    if (!tour.a || !tour.b || !tour.up) return null;
+    const cp = Math.cos(tour.pitch), sp = Math.sin(tour.pitch);
+    const cy = Math.cos(tour.yaw), sy = Math.sin(tour.yaw);
+    return norm3([0, 1, 2].map((j) =>
+        cp * (cy * tour.a[j] + sy * tour.b[j]) + sp * tour.up[j]));
+}
+
+function tourTurn(worldFwd, ms) {
+    if (!tour.a || !tour.b) return;
+    const from = Math.atan2(dot3(worldFwd, tour.b), dot3(worldFwd, tour.a));
+    let delta = tour.yaw - from;
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    while (delta < -Math.PI) delta += 2 * Math.PI;
+    if (Math.abs(delta) < 0.02) return;
+    tour.turn = {from: tour.yaw - delta, to: tour.yaw, at: performance.now(),
+                 ms: ms || 450};
+    tour.yaw = tour.turn.from;
+}
+
 function tourPlace(t) {
+    if (tour.turn) {
+        const k = Math.min(1, (performance.now() - tour.turn.at) / tour.turn.ms);
+        // ease out: fastest when the turn starts, settling as it arrives
+        const e = 1 - (1 - k) * (1 - k);
+        tour.yaw = tour.turn.from + (tour.turn.to - tour.turn.from) * e;
+        if (k >= 1) tour.turn = null;
+    }
     const u = Number.isFinite(t) ? Math.min(Math.max(t, 0), 1) : 0;
     const p = pathAt(u);
 
@@ -1251,7 +1286,9 @@ async function main() {
                         // and simply travels the corridor. Swinging it to face
                         // the path throws away the view you were lining up,
                         // which is the work this panel exists for.
+                        const was = cameraForward();
                         tourInit({points: w.points, up: doc.up}, true);
+                        if (was) tourTurn(was);
                         showTourBar();
                         // start fetching the world this corridor ends at, so it
                         // is ready before the walk is
