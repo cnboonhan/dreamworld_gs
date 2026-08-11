@@ -71,7 +71,7 @@
     <div class="sec">
       <label class=f>add / edit — describe the change</label>
       <textarea id="prompt" placeholder="e.g. add a warm wooden table by the left wall"></textarea>
-      <div class="row"><button class="go" id="gen" disabled>Generate</button></div>
+      <div class="row"><button class="go" id="gen" disabled>Apply edit</button></div>
       <div id="prog"><div id="progfill"></div></div>
       <div class="hint" style="margin-top:6px"><b>Aim the view first</b> (drag/zoom the panels), then say what to change — the edit applies to the direction you are facing, and only the pixels that change are written back. The room's existing walls, lighting and viewpoint are held for you, so describe the change alone: "add a potted plant in the corner", not a description of the whole room. Tick <b>brush to limit area</b> (top-left) for a hand-masked region instead.</div>
     </div>
@@ -204,7 +204,7 @@ function select(i){SEL=i;const v=G.verts.find(x=>x.id===i);
   P.cur.setSrc(`/pano?v=${i}&kind=current&t=${Date.now()}`);
   try{$("sel").textContent="v"+i+(v&&v.name?" ("+v.name+")":"");
     if($("vsel"))$("vsel").value=String(i);
-    $("gen").disabled=false;hasCand=false;reflectCand();layout();drawFP();
+    $("gen").disabled=false;hasCand=false;reflectCand();layout();drawFP();}
   catch(e){status("select: "+e,"err");}}
 
 // ── controls ────────────────────────────────────────────────────────────────────
