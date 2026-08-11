@@ -421,6 +421,18 @@ unbundle FILE:
     echo "unbundled into {{repo}}/assets/projects: $(echo $names)"
     just projects
 
+# Every waypoint's id, and where to find it in the traffic editor.
+#
+# Three numberings exist and none agree: building.yaml numbers all of a level's
+# vertices including wall corners, the nav graph keeps only the traversable ones
+# and renumbers from zero, and an id is a vertex's name or v<nav index>. So
+# L11.v6 is nav vertex 6 and drawing vertex 216, and no offset relates them.
+#
+#   just vertices          every level
+#   just vertices L11      one level
+vertices level="" proj=project:
+    @python3 {{repo}}/scripts/vertices.py {{proj}} {{level}}
+
 # What this project's map says exists, and how much of it you have.
 #
 # build-world writes worlds/<map>/capture_plan.json: one entry per vertex and

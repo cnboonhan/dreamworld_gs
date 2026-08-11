@@ -29,7 +29,7 @@ import argparse
 import io
 import json
 import re
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import numpy as np
@@ -94,7 +94,7 @@ def bearings(index: int, verts: dict, named: dict, lanes: list) -> list[dict]:
     return sorted(out, key=lambda o: o["bearing"])
 
 
-PAGE = """<!doctype html><meta charset=utf-8><title>align panoramas</title>
+PAGE = """<!doctype html><meta charset=utf-8><title>Manual Panorama Alignment</title>
 <style>
  :root{color-scheme:dark}
  body{margin:0;background:#12161c;color:#dfe6ef;
@@ -113,6 +113,8 @@ PAGE = """<!doctype html><meta charset=utf-8><title>align panoramas</title>
         border-left:2px dashed #4ea1ff;pointer-events:none}
  #cross b{position:absolute;top:10px;left:8px;background:#4ea1ff;color:#08121e;
           padding:2px 7px;border-radius:3px;white-space:nowrap}
+ #busy{position:absolute;left:14px;bottom:12px;color:#8b98a8;pointer-events:none;
+       text-shadow:0 1px 3px #000}
  #side{width:340px;border-left:1px solid #232c38;background:#0e1218;padding:10px;
        overflow:auto}
  #plan{width:320px;height:320px;background:#0a0d12;border:1px solid #232c38;
@@ -123,11 +125,15 @@ PAGE = """<!doctype html><meta charset=utf-8><title>align panoramas</title>
  #list a{color:#9bd;text-decoration:none;border:1px solid #2f3a48;padding:2px 7px;
          border-radius:3px;font-size:12px}
  #list a.cur{background:#4ea1ff;color:#08121e;border-color:#4ea1ff}
+ #list a.gone{color:#5a6675;border-color:#242c37;border-style:dashed}
+ #list a.gone:hover{color:#8b98a8;border-color:#3a4757}
+ #list a.gone.cur{background:#3a4757;color:#dfe6ef;border-color:#5a6675}
  #list a.ok{border-color:#3f7d55;color:#8fd6a6}
  #list a.ok.cur{color:#08121e}
  .k{color:#8b98a8}
 </style>
 <header>
+  <b style="color:#8b98a8;font-weight:600">Manual Panorama Alignment</b>
   <b id=title></b>
   <span class=k>face:</span><span id=faces></span>
   <span class=k>| turn the panorama:</span>
@@ -139,7 +145,8 @@ PAGE = """<!doctype html><meta charset=utf-8><title>align panoramas</title>
   <span id=msg></span>
 </header>
 <div id=wrap>
-  <div id=stage><canvas id=cv></canvas><div id=cross><b id=facing></b></div></div>
+  <div id=stage><canvas id=cv></canvas><div id=cross><b id=facing></b></div>
+  <div id=busy></div></div>
   <div id=side>
     <canvas id=plan width=320 height=320></canvas>
     <div class=k style=margin-top:8px>
@@ -191,7 +198,8 @@ function draw(){
   gl.viewport(0,0,w,h);
   gl.uniform2f(U.res,w,h);gl.uniform1f(U.yaw,look);gl.uniform1f(U.pitch,pitch);
   gl.uniform1f(U.fov,fov);gl.uniform1f(U.corr,off*Math.PI/180);
-  if(ready)gl.drawArrays(gl.TRIANGLES,0,3);
+  if(ready){gl.drawArrays(gl.TRIANGLES,0,3);}
+  else{gl.clearColor(0.05,0.07,0.09,1);gl.clear(gl.COLOR_BUFFER_BIT);}
   requestAnimationFrame(draw);
 }
 draw();
@@ -202,15 +210,27 @@ async function boot(){
 function show(i){
   cur=i;off=0;ready=false;
   const m=meta[i];
-  $("title").innerHTML=m.file+'  <span class=k>vertex '+m.index+
+  $("title").innerHTML=(m.missing?'<span class=k>'+m.file.replace(/\\.JPG$/i,'')+
+    '</span>':m.file)+'  <span class=k>vertex '+m.index+
     (m.name?" ("+m.name+")":"")+'</span>'+
     (m.applied!==null?'  <span class=done>\u2713 '+m.applied.toFixed(1)+
      '\u00b0 already rolled in</span>':'  <span class=k>not yet aligned</span>');
   $("faces").innerHTML=m.bearings.map((b,k)=>
     '<button id=f'+k+' onclick=face('+k+')>'+b.to+' · '+b.metres+'m</button>').join(' ');
-  const im=new Image();
-  im.onload=()=>{gl.bindTexture(gl.TEXTURE_2D,tex);
-    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,im);ready=true;};
+  if(m.missing){
+    $("busy").innerHTML='<span class=k>no panorama shot here yet \u2014 '+
+      'the plan and its lanes are shown for reference</span>';
+    face(0);links();return;
+  }
+  $("busy").textContent="loading "+m.file+"\u2026";
+  const im=new Image(); const want=m.file;
+  im.onload=()=>{
+    if(meta[cur].file!==want) return;      // a later click won the race
+    gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,im);
+    ready=true;$("busy").textContent="";};
+  im.onerror=()=>{ if(meta[cur].file===want)
+    $("busy").innerHTML='<span class=warn>'+want+' would not load</span>'; };
   im.src='/pano/'+encodeURIComponent(m.file)+'?t='+Date.now();
   face(0);links();
 }
@@ -252,7 +272,10 @@ function plan(k){
   x.fillStyle="#ffd479";x.beginPath();x.arc(160,160,5,0,7);x.fill();
 }
 async function save(){
-  const msg=$("msg");msg.textContent=" saving...";msg.className="";
+  const msg=$("msg");
+  if(meta[cur].missing){msg.className="warn";
+    msg.textContent=" nothing to save \\u2014 no panorama at this waypoint";return;}
+  msg.textContent=" saving...";msg.className="";
   const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({file:meta[cur].file,degrees:off})});
   const j=await r.json();
@@ -266,13 +289,19 @@ async function rescan(){
   const i=Math.max(0, meta.findIndex(m=>m.file===was)); show(i);
 }
 function links(){
-  const done=meta.filter(m=>m.applied!==null).length;
-  $("list").innerHTML=meta.map((m,i)=>'<a href=# class="'+
-    (i===cur?'cur':'')+(m.applied!==null?' ok':'')+
-    '" onclick="show('+i+');return false">'+(m.applied!==null?"\\u2713 ":"")+
-    m.file.replace(/\\.JPG$/i,'')+'</a>').join('')+
-    '<div class=k style="width:100%;margin-top:8px">'+done+' of '+meta.length+
-    ' aligned</div>';
+  const have=meta.filter(m=>!m.missing);
+  const done=have.filter(m=>m.applied!==null).length;
+  $("list").innerHTML=meta.map((m,i)=>{
+    if(m.missing) return '<a href=# class="gone'+(i===cur?' cur':'')+
+      '" title="not photographed \\u2014 click to see it on the plan"'+
+      ' onclick="show('+i+');return false">'+
+      m.file.replace(/\\.JPG$/i,'')+'</a>';
+    return '<a href=# class="'+(i===cur?'cur':'')+(m.applied!==null?' ok':'')+
+      '" onclick="show('+i+');return false">'+(m.applied!==null?"\\u2713 ":"")+
+      m.file.replace(/\\.JPG$/i,'')+'</a>';}).join('')+
+    '<div class=k style="width:100%;margin-top:8px">'+done+' of '+have.length+
+    ' aligned  \u00b7  '+meta.filter(m=>m.missing).length+
+    ' waypoints not yet photographed</div>';
 }
 boot();
 </script>"""
@@ -330,7 +359,7 @@ def main() -> None:
     a = ap.parse_args()
 
     root = REPO / "assets" / "projects" / a.project
-    src = root / "real_panos"
+    src = root / "panos"
     previews = src / ".previews"
     previews.mkdir(exist_ok=True)
     verts, named, lanes, walls = load_building(a.project, a.level)
@@ -343,22 +372,33 @@ def main() -> None:
         correct a mis-labelled capture — and a list cached at boot would go on
         showing the old name however often you refreshed.
         """
-        out = []
+        out, shot = [], set()
         for f in sorted(src.iterdir()):
             if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
                 continue
-            m = re.match(r"(\d+)(?:_(.+))?$", f.stem)
-            if not m or int(m.group(1)) not in verts:
+            vertex = resolve(f.stem)
+            if vertex is None:
                 out.append({"file": f.name, "index": -1, "name": "",
                             "at": [0, 0], "bearings": [], "applied": None,
-                            "problem": "no vertex index in the name" if not m
-                            else f"no vertex {m.group(1)} on {a.level}"})
+                            "problem": f"no vertex of {a.level} is named by this"})
                 continue
-            i = int(m.group(1))
-            out.append({"file": f.name, "index": i, "name": m.group(2) or "",
+            i, nav = vertex
+            shot.add(nav)
+            out.append({"file": f.name, "index": i, "name": nav,
                         "at": verts[i].tolist(),
                         "bearings": bearings(i, verts, named, lanes),
                         "applied": applied_to(f.name)})
+        # Every waypoint the map defines, photographed or not. A capture is
+        # judged as much by what is missing as by what is there, and a gap in
+        # the list is easier to see than a gap in a folder.
+        for nav in sorted(named):
+            if nav in shot:
+                continue
+            i = min(verts, key=lambda k: np.linalg.norm(verts[k] - named[nav]))
+            out.append({"file": f"{a.level}.{nav}.JPG", "index": i,
+                        "name": nav, "at": verts[i].tolist(),
+                        "bearings": bearings(i, verts, named, lanes),
+                        "applied": None, "missing": True})
         return out
 
     def applied_to(name: str):
@@ -384,6 +424,27 @@ def main() -> None:
                 return None
         return None
 
+    def resolve(stem: str):
+        """(drawing index, nav name) for a panorama's filename.
+
+        The standard is <level>.<vertex>.JPG, named for the vertex it was shot
+        at, because that name is the scene id everything downstream uses. A
+        camera's own numbering — 224_apex_lab_entrance — is accepted too, since
+        that is what comes off the card before anyone has renamed anything.
+        """
+        want = stem.split(".", 1)[1] if stem.startswith(a.level + ".") else None
+        if want is None:
+            m = re.match(r"(\d+)(?:_.*)?$", stem)
+            if m and int(m.group(1)) in verts:
+                here = verts[int(m.group(1))]
+                nav = min(named, key=lambda k: np.linalg.norm(named[k] - here))
+                return int(m.group(1)), nav
+            return None
+        if want not in named:
+            return None
+        i = min(verts, key=lambda k: np.linalg.norm(verts[k] - named[want]))
+        return i, want
+
     def preview_of(name: str) -> Path:
         """The downscaled copy the browser gets, made on first ask."""
         f = src / name
@@ -408,7 +469,11 @@ def main() -> None:
             {"degrees": round(total, 2), "last": round(degrees, 2)}, indent=1))
         return shift
 
-    srv = HTTPServer(("0.0.0.0", a.port), Handler)
+    # Threaded: one held connection used to block every other request, and a
+    # browser keeps its connection open. Building a preview from a 30-megapixel
+    # JPEG takes seconds, and single-threaded that wedged the whole tool.
+    srv = ThreadingHTTPServer(("0.0.0.0", a.port), Handler)
+    srv.daemon_threads = True
     srv.scan, srv.walls, srv.preview_of, srv.apply = scan, walls, preview_of, apply
     found = scan()
     print(f"{len(found)} panoramas — http://localhost:{a.port}")
