@@ -65,16 +65,38 @@ PY
 )
 ceil_z=$(awk "BEGIN{print ${elevation}+2.45}")
 ceil_world="/tmp/${MAP}_${SLOT}_ceil.world"
-python3 - "$world" "$ceil_world" "$ceil_z" <<'PY'
+# The door this lane passes through is opened by taking it out of the world.
+# A closed door is a wall, and a corridor photographed from one side of one is
+# a dead end: the generator has nothing to put behind it, so the walk goes
+# through the leaf into nothing. Five of this building's lanes cross a door,
+# and RMF opens every one of them for anything traversing the lane — closed is
+# the state no traversal ever sees. Only the door on this lane goes; doors
+# elsewhere in shot stay shut, because they are.
+python3 - "$world" "$ceil_world" "$ceil_z" "$plan" "$EDGE" <<'PY'
+import json
 import sys
-src, dst, cz = sys.argv[1], sys.argv[2], float(sys.argv[3])
-xml = open(src).read()
-ceiling = (f'<model name="injected_ceiling"><static>true</static>'
-           f'<pose>0 0 {cz} 0 0 0</pose><link name="link"><visual name="visual">'
-           '<geometry><box><size>300 300 0.1</size></box></geometry><material>'
-           '<ambient>0.5 0.5 0.5 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse>'
-           '<specular>0.1 0.1 0.1 1</specular></material></visual></link></model>')
-open(dst, "w").write(xml.replace("</world>", ceiling + "\n</world>", 1))
+import xml.etree.ElementTree as ET
+
+src, dst, cz, plan_path, edge_id = sys.argv[1:6]
+door = next((e.get("door") for data in json.load(open(plan_path))["levels"].values()
+             for e in data["edges"] if e["id"] == edge_id), "")
+
+tree = ET.parse(src)
+world = tree.getroot().find("world")
+if door:
+    gone = [m for m in world.findall("model") if m.get("name") == door]
+    for m in gone:
+        world.remove(m)
+    print(f"opened {door}" if gone else f"no model named {door} to open")
+
+ceiling = ET.fromstring(
+    f'<model name="injected_ceiling"><static>true</static>'
+    f'<pose>0 0 {float(cz)} 0 0 0</pose><link name="link"><visual name="visual">'
+    '<geometry><box><size>300 300 0.1</size></box></geometry><material>'
+    '<ambient>0.5 0.5 0.5 1</ambient><diffuse>0.5 0.5 0.5 1</diffuse>'
+    '<specular>0.1 0.1 0.1 1</specular></material></visual></link></model>')
+world.append(ceiling)
+tree.write(dst)
 PY
 
 # Both of these get their own log, named for this capture, rather than this
