@@ -805,37 +805,89 @@ def place(item=""):
     return {"ok": True, "item": item, "inventory": list(ST["inventory"]), "bridge": res}
 
 
-@tool("The obstacle-aware sequence of steps to reach a waypoint, without moving.",
-      [("to", "destination waypoint name/id")])
-def plan_route(to):
-    try:
-        tgt = find_vertex(ST["verts"], to)
-    except SystemExit as e:
-        return {"ok": False, "error": str(e)}
-    path = dijkstra(ST["adj"], ST["cur"], tgt)
-    if not path:
-        return {"ok": False, "error": f"no path to {to}"}
-    steps, walked = [], ST["cur"]
+def find_level_of(key):
+    """The OTHER level on which waypoint `key` exists, or None. From _find_level_of."""
+    for lvl in (ST.get("levels") or []):
+        if lvl.upper() == str(ST.get("level", "")).upper():
+            continue
+        try:
+            _, verts, _, _ = load_nav(ST["nav"], lvl)
+            find_vertex(verts, key)
+            return lvl
+        except (SystemExit, OSError, ValueError, KeyError):
+            continue
+    return None
+
+
+def nearest_lift_lobby(cur):
+    """The vertex nearest cur that is adjacent to a lift cabin. From
+    _nearest_lift_lobby — nearest by hop count, which is what the walk costs."""
+    best, bestd = None, 1e9
+    for i in ST["adj"]:
+        if any(v in ST["lift_of"] for v, _ in ST["adj"].get(i, [])):
+            p = dijkstra(ST["adj"], cur, i)
+            if p and len(p) < bestd:
+                best, bestd = i, len(p)
+    return best
+
+
+def decompose_doors(cur, tgt):
+    """(steps, route) opening every closed door on the way, or None."""
+    path = dijkstra(ST["adj"], cur, tgt)
+    if not path or len(path) < 2:
+        return None
+    steps, walked = [], cur
     for u, v in zip(path, path[1:]):
         if crossable(u, v):
             continue
         cabin = ST["lift_of"].get(v) or ST["lift_of"].get(u)
+        if walked != u:
+            steps.append(f"go_to {lab(u)}")
+            walked = u
         if cabin:
             # A lift is not a door with extra steps: it has to be called to this
             # floor before its door means anything, so it gets its own sequence.
-            if walked != u:
-                steps.append(f"go_to {lab(u)}")
-                walked = u
             steps += [f"select_lift {cabin}", f"face {lab(v)}",
                       f"call_lift {ST['level']}", "open_door"]
         else:
-            if walked != u:
-                steps.append(f"go_to {lab(u)}")
-                walked = u
             steps += [f"face {lab(v)}", "open_door"]
     steps.append(f"go_to {lab(tgt)}")
-    return {"ok": True, "route": [lab(i) for i in path], "steps": steps,
-            "lifts": sorted({ST["lift_of"][i] for i in path if i in ST["lift_of"]})}
+    return steps, [lab(i) for i in path]
+
+
+@tool("Plan the FULL obstacle-aware route to a waypoint WITHOUT trial-and-error. "
+      "Returns an ordered 'steps' list (go_to -> face -> open_door -> go_to ...) that "
+      "already opens every closed door on the way, so you NEVER hit a BLOCKED go_to. "
+      "A waypoint on ANOTHER level returns the steps to a lift lobby plus the "
+      "take_lift to call — do those, then call plan_route again on arrival.",
+      [("to", "destination waypoint name/id")])
+def plan_route(to):
+    cur = ST["cur"]
+    try:                                       # same level -> full door-aware plan
+        tgt = find_vertex(ST["verts"], to)
+        if tgt == cur:
+            return {"ok": True, "steps": [], "note": f"already at {lab(cur)}"}
+        d = decompose_doors(cur, tgt)
+        if not d:
+            return {"ok": False, "error": f"no path to {to}"}
+        steps, route = d
+        return {"ok": True, "steps": steps, "route": route,
+                "lifts": sorted({ST["lift_of"][i] for i in dijkstra(ST["adj"], cur, tgt)
+                                 if i in ST["lift_of"]}),
+                "note": "put 'steps' into write_todos and execute in order — no BLOCKED."}
+    except SystemExit:
+        pass
+    lvl = find_level_of(str(to))               # different level -> lift first
+    if not lvl:
+        return {"ok": False, "error": f"'{to}' is not a known waypoint on any level."}
+    lobby = nearest_lift_lobby(cur)
+    pre = (decompose_doors(cur, lobby) or ([], []))[0] if lobby is not None else []
+    return {"ok": True, "needs_level_change": lvl, "steps": pre,
+            "then": f"take_lift {lvl}",
+            "note": f"'{to}' is on {lvl}. write_todos the 'steps' (reach a lift lobby) "
+                    f"and do them, THEN call take_lift {lvl} (it installs the lift "
+                    f"template). After you arrive on {lvl}, call plan_route {to} again "
+                    f"to plan the final leg."}
 
 
 @tool("Where you are, what is around you, and what you are carrying.")
@@ -1637,7 +1689,11 @@ def as_message(name, res):
     if name in ("open_door", "close_door"):
         return f"{res.get('door')} {res.get('mode')}"
     if name == "plan_route":
-        return f"{len(res.get('steps') or [])} step(s): " + "; ".join(res.get("steps") or [])
+        head = (f"{res['needs_level_change']} first — " if res.get("needs_level_change")
+                else "")
+        tail = f"; then {res['then']}" if res.get("then") else ""
+        return (head + f"{len(res.get('steps') or [])} step(s): "
+                + "; ".join(res.get("steps") or ["(already there)"]) + tail)
     if name == "get_path":
         return " -> ".join(res.get("path") or [])
     if name == "where":
