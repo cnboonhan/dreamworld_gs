@@ -334,7 +334,20 @@ def built_scenes():
 
 def state_dict():
     cur = ST["cur"]
+    m2px, px, py, dirv = ST.get("m2px"), None, None, None
+    if m2px:
+        px, py = m2px(ST["verts"][cur][1], ST["verts"][cur][2])
+        px, py = round(px, 1), round(py, 1)
+        if ST["face"] is not None:
+            fx, fy = m2px(ST["verts"][ST["face"]][1], ST["verts"][ST["face"]][2])
+            d = math.hypot(fx - px, fy - py) or 1.0
+            dirv = [(fx - px) / d, (fy - py) / d]
+    heading = None if ST["face"] is None else round(math.degrees(_az(cur, ST["face"])) % 360)
     return {"level": ST["level"], "cur": cur, "at": lab(cur), "scene": scene_of(cur),
+            "cur_label": lab(cur), "px": px, "py": py, "dir": dirv, "heading": heading,
+            "door_open": ", ".join(sorted(ST["open_doors"])) or "",
+            "neighbors": [{"id": v, "label": lab(v), "facing": v == ST["face"]}
+                          for v, _ in ST["adj"].get(cur, [])],
             "prev": None if ST["prev"] is None else lab(ST["prev"]),
             "face": None if ST["face"] is None else lab(ST["face"]),
             "neighbours": [lab(v) for v, _ in ST["adj"].get(cur, [])],
@@ -616,6 +629,33 @@ def write_todos(todos=None):
 
 
 # ---- natural language -------------------------------------------------------
+def choose_forward():
+    """The neighbour that continues the way you are already walking.
+
+    Ported from the dream's choose_forward. Facing wins if you are facing one;
+    otherwise it is the neighbour closest to straight on from the way you came in,
+    and doubling back is the last resort rather than the first — at a junction the
+    arrow key should keep going, not turn round.
+    """
+    cur, prev = ST["cur"], ST["prev"]
+    ns = [v for v, _ in ST["adj"].get(cur, [])]
+    if not ns:
+        return cur
+    if ST["face"] in ns:
+        return ST["face"]
+    if prev is None or prev not in [v for v, _ in ST["adj"].get(cur, [])] and prev != cur:
+        came = None
+    else:
+        came = _az(prev, cur) if prev is not None else None
+    if came is None:
+        return ns[0]
+    def off(v):
+        d = abs((_az(cur, v) - came + math.pi) % (2 * math.pi) - math.pi)
+        return d
+    ahead = [v for v in ns if v != prev]
+    return min(ahead or ns, key=off)
+
+
 def handle(text):
     """The same phrasings the dream dashboard's text box took."""
     t = " ".join(str(text).split()).lower()
@@ -629,6 +669,8 @@ def handle(text):
     m = re.fullmatch(r"face\s+(.+)", t)
     if m:
         return face(m.group(1))
+    if t == "forward":
+        return go_to(lab(choose_forward()))
     m = re.fullmatch(r"turn\s+(left|right)", t)
     if m:
         return turn(m.group(1))
@@ -981,208 +1023,314 @@ def build_agent():
 
 
 PAGE = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
 <title>interactive — walk the building</title>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--dim:#8b98a8;--line:#22303f;--ok:#6ea8fe;--err:#ff7b72;--warn:#e3b341}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;height:100vh;display:flex;flex-direction:column}
-#mission{display:flex;gap:6px;align-items:center;padding:10px;border-bottom:1px solid var(--line);background:#0b0f14}
-#mission label{color:var(--dim);text-transform:uppercase;font-size:11px;letter-spacing:.08em}
-#main{flex:1 1 auto;display:flex;min-height:0}
-#left{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
-#right{flex:0 0 360px;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
-h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0;padding:8px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
-.pane{display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--line)}
-.pane.grow{flex:1 1 0}
-pre{margin:0;padding:8px 10px;overflow:auto;white-space:pre-wrap;font-size:12px;flex:1 1 auto}
-input,button{background:#161b22;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font:inherit}
-input{flex:1 1 auto;min-width:0}
-button{cursor:pointer;white-space:nowrap}
-button:hover{border-color:var(--ok);color:var(--ok)}
-#tools{display:flex;flex-wrap:wrap;gap:4px;padding:8px}
-#tools button{font-size:11px;padding:3px 7px}
-.log div{padding:1px 10px}
-.log .err{color:var(--err)} .log .warn{color:var(--warn)} .log .mission{color:var(--ok)}
-#status{padding:6px 10px;color:var(--dim);border-bottom:1px solid var(--line);font-size:12px}
-#status b{color:var(--fg);font-weight:600}
-#mapwrap{flex:1 1 auto;position:relative;overflow:hidden;background:#0b0f14}
-canvas{position:absolute;inset:0;width:100%;height:100%}
-#bar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line);background:#0b0f14}
-a{color:var(--ok)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:'Courier New',monospace;height:100vh;display:flex;flex-direction:column}
+header{background:#161b22;border-bottom:1px solid #30363d;padding:9px 18px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+header h1{font-size:15px;font-weight:600;color:#58a6ff}
+#dot{width:10px;height:10px;border-radius:50%;background:#3fb950;animation:pulse 2s infinite}
+#dot.off{background:#f85149;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+#stat{font-size:12px;color:#8b949e}
+#pos{font-size:12px;color:#e3b341;margin-left:auto}
+main{display:flex;flex:1;overflow:hidden;gap:1px;background:#30363d}
+.panel{background:#0d1117;display:flex;flex-direction:column;overflow:hidden}
+#stack{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;background:#30363d}
+/* The map takes the column, so it gets the whole width the window can give it —
+   the camera panel that used to sit under it has nothing to show here. */
+#mid{flex:1;min-height:0}
+#right{width:50%;flex-shrink:0}
+#drag{width:5px;flex-shrink:0;cursor:col-resize;background:#30363d}
+#drag:hover,#drag.on{background:#58a6ff}
+.ph{background:#161b22;padding:7px 13px;font-size:12px;color:#8b949e;border-bottom:1px solid #30363d;flex-shrink:0}
+.ph b{color:#58a6ff}
+.pb{flex:1;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+.pb::-webkit-scrollbar{width:6px}.pb::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+#pad{display:flex;gap:6px;flex-wrap:wrap;align-items:stretch;justify-content:center}
+#pad button{background:#21262d;border:1px solid #30363d;color:#e6edf3;font-size:18px;padding:8px 14px;border-radius:5px;cursor:pointer}
+#pad button:hover{background:#30363d}
+#pad .wide{font-size:13px}
+.bar{display:flex;gap:6px}
+input{flex:1;padding:9px;font-size:13px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:5px;font-family:inherit}
+input:focus{outline:0;border-color:#1f6feb}
+.go{padding:9px 14px;background:#1f6feb;color:#fff;border:0;border-radius:5px;cursor:pointer;font-size:13px}
+#cancelbtn{padding:9px 12px;background:#30363d;color:#ff7b72;border:1px solid #f85149;border-radius:5px;cursor:pointer;font-size:13px;flex-shrink:0}
+#cancelbtn:hover{background:#5a1d1d}
+.go.running{background:#9e6a03}   /* mission running -> button shows PAUSE (amber) */
+.go.paused{background:#238636}    /* paused -> button shows RESUME (green) */
+.hint{color:#6e7681;font-size:11px}
+#mapwrap{padding:4px;overflow:hidden;background:#0a0d12;flex:1;min-height:0;display:flex}
+#map{display:block;width:100%;height:100%;image-rendering:auto;border:1px solid #30363d;border-radius:4px}
+#mission{font-size:13px;color:#cae8ff;min-height:20px;white-space:pre-wrap;background:#051d40;border:1px solid #1f6feb;border-radius:4px;padding:8px}
+#mission.empty{color:#6e7681;background:#0d1117;border-color:#30363d}
+#tools{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;justify-content:center}
+.tool{font-size:10px;background:#161b22;border:1px solid #30363d;color:#79c0ff;padding:2px 7px;border-radius:10px;cursor:pointer}
+.tool:hover{background:#1f6feb;color:#fff;border-color:#1f6feb}
+.tool.sel{background:#1f6feb;color:#fff;border-color:#58a6ff}
+#todos{margin:3px 0}
+.todo{font-size:11px;color:#8b949e;padding:1px 0}
+#right #agentwrap{flex:1;min-height:60px;overflow:auto;padding:8px}   /* agent panel in right column, above log */
+#agentwrap::-webkit-scrollbar{width:6px}#agentwrap::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+#statemodel{margin:0;font:11px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;color:#8b949e}
+#statemodel .h{color:#58a6ff;font-weight:600}
+#statemodel .done{color:#56d364}
+#statemodel .prog{color:#e3b341}
+#statemodel .pend{color:#6e7681}
+#log{flex:none;height:150px;min-height:44px;overflow:auto;font-size:11px;line-height:1.6;display:flex;flex-direction:column;gap:2px}
+#log::-webkit-scrollbar{width:6px}#log::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+#logdrag,#middrag{height:5px;flex-shrink:0;cursor:row-resize;background:#30363d}
+#logdrag:hover,#logdrag.on,#middrag:hover,#middrag.on{background:#58a6ff}
+.ev{padding:4px 8px;border-left:3px solid #30363d;border-radius:0 4px 4px 0;word-break:break-word}
+.ev.cmd{border-color:#1f6feb;color:#79c0ff;background:#0b1a2e}
+.ev.ok{border-color:#238636;color:#56d364}
+.ev.err{border-color:#f85149;color:#ff7b72;background:#1a0004}
+.ev.mission{border-color:#d29922;color:#e3b341;background:#161004}
+.ev .t{color:#484f58;margin-right:5px}
+.leg{display:flex;gap:12px;font-size:10px;color:#8b949e;flex-wrap:wrap}
+.leg i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px;vertical-align:middle}
+header h1,#stat,#pos,#vlink{flex-shrink:0}
+#vlink{font-size:12px;color:#8b949e;text-decoration:none;border:1px solid #30363d;
+ border-radius:4px;padding:3px 8px}
+#vlink:hover{border-color:#58a6ff;color:#58a6ff}
+#vlink.on{color:#56d364;border-color:#238636}
+header #mbox{flex:1;min-width:140px}
+#tip{position:fixed;pointer-events:none;display:none;z-index:60;background:#161b22;
+ border:1px solid #58a6ff;color:#e6edf3;font-size:11px;padding:3px 8px;border-radius:4px;white-space:nowrap}
+#mapwrap{position:relative}
 </style></head><body>
-
-<div id=mission>
-  <label for=msn>mission</label>
-  <input id=msn placeholder="take the apple from apex_lab to the cafe">
-  <button onclick=runMission()>run</button>
-  <button onclick=post('/pause')>pause</button>
-  <button onclick=post('/resume')>resume</button>
-  <button onclick=post('/cancel')>cancel</button>
-</div>
-
-<div id=main>
-  <div id=left>
-    <div id=status>connecting…</div>
-    <div id=mapwrap><canvas id=map></canvas></div>
-    <div id=bar>
-      <input id=cmd placeholder="go to apex_lab   ·   face v0   ·   open door   ·   where">
-      <button onclick=send()>run</button>
+<div id=tip></div>
+<header><div id=dot></div><h1>interactive</h1>
+<input id=mbox placeholder="mission for the agent — describe the goal, then Run">
+<button class=go id=runbtn onclick="onRunBtn()">run mission</button>
+<button id=cancelbtn onclick="cancelMission()" title="cancel the running mission and clear it">✕ clear mission</button>
+<span id=stat>connecting…</span><a id=vlink target=_blank rel=noopener></a>
+<span id=pos></span></header>
+<main>
+ <div id=stack>
+  <div class="panel" id=mid>
+   <div class=ph><b>floorplan</b> + nav graph + position
+    <span class=leg style="float:right"><span><i style="background:#3fb950"></i>you</span>
+    <span><i style="background:#7aa2f7"></i>waypoint</span>
+    <span><i style="background:#e0a030"></i>door</span>
+    <span><i style="background:#d24dcf"></i>lift</span>
+    <span><i style="background:#0d1117;border:1px solid #484f58"></i>no world yet</span></span></div>
+   <div id=mapwrap><canvas id=map></canvas></div>
+   <div class=ph style="border-top:1px solid #30363d"><b>controls</b></div>
+   <div class=pb style="flex:none;padding-bottom:0;align-items:stretch">
+    <div id=pad>
+     <button onclick="cmd('turn left')" title="←">↰</button>
+     <button onclick="cmd('forward')" title="↑">↑</button>
+     <button onclick="cmd('turn right')" title="→">↱</button>
     </div>
+    <div id=tools></div>
+    <div class=bar id=toolarg style="display:none">
+     <input id=argbox><button class=go onclick="runTool()">go</button></div>
+    <div class=hint id=toolhint>click a tool — ones that need input reveal a field</div>
+   </div>
   </div>
-  <div id=right>
-    <div class=pane><h2>tools</h2><div id=tools></div></div>
-    <div class="pane grow"><h2>world model</h2><pre id=model>…</pre></div>
-    <div class="pane grow"><h2>log</h2><pre class=log id=log></pre></div>
-  </div>
-</div>
-
+ </div>
+ <div id=drag title="drag to resize"></div>
+ <div class="panel" id=right>
+  <div class=ph><b>agent</b> — mission &amp; subtasks (RMF-tracked)</div>
+  <div class=pb id=agentwrap><pre id=statemodel>no mission — type a goal above and hit “run mission”</pre></div>
+  <div id=logdrag title="drag to resize log"></div>
+  <div class=ph style="border-top:1px solid #30363d"><b>log</b></div>
+  <div class=pb id=log></div>
+ </div>
+</main>
 <script>
-const $ = (id) => document.getElementById(id);
-let ST = {}, G = null, FP = null;
+// Resizable right column: drag the splitter to set #right width.
+(function(){
+  const d=document.getElementById('drag'), r=document.getElementById('right');
+  let x0=0,w0=0,on=false;
+  d.addEventListener('mousedown',e=>{on=true;x0=e.clientX;w0=r.offsetWidth;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
+  window.addEventListener('mousemove',e=>{if(!on)return;const w=Math.max(220,Math.min(window.innerWidth-260,w0-(e.clientX-x0)));r.style.width=w+'px';});
+  window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
+})();
+// Resizable log: drag the horizontal splitter to set #log height (agent panel above flexes).
+(function(){
+  const d=document.getElementById('logdrag'), log=document.getElementById('log'), col=document.getElementById('right');
+  let on=false;
+  d.addEventListener('mousedown',e=>{on=true;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
+  window.addEventListener('mousemove',e=>{if(!on)return;const r=col.getBoundingClientRect();
+    const h=Math.max(44,Math.min(r.height-120, r.bottom-e.clientY));log.style.height=h+'px';});
+  window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
+})();
+const $=id=>document.getElementById(id);
+let G=null, FP=new Image(), fpReady=false, last=null;
+function ts(){return new Date().toTimeString().slice(0,8)}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function logEv(cls,text){const e=document.createElement('div');e.className='ev '+cls;
+ e.innerHTML='<span class=t>'+ts()+'</span>'+esc(text);$('log').appendChild(e);
+ $('log').scrollTop=$('log').scrollHeight}
+function setMission(m){const el=$('mission');if(!el)return;
+ if(m&&m.trim()){el.textContent=m;el.classList.remove('empty')}
+ else{el.textContent='no mission set';el.classList.add('empty')}}
 
-const say = (text, level) => {
-  const d = document.createElement("div");
-  d.className = level || "ok"; d.textContent = text;
-  $("log").appendChild(d); $("log").scrollTop = 1e9;
-};
-const post = (path, body) =>
-  fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
-               body: JSON.stringify(body || {})}).then((r) => r.json());
+function fitCanvas(){const c=$('map');if(!G)return;
+ // Fill the pane and letterbox inside it, rather than sizing the canvas to the
+ // floorplan's aspect: the map owns the column now, and a 1744x608 plan sized by
+ // width alone would leave most of the height empty.
+ const r=$('mapwrap').getBoundingClientRect();
+ c.width=Math.max(50,r.width-8);c.height=Math.max(30,r.height-8)}
 
-function send() {
-  const text = $("cmd").value.trim();
-  if (!text) return;
-  $("cmd").value = ""; say("> " + text);
-  post("/command", {text}).then((r) => { if (!r.ok) say(r.error, "err"); });
+function drawMap(s){const c=$('map'),g=c.getContext('2d');if(!G){return}
+ const W=c.width,H=c.height;g.clearRect(0,0,W,H);
+ // one scale for both axes, centred — the plan must not be stretched to the pane
+ const k=Math.min(W/(G.w||1),H/(G.h||1));
+ const ox=(W-(G.w||1)*k)/2, oy=(H-(G.h||1)*k)/2, sx=k, sy=k;
+ const P=(px,py)=>[px*k+ox,py*k+oy];
+ if(fpReady){g.globalAlpha=.55;g.drawImage(FP,ox,oy,(G.w||1)*k,(G.h||1)*k);g.globalAlpha=1}
+ else{g.fillStyle='#11151c';g.fillRect(0,0,W,H)}
+ // edges
+ const V={};for(const v of G.verts)V[v.id]=v;
+ for(const e of G.edges){const a=V[e.u],b=V[e.v];if(!a||!b)continue;
+  const[ax,ay]=P(a.px,a.py),[bx,by]=P(b.px,b.py);
+  g.strokeStyle=e.door?'#8a6d1f':'#2f4568';g.lineWidth=e.door?2.5:1.5;
+  g.beginPath();g.moveTo(ax,ay);g.lineTo(bx,by);g.stroke()}
+ g.lineWidth=1;
+ // vertices
+ for(const v of G.verts){const[x,y]=P(v.px,v.py);
+  g.fillStyle=v.lift?'#d24dcf':(v.door?'#e0a030':'#7aa2f7');
+  g.beginPath();g.arc(x,y,4,0,7);g.fill();
+  // hollow ring = no splat world generated for this waypoint yet
+  if(!v.built){g.strokeStyle='#0d1117';g.lineWidth=2;g.stroke();
+   g.strokeStyle='#484f58';g.lineWidth=1;g.beginPath();g.arc(x,y,6,0,7);g.stroke()}
+  if(v.name){g.fillStyle='#7d8590';g.font='9px sans-serif';g.textAlign='center';
+   g.fillText(v.name,x,y-7)}}
+ // robot + facing arrow (dir is a unit vector already projected into floorplan pixels)
+ if(s&&s.px!=null){const[x,y]=P(s.px,s.py);
+  const dir=s.dir||headingDir(s);
+  if(dir){const dx=dir[0]*sx,dy=dir[1]*sy,dl=Math.hypot(dx,dy)||1,ux=dx/dl,uy=dy/dl;
+   const tx=x+ux*20,ty=y+uy*20;                       // arrow tip
+   g.strokeStyle='#3fb950';g.lineWidth=3;g.beginPath();g.moveTo(x,y);g.lineTo(tx,ty);g.stroke();
+   const a=Math.atan2(uy,ux);g.fillStyle='#3fb950';g.beginPath();  // arrowhead
+   g.moveTo(tx,ty);g.lineTo(tx-7*Math.cos(a-0.5),ty-7*Math.sin(a-0.5));
+   g.lineTo(tx-7*Math.cos(a+0.5),ty-7*Math.sin(a+0.5));g.closePath();g.fill();g.lineWidth=1}
+  g.fillStyle='#3fb950';g.beginPath();g.arc(x,y,7,0,7);g.fill();
+  g.strokeStyle='#0d1117';g.lineWidth=2;g.stroke();g.lineWidth=1}
 }
-function runMission() {
-  const text = $("msn").value.trim();
-  if (!text) return;
-  say("mission: " + text, "mission");
-  post("/agent", {text}).then((r) => { if (!r.ok) say(r.error, "err"); });
-}
-$("cmd").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-$("msn").addEventListener("keydown", (e) => { if (e.key === "Enter") runMission(); });
+function headingDir(s){if(!G||!s||s.facing==null)return null;
+ // point the arrow at the currently-faced neighbour (pixel space)
+ const V={};for(const v of G.verts)V[v.id]=v;const me=V[s.cur];
+ // facing is a label; find neighbour vertex by matching its label id
+ for(const n of (s.neighbors||[])){if(n.facing){const t=V[n.id];if(t&&me){
+   const dx=t.px-me.px,dy=t.py-me.py,d=Math.hypot(dx,dy)||1;return[dx/d,dy/d]}}}
+ return null}
 
-// ---- minimap: the nav graph on the level's floorplan ----------------------
-// Drawn from /graph, which projects metres onto the drawing's own pixels where a
-// fit was possible. Falls back to the raw metric layout, so a project with no
-// floorplan still gets a map rather than a blank panel.
-function fit(cv) {
-  const r = cv.parentElement.getBoundingClientRect();
-  const dpr = devicePixelRatio || 1;
-  cv.width = r.width * dpr; cv.height = r.height * dpr;
-  return {w: r.width, h: r.height, dpr};
-}
+async function cmd(text){logEv('cmd','> '+text);
+ try{const r=await fetch('/command',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({text})});const j=await r.json();
+  logEv(j.ok?'ok':'err',(j.ok?'':'! ')+j.message)}
+ catch(e){logEv('err','! '+e)}}
+const P=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+// run/pause/resume button. While a mission runs, the button becomes PAUSE (halts the agent's
+// tool calls + harness/state updates); paused it becomes RESUME.
+let agentRunning=false, agentPaused=false;
+function updateRunBtn(){const b=$('runbtn');if(!b)return;
+ b.textContent=!agentRunning?'run mission':(agentPaused?'resume':'pause');
+ b.classList.toggle('running',agentRunning&&!agentPaused);
+ b.classList.toggle('paused',agentRunning&&agentPaused)}
+function onRunBtn(){
+ if(!agentRunning)return runAgent();
+ if(!agentPaused){agentPaused=true;updateRunBtn();P('/pause',{}).catch(()=>{})}
+ else{agentPaused=false;updateRunBtn();P('/resume',{}).catch(()=>{})}}
+async function runAgent(){const t=$('mbox').value.trim();if(!t)return;$('mbox').value='';
+ agentRunning=true;agentPaused=false;updateRunBtn();
+ try{const r=await P('/agent',{text:t});const j=await r.json();
+  if(!j.ok)logEv('err','agent: '+(j.error||'unavailable'))}catch(e){logEv('err','! '+e)}
+ finally{agentRunning=false;agentPaused=false;updateRunBtn()}}
+function cancelMission(){agentRunning=false;agentPaused=false;updateRunBtn();  // stop the agent + clear
+ P('/cancel',{}).catch(()=>{})}   // server wipes mission+subtasks and broadcasts the cleared state
+$('mbox').addEventListener('keydown',e=>{if(e.key==='Enter')onRunBtn()});
+// Tool buttons. HIDE: not shown. NOINPUT: run on click even though they take an optional
+// arg (open_door figures out the door from the current vertex + facing). Everything else
+// with a param reveals an input field (placeholder = the param description) only when needed.
+const HIDE=['turn','close_door','write_mission','write_todos','forward','get_path'], NOINPUT=['open_door'];
+let TOOLD={}, selTool=null;
+function loadTools(){fetch('/tools').then(r=>r.json()).then(ts=>{TOOLD={};
+ $('tools').innerHTML=ts.filter(t=>!HIDE.includes(t.name)).map(t=>{TOOLD[t.name]=t;
+  return `<span class=tool title="${esc(t.desc)}" onclick="selectTool('${t.name}')">${t.name}</span>`}).join('')})}
+function hideArg(){$('toolarg').style.display='none';selTool=null;
+ for(const el of document.querySelectorAll('.tool'))el.classList.remove('sel')}
+function selectTool(name){const t=TOOLD[name];if(!t)return;
+ for(const el of document.querySelectorAll('.tool'))el.classList.toggle('sel',el.textContent===name);
+ if(t.params&&t.params.length&&!NOINPUT.includes(name)){selTool=name;const p=t.params[0];
+  $('toolarg').style.display='flex';$('argbox').placeholder=p.desc||p.name;
+  $('argbox').value=(name==='call_lift'?curLevel:'');$('argbox').focus();$('argbox').select();
+  $('toolhint').textContent=name+' — '+(p.desc||p.name)}
+ else{hideArg();$('toolhint').textContent='running '+name+'…';
+  P('/invoke',{text:name}).catch(e=>logEv('err','! '+e))}}
+async function runTool(){if(!selTool)return;const nm=selTool,v=$('argbox').value.trim();
+ $('argbox').value='';hideArg();
+ try{await P('/invoke',{text:(nm+' '+v).trim()})}catch(e){logEv('err','! '+e)}}
+$('argbox').addEventListener('keydown',e=>{if(e.key==='Enter')runTool()});
+function setTodos(td){const el=$('todos');if(!el)return;el.innerHTML=(td&&td.length)?td.map(t=>`<div class=todo>○ ${esc(typeof t==='string'?t:(t.content||''))}</div>`).join(''):''}
+function setStateModel(text){const el=$('statemodel');if(!el)return;
+ el.innerHTML=(text||'').split('\n').map(l=>{const e=esc(l);
+  if(l.startsWith('## '))return '<span class=h>'+e+'</span>';
+  if(l[0]==='✓')return '<span class=done>'+e+'</span>';   // ✓ completed
+  if(l[0]==='▶')return '<span class=prog>'+e+'</span>';   // ▶ in_progress
+  if(l[0]==='○')return '<span class=pend>'+e+'</span>';   // ○ pending
+  return e;}).join('\n')}
+const KEYS={ArrowUp:'forward',ArrowLeft:'turn left',ArrowRight:'turn right'};
+document.addEventListener('keydown',e=>{const a=document.activeElement;
+ if(a&&a.tagName==='INPUT')return;if(KEYS[e.key]){e.preventDefault();cmd(KEYS[e.key])}});
 
-function draw() {
-  const cv = $("map"), g = G;
-  if (!g) return;
-  const {w, h, dpr} = fit(cv);
-  const c = cv.getContext("2d");
-  c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  c.clearRect(0, 0, w, h);
+let curLevel='';
+function onState(s){last=s;if(s.level)curLevel=s.level;
+ $('pos').textContent='@ '+s.cur_label+(s.level?'  ·  '+s.level:'')
+  +(s.heading!=null?'  ·  hdg '+s.heading+'°':'')
+  +(s.door_open?'  ·  door→'+s.door_open+' open':'');
+ setMission(s.mission);viewerLink(s);drawMap(s)}
 
-  const xs = g.vertices.map((v) => v.x), ys = g.vertices.map((v) => v.y);
-  let x0 = Math.min(...xs), x1 = Math.max(...xs);
-  let y0 = Math.min(...ys), y1 = Math.max(...ys);
-  if (FP && g.projected) { x0 = 0; y0 = 0; x1 = g.w; y1 = g.h; }
-  const pad = 24;
-  const k = Math.min((w - 2 * pad) / Math.max(x1 - x0, 1),
-                     (h - 2 * pad) / Math.max(y1 - y0, 1));
-  const ox = (w - (x1 - x0) * k) / 2 - x0 * k;
-  const oy = (h - (y1 - y0) * k) / 2 - y0 * k;
-  const P = (v) => [v.x * k + ox, v.y * k + oy];
+// The rollout is the splat viewer, in its own window rather than a pane here: it
+// is a live WebGL scene, not a stream to embed. The link carries ?agent=, which is
+// what hands its camera to this server.
+function viewerLink(s){const a=$('vlink');if(!a||!s.scene)return;
+ a.href=`${VIEWER}/?url=files/${PROJECT}/splats/${s.scene}/world.ply`
+       +`&agent=${encodeURIComponent(location.origin)}`;
+ a.textContent=(s.viewer?'viewer connected':'open the splat viewer')+' ↗';
+ a.className=s.viewer?'on':''}
+function connect(){const es=new EventSource('/events');
+ es.onopen=()=>{$('dot').classList.remove('off');$('stat').textContent='live';
+  fetch('/statemodel').then(r=>r.json()).then(d=>setStateModel(d.text)).catch(()=>{})};
+ es.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
+  if(d.type==='state')onState(d);
+  else if(d.type==='mission')setMission(d.text);
+  else if(d.type==='todos')setTodos(d.todos);
+  else if(d.type==='statemodel')setStateModel(d.text);   // world model: mission+subtasks+RMF state
+  else if(d.type==='level')loadGraph();      // lift ride -> reload map/graph for new level
+  else if(d.type==='log')logEv(d.level||'ok',d.text)};
+ es.onerror=()=>{$('dot').classList.add('off');$('stat').textContent='reconnecting…';
+  es.close();setTimeout(connect,3000)}}
 
-  if (FP && g.projected) {
-    c.globalAlpha = 0.5;
-    c.drawImage(FP, ox, oy, g.w * k, g.h * k);
-    c.globalAlpha = 1;
-  }
-  const at = {};
-  for (const v of g.vertices) at[v.id] = P(v);
-
-  for (const e of g.edges) {
-    const a = at[e.a], b = at[e.b];
-    if (!a || !b) continue;
-    const open = (ST.open_doors || []).includes(e.door);
-    c.strokeStyle = !e.door ? "#3f5470" : (open ? "#3fb950" : "#ff7b72");
-    c.lineWidth = e.door ? 3 : 1.5;
-    c.setLineDash(e.door && !open ? [4, 3] : []);
-    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
-  }
-  c.setLineDash([]);
-
-  for (const v of g.vertices) {
-    const [x, y] = at[v.id];
-    const isHere = v.id === ST.at, isFace = v.id === ST.face;
-    const built = (ST.built || []).includes(v.id);
-    c.beginPath(); c.arc(x, y, isHere ? 7 : 4, 0, 7);
-    c.fillStyle = isHere ? "#6ea8fe" : isFace ? "#e3b341"
-                : v.lift ? "#a371f7" : built ? "#3fb950" : "#30363d";
-    c.fill();
-    if (isHere) { c.strokeStyle = "#fff"; c.lineWidth = 2; c.stroke(); }
-    c.fillStyle = isHere ? "#fff" : "#8b98a8";
-    c.font = `${isHere ? 12 : 10}px ui-monospace,monospace`;
-    c.fillText(v.id, x + 9, y + 3);
-  }
-}
-addEventListener("resize", draw);
-
-function paint(s) {
-  ST = s;
-  const url = `${VIEWER}/?url=files/${PROJECT}/splats/${s.scene}/world.ply` +
-              `&agent=${encodeURIComponent(location.origin)}`;
-  $("status").innerHTML =
-    `at <b>${s.at}</b> · ${s.level} · facing ${s.face || "—"} · ` +
-    `viewer ${s.viewer ? "<b>connected</b>" : "<b style=color:#ff7b72>not connected</b>"} · ` +
-    `robot ${s.galaxea ? "on" : "off"} · ` +
-    `<a href="${url}" target="_blank" rel=noopener>open the splat viewer ↗</a>`;
-  draw();
-}
-
-fetch("/graph").then((r) => r.json()).then((g) => {
-  G = g;
-  if (g.projected) {
-    // Only worth loading when there is a fit to draw it under; unprojected, the
-    // image and the graph would not line up and the map would lie.
-    const img = new Image();
-    img.onload = () => { FP = img; draw(); };
-    img.src = "/floorplan.png";
-  }
-  draw();
-});
-
-fetch("/tools").then((r) => r.json()).then((tools) => {
-  for (const name of Object.keys(tools).sort()) {
-    const b = document.createElement("button");
-    b.textContent = name; b.title = tools[name].desc;
-    b.onclick = () => {
-      const args = {};
-      for (const p of tools[name].params) {
-        const v = prompt(`${name}: ${p.name}\n${p.desc}`);
-        if (v === null) return;
-        if (v !== "") args[p.name] = v;
-      }
-      say(`> ${name}(${JSON.stringify(args)})`);
-      post("/tool", {tool: name, args}).then((r) => {
-        if (!r.ok) say(r.error || JSON.stringify(r), "err");
-      });
-    };
-    $("tools").appendChild(b);
-  }
-});
-
-const es = new EventSource("/events");
-es.onmessage = (e) => {
-  const m = JSON.parse(e.data);
-  if (m.type === "state") paint(m);
-  else if (m.type === "log") say(m.text, m.level);
-  else if (m.type === "statemodel") $("model").textContent = m.text;
-  else if (m.type === "tool") say(`  ${m.tool} -> ${JSON.stringify(m.result).slice(0, 200)}`);
-};
-es.onerror = () => say("dashboard disconnected — retrying", "err");
-fetch("/statemodel").then((r) => r.json()).then((d) => { $("model").textContent = d.text; });
+function loadGraph(){fetch('/graph').then(r=>r.json()).then(g=>{G=g;
+ if(g.has_floorplan){fpReady=false;FP.onload=()=>{fpReady=true;fitCanvas();if(last)drawMap(last)};
+  FP.src='/floorplan.png?t='+Date.now()}
+ fitCanvas();fetch('/state').then(r=>r.json()).then(onState)})}
+loadGraph();
+window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
+// hover a map vertex -> tooltip; click a vertex while a tool input is active -> fill it in
+(function(){const map=$('map'),tip=$('tip');
+ function vertAt(e){if(!G)return null;const r=map.getBoundingClientRect();
+  const mx=(e.clientX-r.left)*map.width/r.width,my=(e.clientY-r.top)*map.height/r.height;
+  const k=Math.min(map.width/(G.w||1),map.height/(G.h||1));
+  const ox=(map.width-(G.w||1)*k)/2, oy=(map.height-(G.h||1)*k)/2;
+  let best=null,bd=14;for(const v of G.verts){const d=Math.hypot(v.px*k+ox-mx,v.py*k+oy-my);if(d<bd){bd=d;best=v}}
+  return best}
+ map.addEventListener('mousemove',e=>{const best=vertAt(e);
+  if(best){tip.textContent=best.name||('vertex '+best.id);
+   tip.style.left=(e.clientX+13)+'px';tip.style.top=(e.clientY+13)+'px';tip.style.display='block';
+   map.style.cursor=selTool?'crosshair':'pointer'}
+  else{tip.style.display='none';map.style.cursor='default'}});
+ map.addEventListener('mouseleave',()=>{tip.style.display='none'});
+ map.addEventListener('click',e=>{if(!selTool)return;const best=vertAt(e);   // active tool -> fill arg
+  if(best){$('argbox').value=best.name||best.id;$('argbox').focus()}})})();
+loadTools();
+connect();
 </script></body></html>"""
 
 
@@ -1202,9 +1350,9 @@ def r_state():
 
 @app.route("/tools")
 def r_tools():
-    return jsonify({n: {"desc": t["desc"],
-                        "params": [{"name": p, "desc": d} for p, d in t["params"]]}
-                    for n, t in TOOLS.items()})
+    return jsonify([{"name": n, "desc": t["desc"],
+                     "params": [{"name": p, "desc": d} for p, d in t["params"]]}
+                    for n, t in sorted(TOOLS.items())])
 
 
 @app.route("/tool", methods=["POST", "OPTIONS"])
@@ -1215,6 +1363,13 @@ def r_tool():
     body = request.get_json(force=True, silent=True) or {}
     name = body.get("tool") or body.get("name") or ""
     args = body.get("args") or body.get("arguments") or {}
+    # The dashboard sends "toolname arg" as one string — a tool button with its one
+    # field filled in. Split it against the tool's own first parameter.
+    if not name and body.get("text"):
+        head, _, rest = str(body["text"]).strip().partition(" ")
+        name, t = head, TOOLS.get(head)
+        if t and t["params"] and rest.strip():
+            args = {t["params"][0][0]: rest.strip()}
     t = TOOLS.get(name)
     if not t:
         return jsonify(ok=False, error=f"no such tool: {name}",
@@ -1239,17 +1394,27 @@ def r_graph():
     """The nav graph, in floorplan pixels where a projection could be fitted, so
     the minimap draws the building rather than an abstract diagram."""
     m2px = ST.get("m2px")
+    built = set(built_scenes())
     verts = []
-    for i, (_, x, y) in enumerate(ST["verts"]):
+    for i, (name, x, y) in enumerate(ST["verts"]):
         px, py = m2px(x, y) if m2px else (x, y)
-        verts.append({"id": lab(i), "x": round(px, 1), "y": round(py, 1),
-                      "lift": ST["lift_of"].get(i, "")})
-    edges = sorted({tuple(sorted((i, j))) for i in ST["adj"] for j, _ in ST["adj"][i]})
-    return jsonify(ok=True, level=ST["level"], projected=bool(m2px),
-                   w=ST.get("fp_w", 0), h=ST.get("fp_h", 0),
-                   vertices=verts,
-                   edges=[{"a": lab(a), "b": lab(b), "door": door_between(a, b)}
-                          for a, b in edges])
+        verts.append({"id": i, "name": name or f"v{i}",
+                      "px": round(px, 1), "py": round(py, 1),
+                      "lift": i in ST["lift_of"], "built": lab(i) in built,
+                      "door": any(door_between(i, j) for j, _ in ST["adj"].get(i, []))})
+    edges, seen = [], set()
+    for u in ST["adj"]:
+        for v, _ in ST["adj"][u]:
+            key = tuple(sorted((u, v)))
+            if key in seen:
+                continue
+            seen.add(key)
+            name = door_between(u, v)
+            edges.append({"u": u, "v": v, "door": bool(name),
+                          "open": name in ST["open_doors"]})
+    return jsonify(w=ST.get("fp_w", 0), h=ST.get("fp_h", 0),
+                   has_floorplan=bool(ST.get("fp_png") and m2px),
+                   level=ST["level"], verts=verts, edges=edges)
 
 
 @app.route("/floorplan.png")

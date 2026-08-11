@@ -290,11 +290,17 @@ minimap of the level, the tool palette, the live log, and the world model the ag
 reads each turn. The splat viewer opens in its own window from the link in the
 status line, already carrying the `?agent=` parameter that hands over its camera.
 
-The minimap is the nav graph drawn on the level's own floorplan: the projection is
-an affine fitted from the waypoints that the drawing and the nav graph both name
-(7 of them on L11), so it is the building rather than an abstract diagram. Doors are
-the coloured edges — red dashed shut, green open — and a waypoint is green once a
-splat world has been generated for it, so what is walkable is visible at a glance.
+The page is the dream harness's own, ported: the mission bar and run/pause/cancel
+across the top, the floorplan filling the left column with the arrow pad (`↰ ↑ ↱`,
+and the arrow keys) and the tool palette beneath it, and the agent's world model
+over the log in a resizable right panel. Only the two camera panes are gone — they
+streamed stitched MJPEG, and there is nothing here to stream.
+
+The minimap is the nav graph on the level's own floorplan, projected by an affine
+fitted from the waypoints the drawing and the nav graph both name (7 on L11). Hover
+a waypoint for its name; with a tool field open, click one to fill it in. A hollow
+ring means no splat world has been generated for that waypoint yet, so what is
+walkable is visible at a glance.
 
 ```bash
 just interactive
