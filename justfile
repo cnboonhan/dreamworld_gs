@@ -292,8 +292,6 @@ bundle proj=project dest="dist":
     echo "  $n entries, $(du -h "$out" | cut -f1)"
     echo "  restore with: just unbundle $out"
 
-# Restore a bundle made by `just bundle`, in place.
-#
 # Run it on a fresh clone of this repo, then `just up` — the project lands in
 # assets/projects/ and the stack finds it.
 #
@@ -332,13 +330,12 @@ vertices level="" proj=project:
 
 # What this project's map says exists, and how much of it you have.
 #
-# build-world writes worlds/<map>/capture_plan.json: one entry per vertex and
-# per edge, with the id its panoramas belong under. This reads it back against
-# what is on disk, so the gap between the building and the captures is a list
-# rather than a guess.
+# build-world writes worlds/<map>/capture_plan.json: every waypoint of the nav
+# graph. This reads it back against what is on disk, so the gap between the
+# building and the worlds built from it is a list rather than a guess.
 #
-#   just plan            everything
-#   just plan missing    only what still needs photographing
+#   just plan            every waypoint
+#   just plan missing    only the unfinished ones
 #
 # Every waypoint, and how far along it is.
 plan filter="" proj=project:
@@ -356,11 +353,11 @@ projects:
         found=1
         n=$(basename "$p")
         mark=" "; [ "$n" = "{{project}}" ] && mark="*"
-        printf ' %s %-22s %s map(s)  %s world(s)  %s pano set(s)  %s splat(s)\n' \
+        printf ' %s %-22s %s map(s)  %s world(s)  %s panorama(s)  %s splat(s)\n' \
             "$mark" "$n" \
             "$(count "$p/maps" '-name *.building.yaml')" \
             "$(count "$p/worlds" '-type d')" \
-            "$(count "$p/panos" '-type d')" \
+            "$(count "$p/panos" '-name *.[jJpP]*[gG]')" \
             "$(count "$p/splats" '-name world.ply' 2 2)"
     done
     [ "$found" = 1 ] || echo "  none yet — run: just _env   (seeds samples/)"
