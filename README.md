@@ -281,7 +281,7 @@ dashboard drives this one unchanged:
 | | |
 | --- | --- |
 | navigation | `go_to` `turn` `face` `open_door` `close_door` |
-| lifts | `select_lift` `call_lift` |
+| lifts | `take_lift` `select_lift` `call_lift` |
 | items | `pick` `place` |
 | planning | `plan_route` `where` `get_path` `get_graph` `write_mission` `write_todos` |
 
@@ -331,6 +331,13 @@ and the robot stay edge-for-edge in step.
 
 The two halves read the same `nav_graphs/0.yaml`, which is what makes that true:
 one graph, one set of indices, one metric frame.
+
+**Lifts go through `take_lift`, never by hand.** It installs a fixed eight-step
+template as the subtask plan — `select_lift` → `face` cabin → `call_lift` this level
+→ `open_door` → `go_to` cabin → `call_lift` target level → `open_door` → `go_to`
+lobby — resolving the exit lobby on the *target* level by name, so it still resolves
+after the ride switches the graph. Calling `select_lift` or `call_lift` outside such
+a template is hard-rejected, so a level change cannot be improvised a step at a time.
 
 **The mission agent** (`POST /agent`) is the deepagents graph over these same tools,
 with `/pause`, `/resume` and `/cancel`. The harness owns subtask status, as it did in

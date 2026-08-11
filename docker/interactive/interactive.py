@@ -86,6 +86,11 @@ def load_nav(nav_yaml, level=None):
     return level, verts, adj, lvl
 
 
+def levels_of(nav_yaml):
+    """Every level the nav graph declares, so a level argument can be checked."""
+    return list((yaml.safe_load(open(nav_yaml)).get("levels") or {}))
+
+
 def doors_of(nav_yaml, level):
     """{door_name: params} for the doors on a level, straight out of the graph."""
     data = yaml.safe_load(open(nav_yaml))
@@ -598,6 +603,58 @@ def call_lift(level=""):
     return {"ok": True, "lift": lift, "floor": floor, "bridge": res}
 
 
+@tool("Take a lift to another LEVEL. Installs the canonical lift-taking template as "
+      "subtasks (select_lift -> face lift -> call_lift <this level> -> open_door -> "
+      "go_to <cabin> (enter) -> call_lift <target level> -> open_door -> go_to <lobby> "
+      "(exit)) and you then execute them IN ORDER. Use this for every level change "
+      "instead of improvising.",
+      [("to_level", "destination level, e.g. L1 or L11")])
+def take_lift(to_level=""):
+    to = str(to_level).strip().upper()
+    levels = ST.get("levels") or []
+    if levels and to not in levels:
+        return {"ok": False, "error": f"'{to_level}' is not a level. "
+                                      f"Levels: {', '.join(levels)}."}
+    cur = ST["cur"]
+    cabins = [v for v, _ in ST["adj"].get(cur, []) if v in ST["lift_of"]]
+    if not cabins:
+        return {"ok": False, "error": f"no lift at {lab(cur)} — go_to a lift lobby first"}
+    cabin = ST["face"] if ST["face"] in cabins else cabins[0]
+    here = ST.get("level", "")
+    if to == here.upper():
+        return {"ok": False, "error": f"already on {here}"}
+    lift_name = ST["lift_of"].get(cabin)
+    # Resolve the EXIT: the lobby vertex adjacent to this lift's cabin on the TARGET
+    # level, by name where possible, so it still resolves after the ride switches the
+    # graph out from under it.
+    exit_ref = "lift_lobby"
+    try:
+        _, tverts, tadj, _ = load_nav(ST["nav"], to)
+        tlift = lift_of(ST["nav"], to)
+        tcabin = next((v for v, l in tlift.items() if l == lift_name), None)
+        if tcabin is not None and tadj.get(tcabin):
+            n0 = tadj[tcabin][0][0]
+            exit_ref = tverts[n0][0] or f"v{n0}"
+    except (OSError, ValueError, KeyError, StopIteration):
+        pass
+    # The fixed template — each step exactly ONE control-tool call. Select the lift
+    # first, then face it; go_to (never forward) for entering and leaving the cabin.
+    template = [f"select_lift {lift_name}", f"face {lab(cabin)}", f"call_lift {here}",
+                "open_door", f"go_to {lab(cabin)}", f"call_lift {to}", "open_door",
+                f"go_to {exit_ref}"]
+    # Tag each step 'via take_lift' — the gate only lets the lift primitives run when
+    # they belong to a take_lift-installed subtask, so a level change can never be
+    # improvised.
+    with ST["lock"]:
+        ST["todos"] = [{"step": c, "status": "pending", "via": "take_lift"}
+                       for c in template]
+        ST["todos"][0]["status"] = "in_progress"
+    push_state()
+    _push_context()
+    return {"ok": True, "template": template, "lift": lift_name, "next": template[0],
+            "note": "execute these subtasks strictly in order (each verified)."}
+
+
 @tool("Pick an item up at this waypoint.", [("item", "item name")])
 def pick(item=""):
     res = bridge("/pick", {"item": str(item), "vertex": lab(ST["cur"])})
@@ -843,7 +900,7 @@ def build_floorplan(building, level):
 
 VERIFY = {}
 SUBTASK_TOOLS = {"go_to", "turn", "face", "open_door", "close_door",
-                 "select_lift", "call_lift", "pick", "place"}
+                 "select_lift", "call_lift", "pick", "place", "take_lift"}
 
 
 def verifies(*names):
@@ -959,6 +1016,16 @@ def _mission_gate(name):
         return None
     todos = ST.get("todos") or []
     due = next((t for t in todos if t["status"] in ("in_progress", "pending")), None)
+    # Level changes MUST go through take_lift: the lift primitives may only run when
+    # the current subtask is one take_lift installed. An improvised call_lift is
+    # refused, so a lift ride cannot be hand-rolled a step at a time.
+    if name in ("select_lift", "call_lift") and (due is None or due.get("via") != "take_lift"):
+        return {"ok": False, "use_take_lift": True,
+                "error": f"Do not call {name} directly — level changes MUST go through "
+                         "take_lift. Call take_lift <target level> (from a lift lobby); "
+                         "it installs the correct verified sequence (select_lift -> face "
+                         "-> call_lift -> open_door -> go_to cabin -> call_lift -> "
+                         "open_door -> go_to lobby), then execute those in order."}
     if due is None:
         return None
     want = _subtask_tool(due["step"])
@@ -1455,6 +1522,13 @@ def as_message(name, res):
         return f"{len(res.get('todos') or [])} subtask(s)"
     if name == "write_mission":
         return f"mission: {res.get('mission')}"
+    if name == "take_lift":
+        return (f"{res.get('lift')}: {len(res.get('template') or [])} steps installed — "
+                f"next {res.get('next')}")
+    if name == "select_lift":
+        return f"selected {res.get('selected_lift')}, cabin {res.get('cabin')}"
+    if name == "call_lift":
+        return f"{res.get('lift')} called to {res.get('floor')}"
     return json.dumps({k: v for k, v in res.items()
                        if k not in ("recent_log", "ok")})[:200]
 
@@ -1709,6 +1783,7 @@ def main():
         "lock": threading.RLock(), "waiting": {}, "seq": 0,
         "level": level, "verts": verts, "adj": adj,
         "doors": doors_of(a.nav, level), "lift_of": lift_of(a.nav, level),
+        "nav": a.nav, "levels": levels_of(a.nav),
         "open_doors": set(), "inventory": [], "mission": "", "todos": [],
         "prev": None, "face": None, "selected_lift": None, "sel_cabin": None,
         "galaxea": os.environ.get("GALAXEA_URL", "").rstrip("/"),
