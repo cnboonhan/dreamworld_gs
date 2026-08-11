@@ -220,10 +220,17 @@ align level="L11" proj=project:
     @echo "  http://localhost:8085"
     uv run {{repo}}/scripts/align_panos.py --project {{proj}} --level {{level}}
 
-# A project is already self-contained — its map, its generated world, its
-# panoramas and its splats — so a tarball of it is everything that machine
-# needs. Model weights are not included: they are hundreds of GB and come from
-# `just setup` on the far side.
+# What travels is the map, the generated Gazebo world, the panoramas, and each
+# splat's deliverables — world.ply, world.usdz, world.cam.json,
+# world.paths.json and the panorama it was generated from.
+#
+# What does not is everything HY-World produced on the way to those — gs_data,
+# render_results, navmesh, gs_result — nor anything else that happens to be
+# sitting in the project directory. Carrying the lot meant a 103 GB tarball to
+# move 1.2 GB of usable output, which is why nobody ever ran this.
+#
+# Model weights are not included either — hundreds of GB, and `just setup`
+# fetches them on the far side.
 #
 # Paths are stored as assets/projects/<name>/..., so `just unbundle` puts them
 # back exactly where the stack expects them.
@@ -231,7 +238,7 @@ align level="L11" proj=project:
 #   just bundle                    the active project -> dist/
 #   just bundle htx /tmp           a named project, somewhere else
 #
-# Package a project into one tarball, to carry to another node.
+# Package a project's deliverables into one tarball, to carry to another node.
 bundle proj=project dest="dist":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -243,10 +250,24 @@ bundle proj=project dest="dist":
     fi
     mkdir -p {{dest}}
     out="$(cd {{dest}} && pwd)/{{proj}}-$(date +%Y%m%d-%H%M%S).tar.gz"
-    tar czf "$out" -C {{repo}} "assets/projects/{{proj}}"
-    n=$(tar tzf "$out" | wc -l)
+    rel="assets/projects/{{proj}}"
+    # Named, not excluded. Excluding the intermediates by pattern still swept
+    # up whatever else was sitting in the project — backup copies of panos/ and
+    # splats/, a traversals/ from a pipeline that no longer exists — and made a
+    # 3.4 GB archive of a 1.2 GB project. A list of what to carry cannot do
+    # that: anything unlisted stays behind, including next month's stray folder.
+    cd {{repo}}
+    files=$(find "$rel/maps" "$rel/worlds" "$rel/panos" -maxdepth 3 \
+                 \( -name .previews -prune \) -o -type f -print 2>/dev/null)
+    for f in world.ply world.usdz world.cam.json world.paths.json panorama.png; do
+        files="$files $(find "$rel/splats" -maxdepth 2 -name "$f" 2>/dev/null)"
+    done
+    printf '%s\n' $files | sort -u > /tmp/dw-bundle-$$.txt
+    tar czf "$out" -T /tmp/dw-bundle-$$.txt
+    n=$(wc -l < /tmp/dw-bundle-$$.txt); rm -f /tmp/dw-bundle-$$.txt
     echo "bundled {{proj}} -> $out"
-    echo "  $n entries, $(du -h "$out" | cut -f1)"
+    echo "  $n file(s), $(du -h "$out" | cut -f1)"
+    echo "  (training intermediates left behind — 'just generate' rebuilds them)"
     echo "  restore with: just unbundle $out"
 
 # Run it on a fresh clone of this repo, then `just up` — the project lands in

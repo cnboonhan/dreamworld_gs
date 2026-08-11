@@ -164,9 +164,13 @@ it afterwards means generating again.
 
 ## Moving a project
 
-A project is self-contained — its map, its world, its panoramas, its splats —
-so a tarball of one is everything another machine needs. Model weights are not
-included; those come from `just setup` on the far side.
+A tarball of one project is everything another machine needs: the map, the
+Gazebo world, the panoramas, and each splat's `world.ply`, `world.usdz`,
+`world.cam.json`, `world.paths.json` and source panorama. What HY-World
+produced on the way there — `gs_data`, `render_results`, `navmesh`,
+`gs_result` — stays behind, since it is input to a training run that has
+already happened and it is 34 of this project's 103 GB. Model weights are not
+included either; those come from `just setup` on the far side.
 
 ```bash
 just bundle                 # the active project -> dist/
