@@ -826,6 +826,9 @@ async function edgePicker(doc, choose) {
     const placed = Object.assign({}, doc.placed || {});
     const me = doc.waypoint.split(".").pop();
     const spots = [me].concat(doc.lanes.map(l => l.to));
+    // 0 is this waypoint. A world opens on it, and a world stepped into opens
+    // on it too — where you came from is behind you, and where you are is the
+    // thing the plan is centred on.
     let target = 0, at = 0;
 
     const draw = () => {
@@ -994,7 +997,6 @@ async function edgePicker(doc, choose) {
             tour.playing = false;
             const play = document.getElementById("tourPlay");
             if (play) play.textContent = "play";
-            target = doc.lanes.indexOf(lane) + 1;
         }
     }
 
@@ -1239,14 +1241,28 @@ async function main() {
             if (many.ok) {
                 const doc = await many.json();
                 if (Array.isArray(doc.lanes) && doc.lanes.length) {
-                    edgePicker(doc, w => {
+                    window.__openPanel = (d) => {
+                        const old = document.getElementById("edges");
+                        if (old) old.remove();
+                        edgePicker(d, window.__rideWalk);
+                    };
+                    window.__rideWalk = w => {
                         // not follow: the camera keeps the heading you gave it
                         // and simply travels the corridor. Swinging it to face
                         // the path throws away the view you were lining up,
                         // which is the work this panel exists for.
-                        tourInit({points: w.points, up: doc.up}, false);
+                        tourInit({points: w.points, up: doc.up}, true);
                         showTourBar();
-                    });
+                        // start fetching the world this corridor ends at, so it
+                        // is ready before the walk is
+                        const proj = decodeURIComponent(location.search)
+                            .match(/files\/([^/]+)\//);
+                        const level = doc.waypoint.split(".")[0];
+                        window.__cameFrom = doc.waypoint;
+                        if (proj && window.prepareArrival)
+                            window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
+                    };
+                    edgePicker(doc, window.__rideWalk);
                     picked = true;
                 }
             }
@@ -1443,7 +1459,7 @@ async function main() {
     // is the same code the render worker runs on load, but running it there
     // would throw away the buffer currently on screen — so it happens beside,
     // and only the finished records cross over.
-    const unpacker = route.on ? new Worker(workerUrl) : null;
+    const unpacker = new Worker(workerUrl);
     let unpacking = null;
     if (unpacker) {
         unpacker.onmessage = (e) => {
@@ -1454,6 +1470,75 @@ async function main() {
             }
         };
     }
+
+    // ---- arriving at the next waypoint ------------------------------------
+    //
+    // Walking a corridor ends at a neighbour, and that neighbour is a whole
+    // other world. Its ply is fetched and unpacked while you walk — several
+    // seconds for sixty megabytes on localhost, against a walk of the same
+    // order — so by the time you arrive the records are ready and the swap is
+    // a postMessage, not a page load. No spinner, because nothing reloads.
+    //
+    // Where you land is not guessed: this world's mark for the neighbour and
+    // that world's mark for itself are the same physical place, so standing on
+    // the second is standing where the first said you would be. The heading
+    // carries because every panorama was turned to face the building.
+    const arrival = {to: null, scene: null, records: null, doc: null,
+                     project: null};
+
+    const unpackPly = async (href) => {
+        const res = await fetch(href);
+        if (!res.ok) throw new Error(`${res.status} ${href}`);
+        const ply = await res.arrayBuffer();
+        return await new Promise((resolve) => {
+            unpacking = resolve;
+            unpacker.postMessage({ply}, [ply]);
+        });
+    };
+
+    window.prepareArrival = async (project, scene, to) => {
+        if (arrival.to === to && arrival.records) return;
+        arrival.to = to; arrival.records = null; arrival.scene = scene;
+        arrival.project = project;
+        try {
+            const base = new URL(`files/${project}/splats/${scene}/`, location.href);
+            const paths = await fetch(new URL("world.paths.json", base).href);
+            arrival.doc = paths.ok ? await paths.json() : null;
+            arrival.records = await unpackPly(new URL("world.ply", base).href);
+        } catch (err) {
+            arrival.records = null;
+        }
+    };
+
+    window.stepThrough = () => {
+        const a = arrival;
+        if (!a.records || !a.doc) return false;
+        // marked is best — that mark and this world's mark for itself are the
+        // same physical place. Unmarked, the world's origin is where its
+        // panorama was shot, which is the waypoint by construction: close
+        // enough to arrive at and then correct by hand.
+        const stand = (a.doc.placed || {})[a.to] || a.doc.origin;
+        if (!stand) return false;
+        splatData = a.records;
+        worker.postMessage({buffer: a.records.buffer,
+                            vertexCount: Math.floor(a.records.length / rowLength)});
+        // keep walking the way you were: the lane out of the new waypoint that
+        // is not the one you came in by, or failing that hold the heading
+        const back = (window.__cameFrom || "").split(".").pop();
+        const on = (a.doc.lanes || []).find((l) => l.to !== back) ||
+                   (a.doc.lanes || [])[0];
+        const ahead = on ? stand.map((v, i) => v + on.dir[i] * 0.01) : null;
+        if (ahead) tourInit({points: [stand, ahead], up: a.doc.up}, false);
+        tour.t = 0; tour.playing = false;
+        history.replaceState(null, "",
+            `?url=files/${a.project}/splats/${a.scene}/world.ply&from=${window.__cameFrom || ""}`);
+        console.log(`stepped through to ${a.scene}`);
+        // the panel belongs to the world on screen: new waypoint, new floor
+        // plan, new neighbours, so exploring can carry on from here
+        if (window.__openPanel) window.__openPanel(a.doc);
+        arrival.records = null;
+        return true;
+    };
 
     const routeLoad = async (rel) => {
         const res = await fetch(new URL(rel, route.base).href);
@@ -1985,6 +2070,8 @@ async function main() {
                     tour.playing = false;
                     const play = document.getElementById("tourPlay");
                     if (play) play.textContent = "play";
+                    // arrived: if the next world is ready, step into it
+                    if (tour.t >= 1 && window.stepThrough) window.stepThrough();
                 }
                 document.getElementById("tourAt").value = tour.t * 1000;
             }

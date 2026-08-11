@@ -170,6 +170,10 @@ def main() -> None:
            "up": [round(float(v), 5) for v in upw],
            "units_per_metre": round(upm, 4), "height": round(eye, 4),
            "pitch_deg": round(math.degrees(pitch), 2),
+           # where the panorama was shot, in this world's own coordinates. A
+           # world nobody has marked yet still has to be arrived at somewhere,
+           # and this is the one point it knows about itself.
+           "origin": [round(float(v), 5) for v in centre],
            "lanes": lanes_out, "placed": saved.get("placed", {}), "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
 
