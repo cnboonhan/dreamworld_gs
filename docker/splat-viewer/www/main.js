@@ -865,9 +865,49 @@ async function edgePicker(doc, choose) {
         choose(doc.walks[at]);
     };
 
+    // After a save, walk the corridor that was just completed rather than
+    // whichever happened to be selected. Marking the far end of one is how you
+    // finish it, so that is the one worth seeing.
+    const walkTo = who => {
+        const k = doc.walks.findIndex(w => w.to === who);
+        if (k < 0) return false;
+        at = k;
+        paintWalks();
+        tour.t = 0;
+        tour.playing = true;
+        const play = document.getElementById("tourPlay");
+        if (play) play.textContent = "pause";
+        return true;
+    };
+
+    // Standing at home and facing the corridor is where you start from to
+    // mark its far end, so selecting a neighbour puts you back there rather
+    // than leaving you wherever the last one ended.
+    const goHome = () => {
+        const from = placed[me];
+        if (!from) return;                       // home is not marked yet
+        const lane = doc.lanes[target - 1];
+        const dir = lane ? lane.dir : doc.lanes[0] && doc.lanes[0].dir;
+        if (!dir) return;
+        const far = from.map((v, i) => v + dir[i] * 2);
+        tourInit({points: [from, far], up: doc.up}, true);
+        tour.t = 0;
+        tour.playing = false;
+        const play = document.getElementById("tourPlay");
+        if (play) play.textContent = "play";
+    };
+
     spotRow.onclick = e => {
         const b = e.target.closest("button");
-        if (b) { target = +b.dataset.i; paintSpots(); }
+        if (!b) return;
+        target = +b.dataset.i;
+        paintSpots();
+        // walk it only when its far end is already marked; otherwise stand at
+        // home looking down it, which is what you need to go and mark it
+        const lane = doc.lanes[target - 1];
+        const k = lane ? doc.walks.findIndex(w => w.to === lane.to) : -1;
+        if (k >= 0) { at = k; list.value = k; choose(doc.walks[k]); }
+        else goHome();
     };
 
     saveSpot.onclick = async () => {
@@ -883,7 +923,13 @@ async function edgePicker(doc, choose) {
             Object.assign(placed, j.placed);
             doc.walks = j.walks || [];
             paintSpots();
-            paintWalks();
+            // the corridor this save completed: the one just marked, or — if
+            // home was what you marked — whichever lane it finished
+            const just = spots[target];
+            if (!walkTo(just)) {
+                const done = doc.lanes.map(l => l.to).filter(t => placed[t]);
+                if (!(done.length && walkTo(done[done.length - 1]))) paintWalks();
+            }
         } catch (err) {
             saveSpot.textContent = "could not save \u2014 is 8085 running?";
         }

@@ -146,8 +146,11 @@ def main() -> None:
         # Two marked positions beat any fit: the walk is the line between
         # them, needing neither scale nor bearing.
         placed = saved.get("placed", {})
+        # the lane's direction in this world's coordinates, so the viewer can
+        # face down a corridor that has not been marked yet
         lanes_out.append({"to": other, "metres": round(float(metres), 3),
-                          "bearing": round(bearing, 5)})
+                          "bearing": round(bearing, 5),
+                          "dir": [round(float(v), 5) for v in direction]})
         # No walk until both ends are marked. A default one would be drawn from
         # a scale that was wrong by 2x and direction-dependent by 4.5x, and a
         # wrong walk is harder to notice than a missing one.
