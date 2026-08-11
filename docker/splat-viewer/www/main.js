@@ -1220,6 +1220,7 @@ async function main() {
                 if (proj && window.prepareArrival)
                     window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
             };
+            window.__paths = doc;
             edgePicker(doc, window.__rideWalk);
         }
     } catch (err) {
@@ -1507,10 +1508,124 @@ async function main() {
         say("");
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here
+        window.__paths = a.doc;
         if (window.__openPanel) window.__openPanel(a.doc);
         arrival.records = null;
         return true;
     };
+
+    // ---- agent control -----------------------------------------------------
+    //
+    // ?agent=<base-url> hands the camera to the interactive server, which drives
+    // it with the same tool calls an operator or an LLM makes — and with the same
+    // machinery the edge panel uses by hand: ride the marked walk, hand over at
+    // the vertex. So an agent's walkthrough and a person's are one walkthrough,
+    // not two code paths that have to be kept saying the same thing.
+    //
+    // Commands arrive over SSE and are executed one at a time, because they are
+    // physical: you cannot walk two corridors at once, and a queue that
+    // overlapped them would leave the robot in Gazebo somewhere the splat is not.
+    const agentBase = params.get("agent");
+    if (agentBase) {
+        const post = (path, body) =>
+            fetch(new URL(path, agentBase).href, {
+                method: "POST", mode: "cors",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(body),
+            }).catch((err) => console.error("agent:", err));
+
+        const here = () => (window.__paths || {}).waypoint || "";
+        const shortOf = (v) => String(v).split(".").pop();
+        const laneTo = (to) =>
+            ((window.__paths || {}).lanes || [])
+                .find((l) => shortOf(l.to) === shortOf(to));
+        const walkTo = (to) =>
+            ((window.__paths || {}).walks || [])
+                .find((w) => shortOf(w.to) === shortOf(to));
+
+        /** Resolve once the world on screen is `scene`, or time out saying so. */
+        const arrivedAt = (scene, ms) => new Promise((resolve) => {
+            const t0 = performance.now();
+            const tick = () => {
+                if (here() === scene) return resolve({ok: true, at: scene});
+                if (performance.now() - t0 > (ms || 120000))
+                    return resolve({ok: false, error: `still at ${here()}, wanted ${scene}`});
+                setTimeout(tick, 100);
+            };
+            tick();
+        });
+
+        const ops = {
+            /** Ride the marked walk to a neighbour and hand over to its world. */
+            async walk({to}) {
+                const w = walkTo(to);
+                if (!w) {
+                    const lane = laneTo(to);
+                    return {ok: false, error: lane
+                        ? `${shortOf(to)} is a lane out of ${here()} but is not marked, ` +
+                          `so there is no walk to ride — mark both ends first`
+                        : `${shortOf(to)} is not a lane out of ${here()}`};
+                }
+                const scene = `${here().split(".")[0]}.${shortOf(to)}`;
+                window.__rideWalk(w, window.__paths);
+                tour.playing = true;
+                return await arrivedAt(scene);
+            },
+            /** Turn in place to face a neighbour, without moving. */
+            async face({to}) {
+                const lane = laneTo(to);
+                if (!lane) return {ok: false, error: `${shortOf(to)} is not a lane out of ${here()}`};
+                tourTurn(lane.dir);
+                return {ok: true, at: here(), facing: shortOf(to)};
+            },
+            /** Jump straight to a world, for a reset or a level change. */
+            async stand({scene}) {
+                if (here() === scene) return {ok: true, at: scene};
+                const proj = decodeURIComponent(location.search).match(/files\/([^/]+)\//);
+                if (!proj) return {ok: false, error: "no project in the url"};
+                window.__cameFrom = here();
+                await window.prepareArrival(proj[1], scene, shortOf(scene));
+                window.stepThrough();
+                return await arrivedAt(scene, 180000);
+            },
+            /** Where the viewer thinks it is — the answer `where` reports. */
+            async where() {
+                return {ok: true, at: here(),
+                        lanes: ((window.__paths || {}).lanes || []).map((l) => shortOf(l.to)),
+                        walkable: ((window.__paths || {}).walks || []).map((w) => shortOf(w.to))};
+            },
+        };
+
+        let busy = Promise.resolve();
+        const run = (cmd) => {
+            // Chain, do not race: each command starts only once the last has
+            // finished, so `go_to` down three corridors arrives three times.
+            busy = busy.then(async () => {
+                const op = ops[cmd.op];
+                const res = op ? await op(cmd).catch((e) => ({ok: false, error: String(e)}))
+                               : {ok: false, error: `no such op: ${cmd.op}`};
+                say(res.ok ? "" : `agent: ${res.error}`);
+                await post("/viewer/done", {id: cmd.id, ...res});
+            });
+        };
+
+        const connect = () => {
+            const es = new EventSource(new URL("/viewer/events", agentBase).href);
+            es.onmessage = (e) => {
+                try { run(JSON.parse(e.data)); }
+                catch (err) { console.error("agent: bad command", e.data, err); }
+            };
+            // A dashboard restart should not need a viewer reload — say so once
+            // and come back, rather than sitting silently disconnected.
+            es.onerror = () => {
+                es.close();
+                say("agent: disconnected, retrying");
+                setTimeout(connect, 2000);
+            };
+            es.onopen = () => { say(""); post("/viewer/hello", {at: here()}); };
+        };
+        connect();
+    }
 
     /** Each frame: where are we, which way are we going, what should be loaded. */
 

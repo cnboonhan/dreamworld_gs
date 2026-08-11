@@ -5,6 +5,7 @@
 #   entrypoint.sh world  <project> [map]   building.yaml -> world + nav graph
 #   entrypoint.sh sim    <project> [map]   run it headless under RMF, over noVNC
 #   entrypoint.sh editor <project> [map]   the traffic editor, over noVNC
+#   entrypoint.sh galaxea <project> [map]  spawn the Galaxea R1 and serve its bridge
 #
 # assets/projects is mounted at /projects, writable — the editor's whole job is
 # to write the map it opens, and the world is generated beside it.
@@ -74,6 +75,14 @@ world)
     exec /app/generate_world.sh "$PROJECT" "$MAP"
     ;;
 
+galaxea)
+    # Its own Gazebo on its own transport partition, so it never collides with the
+    # `sim` role running the same world.
+    resolve_map
+    [ -n "$MAP" ] || idle_without_map
+    exec /app/galaxea.sh "$PROJECT" "$MAP" "${DW_LEVEL:-L11}" "${DW_START:-lift_lobby}"
+    ;;
+
 sim)
     resolve_map
     [ -n "$MAP" ] || idle_without_map
@@ -121,7 +130,7 @@ editor)
     ;;
 
 *)
-    echo "unknown role '$ROLE' (want: world, sim, editor)" >&2
+    echo "unknown role '$ROLE' (want: jobs, world, sim, editor, galaxea)" >&2
     exit 1
     ;;
 esac

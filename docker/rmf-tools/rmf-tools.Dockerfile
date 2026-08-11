@@ -1,6 +1,7 @@
 # rmf-tools — the RMF/Gazebo side of the stack, in one image with three roles.
 #
 #   jobs     serves build-world as a Prefect deployment
+#   galaxea  spawns the Galaxea R1 into its own gazebo and serves its bridge
 #   world    a traffic-editor building.yaml -> Gazebo world + models + nav graph
 #   sim      that world running headless under RMF, shown over noVNC
 #   editor   the traffic editor itself, shown over noVNC
@@ -47,8 +48,10 @@ RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 WORKDIR /app
 COPY rmf-tools/entrypoint.sh rmf-tools/with_display.sh rmf-tools/generate_world.sh \
      rmf-tools/postprocess_world.py rmf-tools/sim.launch.xml.template \
-     rmf-tools/world_flow.py rmf-tools/texturize.py /app/
-RUN chmod +x /app/entrypoint.sh /app/with_display.sh /app/generate_world.sh
+     rmf-tools/world_flow.py rmf-tools/texturize.py \
+     rmf-tools/robot_bridge.py rmf-tools/galaxea.sh /app/
+RUN chmod +x /app/entrypoint.sh /app/with_display.sh /app/generate_world.sh \
+             /app/galaxea.sh
 
 # Xvfb, x11vnc and openbox all want a writable HOME; compose runs this as the
 # calling user, who has none inside the image.

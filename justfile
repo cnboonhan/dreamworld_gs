@@ -44,6 +44,8 @@ steps  := "2000"
 # The active project. A real environment variable wins over .env, so a single
 # command can target another project without switching the stack.
 project := env_var_or_default("DW_PROJECT", "multilevel_office")
+# the interactive tool surface (docker/interactive)
+iport   := env_var_or_default("DW_INTERACTIVE_PORT", "8086")
 
 # compose runs containers as you, not root, so outputs stay writable.
 # Also written to .env so plain `docker compose ...` behaves the same.
@@ -214,6 +216,39 @@ world map="" proj=project: up
     docker compose exec -T generator python submit.py \
         build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
+
+# Drive the building by tool call — the splat viewer walks it and the Galaxea R1
+# walks it in Gazebo, edge for edge.
+#
+# The tool surface is the one ported from dreamworld/docker/dream_interactive:
+# go_to, turn, face, open_door, close_door, take a lift, pick, place, plan_route,
+# where. What changed is what a call rolls out onto. The dream stitched
+# pre-rendered clips into a video pane; there is no such video here, so a walk is
+# the splat viewer riding that waypoint's marked corridor and handing over at the
+# vertex, live.
+#
+#   curl localhost:8086/tools
+#   curl -X POST localhost:8086/tool -H 'Content-Type: application/json' \
+#        -d '{"tool":"go_to","args":{"vertex":"apex_lab"}}'
+#   curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
+#        -d '{"text":"go to apex_lab"}'
+#
+# Open the printed viewer URL in a browser: the ?agent= parameter is what hands
+# the camera over, and until a viewer connects the walking tools say so rather
+# than reporting a move that never happened.
+#
+# Drive the building by tool call, in the splat viewer and in Gazebo.
+interactive: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scene=$(curl -s localhost:{{iport}}/state | python3 -c "import json,sys; print(json.load(sys.stdin)['scene'])")
+    echo
+    echo "  tools        http://localhost:{{iport}}/tools"
+    echo "  robot        http://localhost:8090/state"
+    echo "  viewer       http://localhost:8081/?url=files/{{project}}/splats/$scene/world.ply&agent=http://localhost:{{iport}}"
+    echo
+    echo "  open that viewer URL, then drive it:"
+    echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
 
 # The panorama alignment tool, on the host rather than in a container: it edits
 # assets/projects/*/panos in place and wants a browser pointed at it.

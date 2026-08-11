@@ -269,6 +269,54 @@ panoramas were aligned — so a corridor you were walking down is still ahead of
 you in the world you land in. No loading screen, and nothing is stitched: the
 renderer only ever holds one world.
 
+## Driving it by tool call
+
+The building is walkable by API as well as by hand. `just interactive` brings up a
+tool surface ported from `dreamworld/docker/dream_interactive` — the same tools,
+name for name and argument for argument, so a client written against that
+dashboard drives this one unchanged:
+
+| | |
+| --- | --- |
+| navigation | `go_to` `turn` `face` `open_door` `close_door` |
+| lifts | `select_lift` `call_lift` |
+| items | `pick` `place` |
+| planning | `plan_route` `where` `get_path` `get_graph` `write_mission` `write_todos` |
+
+```bash
+just interactive
+curl localhost:8086/tools
+curl -X POST localhost:8086/tool -H 'Content-Type: application/json' \
+     -d '{"tool":"go_to","args":{"vertex":"apex_lab"}}'
+curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
+     -d '{"text":"go to apex_lab"}'
+```
+
+**What a call rolls out onto is the difference.** The dream stitched pre-rendered
+library clips into an MJPEG pane; there is no such video here. Each waypoint is a
+splat world of its own, so a walk is the viewer riding that world's marked corridor
+and handing over at the vertex — live, at whatever framerate the box draws. Open the
+viewer with `&agent=http://localhost:8086` and it takes commands over SSE and reports
+back when the camera has actually landed, so a tool call does not return until the
+walk did. Until a viewer connects, the walking tools say so rather than reporting a
+move that never happened.
+
+**The robot half is unchanged.** `docker/rmf-tools/robot_bridge.py` is the dream
+bridge, code for code — only its docstring differs, because this repo lays a project
+out as `worlds/<map>/` rather than `outputs/generate_gz/`. It spawns the Galaxea R1
+into its own Gazebo on its own transport partition, drives it by interpolating its
+pose along the nav polyline (`DRIVE_SPEED` 2.0 m/s, `TURN_RATE` 1.25 rad/s), routes
+doors and lifts through RMF, and serves `/goto` `/turn` `/door` `/call_lift` `/pick`
+`/place` `/state` on :8090. Every traversal is mirrored onto it, so the splat walk
+and the robot stay edge-for-edge in step.
+
+The two halves read the same `nav_graphs/0.yaml`, which is what makes that true:
+one graph, one set of indices, one metric frame.
+
+`GALAXEA_URL` unset runs the viewer half alone, on a box with no Gazebo. The Galaxea
+R1 meshes are ~32 MB and live at `assets/projects/<p>/GalaxeaR1/`, outside git.
+
+
 ## Notes
 
 - **Align before you generate.** The world is built from the panorama, so a
