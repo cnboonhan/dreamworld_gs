@@ -870,6 +870,12 @@ async function edgePicker(doc, choose) {
         } catch (err) { saveSpot.textContent = "could not save \u2014 8085?"; }
     };
 
+    let at = 0;
+    const pick = k => {
+        [...list.children].forEach((el, j) => el.className = j === k ? "on" : "");
+        at = k; draw(k); choose(doc.walks[k]);
+    };
+
     const rebuild = () => {
         list.innerHTML = "";
         doc.walks.forEach((w, k) => {
