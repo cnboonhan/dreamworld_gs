@@ -162,6 +162,17 @@ Qwen-Image-Edit-2509, reprojects it back into the equirect and composites only t
 pixels that changed. Stack several edits, compare before and after in the synced
 viewer, then **Save**.
 
+It edits and nothing else. The dream had four modes — `restyle` and `reference`
+re-rendered a whole panorama from the simulator's flat geometry toward a style
+phrase, and `inpaint` brushed part of such a restyle back in. There is no
+simulated panorama here and no style to impose: these are photographs of a real
+building, and the job is to change one thing in one and leave the rest of the
+photograph alone. So the style-prompt anchor is gone with them, and the
+instruction is wrapped server-side — the model is told to hold the camera
+viewpoint, walls, floor, ceiling, windows and lighting exactly as they are and
+change only what you asked. Describe the change alone: "add a potted plant in the
+corner", not a description of the room.
+
 Save writes `panos/<id>` — keeping what it replaced under `panos/.before-edit/`,
 since that is a photograph of a real place and an edit is not obviously an
 improvement until you have looked at it. Nothing else happens: the panorama is the

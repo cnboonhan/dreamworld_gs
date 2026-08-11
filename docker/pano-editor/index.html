@@ -73,27 +73,18 @@
       <textarea id="prompt" placeholder="e.g. add a warm wooden table by the left wall"></textarea>
       <div class="row"><button class="go" id="gen" disabled>Generate</button></div>
       <div id="prog"><div id="progfill"></div></div>
-      <div class="hint" style="margin-top:6px"><b>Aim the view first</b> (drag/zoom the panels), then describe the change — the edit is applied to the direction you're facing and the object lands there. Nothing outside the change is touched. Tick <b>brush to limit area</b> (top-left) for a hand-masked region instead.</div>
+      <div class="hint" style="margin-top:6px"><b>Aim the view first</b> (drag/zoom the panels), then say what to change — the edit applies to the direction you are facing, and only the pixels that change are written back. The room's existing walls, lighting and viewpoint are held for you, so describe the change alone: "add a potted plant in the corner", not a description of the whole room. Tick <b>brush to limit area</b> (top-left) for a hand-masked region instead.</div>
     </div>
     <div class="sec">
       <label class=f>save</label>
       <div class="kv">will regenerate: <span id="blast">—</span></div>
-      <div class="hint" style="margin-top:5px">doors &amp; lifts are walls — only panoramas that can see this one (its open room, this level) regenerate.</div>
       <div class="row">
         <button class="go" id="revert" style="display:none;flex:0 0 auto;background:#30363d">↶ undo edit</button>
-        <button class="go save" id="save" disabled>Save &amp; regenerate</button>
+        <button class="go save" id="save" disabled>Save panorama</button>
       </div>
       <div id="status"></div>
-      <div id="regen" style="display:none;margin-top:8px">
-        <div id="rbar"><div id="rfill"></div></div>
-        <div id="rtext" class="hint" style="margin-top:5px"></div>
-      </div>
     </div>
     <div class="sec">
-      <label class=f id="stylelabel">style prompt (anchor)</label>
-      <textarea id="styleprompt" style="min-height:92px" placeholder="the canonical look of the whole building"></textarea>
-      <div class="row"><button class="go" id="savestyle" style="background:#6e40c9">Save style prompt</button></div>
-      <div class="hint" style="margin-top:5px">The appearance anchor recorded in the clip manifest. With a vertex selected this is <b>that vertex's</b> prompt; with none, the building-wide default. Editing + <b>Regenerate</b> re-restyles the vertex from this and rebuilds every clip that shows it. Clear it to fall back to the building prompt.</div>
     </div>
     <div class="sec hint"><kbd>drag</kbd> look (all panels sync) · <kbd>scroll</kbd> zoom · <kbd>dbl-click</kbd> reset</div>
   </div>
@@ -176,10 +167,10 @@ function makePanel(name,cls){
 }
 function clearTex(o){o.gl.bindTexture(o.gl.TEXTURE_2D,o.tex);
   o.gl.texImage2D(o.gl.TEXTURE_2D,0,o.gl.RGBA,1,1,0,o.gl.RGBA,o.gl.UNSIGNED_BYTE,new Uint8Array([18,22,28,255]));}
-const P={gz:makePanel("gazebo"),cur:makePanel("current restyle"),cand:makePanel("candidate","cand")};
-const PANELS=[P.gz,P.cur,P.cand];
+const P={cur:makePanel("current"),cand:makePanel("candidate","cand")};
+const PANELS=[P.cur,P.cand];
 P.cur.paintable=false;  // brush is opt-in (see applyBrush); other panels always drag-look
-function layout(){  // inpaint-only: panels stacked TOP/BOTTOM (gz, current, candidate), full width
+function layout(){  // panels stacked TOP/BOTTOM (current, candidate), full width
   $("grid").style.gridTemplateColumns="1fr";
   P.cand.cvs.parentElement.style.gridColumn="auto";
   P.cand.cvs.parentElement.style.display=hasCand?"":"none";resize();}
@@ -211,12 +202,10 @@ $("fp").addEventListener("click",e=>{if(!G)return;const cv=$("fp"),r=cv.getBound
   if(best&&bd<Math.max(60,(G.w||cv.width)/22))select(best.id);});
 
 function select(i){SEL=i;const v=G.verts.find(x=>x.id===i);
-  P.gz.setSrc(`/pano?v=${i}&kind=gz&t=${Date.now()}`);   // load panos FIRST — never blocked by later throws
-  P.cur.setSrc(`/pano?v=${i}&kind=restyle&t=${Date.now()}`);
+  P.cur.setSrc(`/pano?v=${i}&kind=current&t=${Date.now()}`);
   try{$("sel").textContent="v"+i+(v&&v.name?" ("+v.name+")":"");
     if($("vsel"))$("vsel").value=String(i);
     $("gen").disabled=false;hasCand=false;reflectCand();layout();drawFP();
-    armEditor();refreshBlast();loadStyle();status("");}
   catch(e){status("select: "+e,"err");}}
 
 // ── controls ────────────────────────────────────────────────────────────────────
@@ -226,8 +215,10 @@ function applyBrush(){P.cur.paintable=brushOn;P.cur.showmask=brushOn?1:0;
   $("brushctl").style.display=brushOn?"inline-flex":"none";   // size/undo/clear only while brushing
   if(brushOn){loadInpaint();resetUndo();}else clearMask();drawAll();}
 function reflectCand(){$("revert").style.display=hasCand?"":"none";
-  $("save").disabled=(SEL===null);                    // regenerate is available on any selected vertex
-  $("save").textContent=hasCand?"Save & regenerate":"Regenerate";}
+  // Save only means something with a pending edit now: there is nothing to
+  // regenerate from here, so an unedited waypoint has nothing to save.
+  $("save").disabled=!hasCand;
+  $("save").textContent="Save panorama";}
 function resetUndo(){undoStack=[];}
 function pushUndo(){undoStack.push(MC.toDataURL());if(undoStack.length>30)undoStack.shift();}
 function undo(){if(!undoStack.length)return;const url=undoStack.pop(),img=new Image();
@@ -245,14 +236,6 @@ $("revert").onclick=revertEdit;
 document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&(e.key==="z"||e.key==="Z")){
   e.preventDefault();brushOn?undo():revertEdit();}});
 function status(t,cls){$("status").textContent=t;$("status").className=cls||"";}
-async function refreshBlast(){if(SEL===null)return;
-  try{const j=await(await fetch(`/blast?v=${SEL}`)).json();
-    $("blast").textContent=`${j.n_verts} panorama${j.n_verts===1?"":"s"} · ${j.n_clips} clip${j.n_clips===1?"":"s"}`;
-  }catch(e){}}
-
-// inpaint IN the 360 view: back-project screen strokes onto the equirect mask MC (offscreen);
-// the shader tints the current-restyle panel red where MC is white. MC is exported as the mask.
-const MC=document.createElement("canvas");MC.width=1536;MC.height=768;
 function clearMask(){const x=MC.getContext("2d");x.fillStyle="#000";x.fillRect(0,0,MC.width,MC.height);
   P.cur.setMask(MC);drawAll();}
 function loadInpaint(){clearMask();}
@@ -301,43 +284,27 @@ $("gen").onclick=async()=>{if(SEL===null)return;const prompt=$("prompt").value.t
       reflectCand();status("candidate ready — edit again to stack, or Save","ok");}}
   catch(e){stopProg(false);status("! "+e,"err");}finally{$("gen").disabled=false;}};
 
-$("save").onclick=async()=>{if(SEL===null)return;
-  const msg=hasCand
-    ? `Save v${SEL}? Adopts the candidate and regenerates its open room (${$("blast").textContent}).`
-    : `Regenerate v${SEL}'s open room (${$("blast").textContent})? No pending edit — this just rebuilds it.`;
-  if(!confirm(msg))return;
-  $("save").disabled=true;status("kicking off regeneration…");
+$("save").onclick=async()=>{if(SEL===null||!hasCand)return;
+  if(!confirm(`Save v${SEL}? This overwrites its panorama — the one it replaces is kept `
+             +`under panos/.before-edit/. Rebuilding its splat world is a separate `
+             +`\`just generate\` afterwards.`))return;
+  $("save").disabled=true;status("saving…");
   try{const j=await(await fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({v:SEL})})).json();
     if(!j.ok){status("save failed: "+j.error,"err");$("save").disabled=false;}
-    else{status(j.message,"ok");hasCand=false;reflectCand();layout();
-      P.cur.setSrc(`/pano?v=${SEL}&kind=restyle&t=${Date.now()}`);startRegenPoll();}}
+    else{status(j.message,"ok");hasCand=false;reflectCand();layout();select(SEL);}}
   catch(e){status("! "+e,"err");$("save").disabled=false;}};
 
 // ── regeneration progress ─────────────────────────────────────────────────────────
 // build_library recreates the deleted artifacts by name; /progress reports how many exist
-// again. Live task-level detail is also in the Prefect UI at http://localhost:4200.
-let regTimer=null;
-function startRegenPoll(){clearInterval(regTimer);$("regen").style.display="block";
-  pollRegen();regTimer=setInterval(pollRegen,2000);}
-async function pollRegen(){try{const j=await(await fetch("/progress")).json();
-  if(!j.active){$("regen").style.display="none";clearInterval(regTimer);return;}
-  const pct=j.total?Math.round(j.done/j.total*100):0;
-  if(j.running){$("rfill").style.width=Math.max(3,pct)+"%";
-    $("rtext").innerHTML=`regenerating… <b>${j.done}/${j.total}</b> artifacts (${pct}%) · live detail: <a href="http://localhost:4200" target="_blank" style="color:#58a6ff">Prefect UI</a>`
-      +(j.tail?`<br><span style="opacity:.7">${j.tail.replace(/</g,"&lt;")}</span>`:"");}
-  else{clearInterval(regTimer);regTimer=null;
-    if(j.rc===0){$("rfill").style.width="100%";
-      $("rtext").innerHTML='<b style="color:#56d364">✓ regeneration complete</b> — reload the dream walk to see it.';}
-    else{$("rfill").style.background="#da3633";$("rfill").style.width="100%";
-      $("rtext").innerHTML=`<b style="color:#ff7b72">✗ regeneration failed</b> (exit ${j.rc}) — check propagate.log`;}}
-}catch(e){}}
-
+// Save writes panos/<id> and stops. Rebuilding the splat world from it is
+// `just generate <id>` — 20 minutes of GPU, which belongs on the queue at :4200
+// rather than inside a click here.
 // ── levels + init ───────────────────────────────────────────────────────────────
 function loadGraph(){return fetch("/graph").then(r=>r.json()).then(g=>{G=g;
   SEL=null;hasCand=false;$("sel").textContent="none";$("gen").disabled=true;reflectCand();
   $("blast").textContent="—";$("inptool").classList.remove("on");P.cur.showmask=0;
-  ["gz","cur","cand"].forEach(k=>{P[k].ready=false;clearTex(P[k]);});layout();
+  ["cur","cand"].forEach(k=>{P[k].ready=false;clearTex(P[k]);});layout();
   $("vsel").innerHTML='<option value="">— select vertex —</option>'+
     g.verts.map(v=>`<option value="${v.id}">v${v.id}${v.name?" — "+v.name:""}</option>`).join("");
   if(g.has_fp){fpReady=false;FP.onload=()=>{fpReady=true;drawFP();};FP.src="/floorplan.png?t="+Date.now();}
@@ -349,19 +316,7 @@ fetch("/levels").then(r=>r.json()).then(d=>{const sel=$("lvl");
   sel.innerHTML=d.levels.map(l=>`<option${l===d.current?" selected":""}>${l}</option>`).join("");
   sel.onchange=()=>switchLevel(sel.value);loadGraph();});
 // resume the progress panel if a regeneration from a previous save is still running
-fetch("/progress").then(r=>r.json()).then(j=>{if(j.active&&j.running)startRegenPoll();}).catch(()=>{});
 // style anchor (per-vertex when one is selected, else building-wide); recorded in the manifest
-function loadStyle(){const u=SEL!==null?`/style?v=${SEL}`:"/style";
-  fetch(u).then(r=>r.json()).then(d=>{$("styleprompt").value=d.prompt;
-    $("stylelabel").textContent=SEL!==null?`v${SEL} style prompt (anchor)`+(d.per_vertex?" · custom":""):"building style prompt (anchor)";});}
-loadStyle();
-$("savestyle").onclick=async()=>{$("savestyle").disabled=true;
-  const body={prompt:$("styleprompt").value.trim()};if(SEL!==null)body.v=SEL;
-  try{const j=await(await fetch("/style",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(body)})).json();
-    $("styleprompt").value=j.prompt;loadStyle();
-    status((j.scope==="vertex"?`v${SEL} anchor saved`:"building style saved")+" — hit Regenerate to apply","ok");}
-  catch(e){status("! "+e,"err");}finally{$("savestyle").disabled=false;}};
 </script>
 </body>
 </html>

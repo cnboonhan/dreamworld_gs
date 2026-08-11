@@ -315,57 +315,51 @@ def revert_candidate(v):
     return False
 
 
-def restyle_candidate(v, prompt, mode, seed, ref_v=None, mask_b64=None, view=None, from_candidate=False):
-    """Re-restyle vertex v -> candidate PNG. Modes:
-      restyle   — fresh restyle from the flat gz pano + depth wireframe (geometry-driven).
-      edit      — instruction-edit the CURRENT photoreal pano (Qwen-Image-Edit).
-      reference — restyle from gz but copy the materials/palette of another vertex's pano.
-      inpaint   — restyle the current pano, then composite ONLY the brushed mask region back
-                  onto it, so everything outside the brush is preserved exactly."""
+def edit_candidate(v, prompt, seed, view=None, mask_b64=None, from_candidate=False):
+    """Edit waypoint v's panorama -> candidate PNG.
+
+    One mode, where the dream had four. `restyle` and `reference` re-rendered the
+    whole panorama from the simulator's flat geometry toward a style phrase — there
+    is no simulated pano here and no style to impose: this repo's panoramas are
+    photographs of a real building, and the job is to change one thing in one and
+    leave the rest of the photograph alone. `inpaint` brushed a region of such a
+    restyle back in, which only exists to undo the same problem.
+
+    So what is left is the edit: crop what the viewer faces, edit that undistorted
+    crop, reproject it, and composite only the pixels that changed.
+    """
     url = G["qwen"][0]
-    accumulate = mode in ("edit", "inpaint")
-    edit_base = _cand_base(v, from_candidate) if accumulate else pano_path(v, "restyle")
-    if accumulate:
-        os.makedirs(G["cand_dir"], exist_ok=True)
-        if from_candidate:
-            _snapshot_candidate(v)         # stacking onto the candidate -> make this edit revertible
-        else:
-            _clear_hist(v)                 # fresh edit session on this vertex
-    # view-focused edit: no brush, and the client sent the facing direction -> edit the
-    # rectilinear view the user is looking at, then reproject the object back into the pano.
-    if mode == "edit" and view and not mask_b64 and os.path.isfile(edit_base):
-        return _perspective_edit(edit_base, url, prompt, seed, view, pano_path(v, "candidate"))
-    if mode in ("edit", "inpaint") and os.path.isfile(edit_base):
-        flist = [("image", open(edit_base, "rb"))]                 # edit the current photoreal pano
+    base = _cand_base(v, from_candidate)
+    if not base or not os.path.isfile(base):
+        return False, f"no panorama for v{v} to edit"
+    os.makedirs(G["cand_dir"], exist_ok=True)
+    if from_candidate:
+        _snapshot_candidate(v)             # stacking -> make this edit revertible
     else:
-        flist = [("image", open(pano_path(v, "gz"), "rb"))]        # restyle from gz geometry
-    if mode == "reference" and ref_v is not None and os.path.isfile(pano_path(int(ref_v), "restyle")):
-        flist.append(("reference", open(pano_path(int(ref_v), "restyle"), "rb")))
-    # edit/inpaint act on the FINISHED photoreal pano: don't void-fill (that greys real
-    # bright walls/lights -> blur), and frame the prompt as an in-place edit so the model
-    # ADDS/changes what's asked instead of restyling the whole image toward the phrase.
-    if mode in ("edit", "inpaint") and os.path.isfile(edit_base):
-        prompt = (f"Image 1 is a photograph of a room interior. Edit it in place: {prompt}. "
-                  f"Keep the camera viewpoint, walls, floor, ceiling, windows and lighting "
-                  f"exactly as shown in image 1 — change only what this instruction describes, "
-                  f"and render it sharp and photorealistic, matching the existing lighting.")
-        void = "false"
-    else:
-        void = "true"
-    data = {"prompt": prompt, "steps": 40, "guidance": 4.0, "seed": seed,
-            "width": 1536, "height": 768, "seamless": "true", "void_fill": void}
-    r = requests.post(f"{url}/restyle", files=flist, data=data, timeout=1800)
+        _clear_hist(v)                     # fresh edit session on this waypoint
+    if view and not mask_b64:
+        # The view-focused path: the crop is undistorted, so the model sees a
+        # photograph of a room rather than a warped band of one.
+        return _perspective_edit(base, url, prompt, seed, view, pano_path(v, "candidate"))
+    # No facing given (or a brushed mask) -> edit the whole equirect. Framed as an
+    # in-place edit and with void_fill off, so the model changes what was asked and
+    # does not drift the rest of the photograph toward the phrase.
+    p = (f"Image 1 is a photograph of a room interior. Edit it in place: {prompt}. "
+         f"Keep the camera viewpoint, walls, floor, ceiling, windows and lighting "
+         f"exactly as shown in image 1 — change only what this instruction describes, "
+         f"and render it sharp and photorealistic, matching the existing lighting.")
+    r = requests.post(f"{url}/restyle", files=[("image", open(base, "rb"))],
+                      data={"prompt": p, "steps": 40, "guidance": 4.0, "seed": seed,
+                            "width": 1536, "height": 768, "seamless": "true",
+                            "void_fill": "false"}, timeout=1800)
     if r.status_code != 200 or len(r.content) < 1000:
         return False, f"qwen {r.status_code}"
     os.makedirs(G["cand_dir"], exist_ok=True)
     out = pano_path(v, "candidate")
-    if mode in ("edit", "inpaint") and os.path.isfile(edit_base):
-        if mask_b64:
-            _composite_inpaint(edit_base, r.content, mask_b64, out)  # brush: keep that region
-        else:
-            _composite_autodiff(edit_base, r.content, out)           # no brush: keep changed pixels
+    if mask_b64:
+        _composite_inpaint(base, r.content, mask_b64, out)   # brush: keep that region
     else:
-        tmp = out + ".tmp"; open(tmp, "wb").write(r.content); os.replace(tmp, out)
+        _composite_autodiff(base, r.content, out)            # else: keep changed pixels
     return True, "ok"
 
 
@@ -421,17 +415,16 @@ def pano():
     return send_file(p) if p and os.path.isfile(p) else Response("no pano", status=404)
 
 
-@app.route("/restyle", methods=["POST"])
-def restyle():
+@app.route("/edit", methods=["POST"])
+@app.route("/restyle", methods=["POST"])          # the name the ported page posts to
+def edit():
     b = request.get_json(force=True) or {}
-    v, prompt, mode = int(b["v"]), (b.get("prompt") or "").strip(), b.get("mode", "restyle")
+    v, prompt = int(b["v"]), (b.get("prompt") or "").strip()
     if not prompt:
-        return jsonify(ok=False, error="empty prompt")
-    if mode == "inpaint" and not b.get("mask"):
-        return jsonify(ok=False, error="inpaint needs a brushed mask")
-    ok, msg = restyle_candidate(v, prompt, mode, int(b.get("seed", v)),
-                                ref_v=b.get("ref_v"), mask_b64=b.get("mask"), view=b.get("view"),
-                                from_candidate=bool(b.get("from_candidate")))
+        return jsonify(ok=False, error="say what to change")
+    ok, msg = edit_candidate(v, prompt, int(b.get("seed", v)),
+                             view=b.get("view"), mask_b64=b.get("mask"),
+                             from_candidate=bool(b.get("from_candidate")))
     return jsonify(ok=ok, error=None if ok else msg, v=v)
 
 
