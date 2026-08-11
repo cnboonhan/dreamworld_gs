@@ -1220,13 +1220,15 @@ async function main() {
                 if (pace && pace.speed && w.metres)
                     tour.seconds = Math.max(0.4, w.metres / pace.speed);
                 if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
-                // not follow: the camera keeps the heading you gave it and
-                // simply travels the corridor. Swinging it to face the path
-                // throws away the view you were lining up, which is the work
-                // this panel exists for.
+                // By hand, the camera KEEPS the heading you gave it and simply
+                // travels the corridor: swinging it to face the path would throw
+                // away the view you were lining up, which is the work the panel
+                // exists for. Under agent control the opposite is right — the
+                // robot turns to face each leg before it walks it, so the camera
+                // must too, or the two rotate differently through every corner.
                 const was = cameraForward();
                 tourInit({points: w.points, up: d.up}, true);
-                if (was) tourTurn(was);
+                if (was && !(pace && pace.facing)) tourTurn(was);
                 showTourBar();
                 // start fetching the world this corridor ends at, so it is
                 // ready before the walk is
@@ -1573,8 +1575,14 @@ async function main() {
         });
 
         const ops = {
-            /** Ride the marked walk to a neighbour and hand over to its world. */
-            async walk({to}) {
+            /** Turn to face the corridor, then ride it — the robot's own order.
+             *
+             * drive_path turns to face each leg (|arc| / TURN_RATE) and only then
+             * translates it (distance / DRIVE_SPEED). Doing the same here is what
+             * makes a corner look the same from both: the camera spends the turn
+             * turning rather than carrying its old heading down the new corridor.
+             */
+            async walk({to, pace}) {
                 const w = walkTo(to);
                 if (!w) {
                     const lane = laneTo(to);
@@ -1584,7 +1592,15 @@ async function main() {
                         : `${shortOf(to)} is not a lane out of ${here()}`};
                 }
                 const scene = `${here().split(".")[0]}.${shortOf(to)}`;
-                window.__rideWalk(w, window.__paths, cmd.pace);
+                const lane = laneTo(to);
+                if (lane) {
+                    if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
+                    tourTurn(lane.dir);
+                    // hold until the swing lands, so the walk starts from the
+                    // heading the robot is also now holding
+                    await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));
+                }
+                window.__rideWalk(w, window.__paths, {...(pace || {}), facing: true});
                 tour.playing = true;
                 return await arrivedAt(scene);
             },

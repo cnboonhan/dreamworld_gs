@@ -464,6 +464,9 @@ def go_to(vertex):
     # any difference is bounded by one corridor and is corrected at every vertex.
     walked = []
     for u, v in zip(path, path[1:]):
+        # /goto's first act on a leg is to turn to face it, at TURN_RATE — the
+        # same turn the viewer now makes before it departs. Both start here, so
+        # they turn together and then travel together.
         drive_robot([u, v])
         res = viewer_call("walk", to=lab(v))
         if not res.get("ok"):
