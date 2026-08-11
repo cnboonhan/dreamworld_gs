@@ -105,31 +105,52 @@ up: _env
     exec 9>>{{repo}}/.up.lock
     flock 9
     docker compose up -d --wait
-    # The aligner is the one tool that is not a container: it rewrites files in
-    # assets/ in place and runs on the host, so `up` cannot start it. Listed
-    # anyway, because a port you have to know about is a port you forget to
-    # forward — and it says which, so the line is never wrong about it.
-    if (exec 3<>/dev/tcp/127.0.0.1/8085) 2>/dev/null; then
-        align="running"
-    else
-        align="not running — start it with: just align"
-    fi
+    just urls
+
+# Every URL, and whether it is answering.
+#
+# `just up` ends with this, but the list outlives the moment you started the
+# stack — and a port that is listed but dead is the thing worth knowing, so each
+# one is probed rather than asserted. The last block is the ssh -L line to paste
+# on the far side, built from the same list so it can never fall behind it.
+#
+# Every URL, and whether it is answering.
+urls proj=project:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    # /dev/tcp rather than curl: it answers for a noVNC or an MJPEG endpoint just
+    # as well as for JSON, and needs nothing installed.
+    live() { (exec 3<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null && echo "  ok " || echo "  -- "; }
+    scene=$(curl -s --max-time 2 localhost:{{iport}}/state 2>/dev/null \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['scene'])" 2>/dev/null \
+            || echo "<scene>")
     echo
-    echo "  project       {{project}}   (just use <name> to switch)"
-    echo "  jobs + logs   http://localhost:4200"
-    echo "  worlds        http://localhost:8081/?url=files/<scene>/world.ply"
-    echo "  panoramas     http://localhost:8082"
-    echo "  rmf sim       http://localhost:8083"
-    echo "  traffic ed    http://localhost:8084"
-    echo "  align panos   http://localhost:8085   ($align)"
-    echo "  interactive   http://localhost:{{iport}}   (tools + agent)"
-    echo "  pano editor   http://localhost:8087   (face a view, prompt an edit, save)"
+    echo "  project  {{proj}}   (just use <name> to switch)"
     echo
-    echo "  remote? ssh -L 4200:localhost:4200 -L 8081:localhost:8081 \\"
-    echo "              -L 8082:localhost:8082 -L 8083:localhost:8083 \\"
-    echo "              -L 8084:localhost:8084 -L 8085:localhost:8085 \\"
-    echo "              -L {{iport}}:localhost:{{iport}} -L 8090:localhost:8090 \\"
-    echo "              -L 8087:localhost:8087 <this-host>"
+    printf '%s%-14s %s\n' "$(live 4200)" "jobs + logs"  "http://localhost:4200"
+    printf '%s%-14s %s\n' "$(live 8081)" "splat viewer" "http://localhost:8081/?url=files/{{proj}}/splats/$scene/world.ply"
+    printf '%s%-14s %s\n' "$(live 8081)" "  + agent"    "http://localhost:8081/?url=files/{{proj}}/splats/$scene/world.ply&agent=http://localhost:{{iport}}"
+    printf '%s%-14s %s\n' "$(live 8082)" "360 viewer"   "http://localhost:8082"
+    printf '%s%-14s %s\n' "$(live 8083)" "rmf sim"      "http://localhost:8083"
+    printf '%s%-14s %s\n' "$(live 8084)" "traffic ed"   "http://localhost:8084"
+    printf '%s%-14s %s\n' "$(live 8085)" "align panos"  "http://localhost:8085          (just align)"
+    printf '%s%-14s %s\n' "$(live 8087)" "pano editor"  "http://localhost:8087"
+    printf '%s%-14s %s\n' "$(live {{iport}})" "dashboard" "http://localhost:{{iport}}"
+    echo
+    printf '%s%-14s %s\n' "$(live {{iport}})" "tools api"  "http://localhost:{{iport}}/tools"
+    printf '%s%-14s %s\n' "$(live 8090)" "robot bridge" "http://localhost:8090/state"
+    printf '%s%-14s %s\n' "$(live 8088)" "edit model"   "http://localhost:8088/health"
+    printf '%s%-14s %s\n' "$(live 8000)" "vlm"          "http://localhost:8000/v1/models"
+    echo
+    echo "  ok = answering  ·  -- = not up"
+    echo
+    ports="4200 8081 8082 8083 8084 8085 8087 {{iport}} 8088 8090"
+    echo "  remote?"
+    echo -n "    ssh"
+    for p in $ports; do echo -n " -L $p:localhost:$p"; done
+    echo " <this-host>"
+    echo
+
 
 # Point the whole stack at another project and restart the services that care.
 #

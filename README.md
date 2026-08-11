@@ -46,6 +46,7 @@ assets/                  gitignored: model weights, job history, projects/
 ```bash
 just setup      # one-time: model weights + images (~500GB, needs network)
 just up         # start everything, print the URLs
+just urls       # the URLs again, with what is answering
 ```
 
 Five web UIs come up and stay up:
