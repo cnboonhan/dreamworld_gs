@@ -29,8 +29,11 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def main() -> None:
-    project = sys.argv[1] if len(sys.argv) > 1 else "multilevel_office"
-    only = sys.argv[2] if len(sys.argv) > 2 else ""
+    report(sys.argv[1] if len(sys.argv) > 1 else "multilevel_office",
+           sys.argv[2] if len(sys.argv) > 2 else "")
+
+
+def report(project: str, only: str = "") -> None:
     root = REPO / "assets" / "projects" / project
     b = yaml.safe_load((root / "maps" / f"{project}.building.yaml").read_text())
     nav = yaml.safe_load(next((root / "worlds").glob("*/nav_graphs/0.yaml")).read_text())

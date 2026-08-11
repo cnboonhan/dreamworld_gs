@@ -105,214 +105,21 @@ up: _env
     exec 9>>{{repo}}/.up.lock
     flock 9
     docker compose up -d --wait
-    just urls
-
-# Every URL, and whether it is answering.
-#
-# `just up` ends with this, but the list outlives the moment you started the
-# stack — and a port that is listed but dead is the thing worth knowing, so each
-# one is probed rather than asserted. The last block is the ssh -L line to paste
-# on the far side, built from the same list so it can never fall behind it.
-#
-# Every URL, and whether it is answering.
-urls proj=project:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    # /dev/tcp rather than curl: it answers for a noVNC or an MJPEG endpoint just
-    # as well as for JSON, and needs nothing installed.
-    live() { (exec 3<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null && echo "  ok " || echo "  -- "; }
-    scene=$(curl -s --max-time 2 localhost:{{iport}}/state 2>/dev/null \
-            | python3 -c "import json,sys; print(json.load(sys.stdin)['scene'])" 2>/dev/null \
-            || echo "<scene>")
-    echo
-    echo "  project  {{proj}}   (just use <name> to switch)"
-    echo
-    printf '%s%-14s %s\n' "$(live 4200)" "jobs + logs"  "http://localhost:4200"
-    printf '%s%-14s %s\n' "$(live 8081)" "splat viewer" "http://localhost:8081/?url=files/{{proj}}/splats/$scene/world.ply"
-    printf '%s%-14s %s\n' "$(live 8081)" "  + agent"    "http://localhost:8081/?url=files/{{proj}}/splats/$scene/world.ply&agent=http://localhost:{{iport}}"
-    printf '%s%-14s %s\n' "$(live 8082)" "360 viewer"   "http://localhost:8082"
-    printf '%s%-14s %s\n' "$(live 8083)" "rmf sim"      "http://localhost:8083"
-    printf '%s%-14s %s\n' "$(live 8084)" "traffic ed"   "http://localhost:8084"
-    printf '%s%-14s %s\n' "$(live 8085)" "align panos"  "http://localhost:8085          (just align)"
-    printf '%s%-14s %s\n' "$(live 8087)" "pano editor"  "http://localhost:8087"
-    printf '%s%-14s %s\n' "$(live {{iport}})" "dashboard" "http://localhost:{{iport}}"
-    echo
-    printf '%s%-14s %s\n' "$(live {{iport}})" "tools api"  "http://localhost:{{iport}}/tools"
-    printf '%s%-14s %s\n' "$(live 8090)" "robot bridge" "http://localhost:8090/state"
-    printf '%s%-14s %s\n' "$(live 8088)" "edit model"   "http://localhost:8088/health"
-    printf '%s%-14s %s\n' "$(live 8000)" "vlm"          "http://localhost:8000/v1/models"
-    echo
-    echo "  ok = answering  ·  -- = not up"
-    echo
-    ports="4200 8081 8082 8083 8084 8085 8087 {{iport}} 8088 8090"
-    echo "  remote?"
-    echo -n "    ssh"
-    for p in $ports; do echo -n " -L $p:localhost:$p"; done
-    echo " <this-host>"
-    echo
-
-
-# Point the whole stack at another project and restart the services that care.
-#
-#   just use htx
-#
-# Writes DW_PROJECT into .env, so a bare `docker compose up` agrees with `just`.
-use PROJECT:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ ! -d {{assets}}/projects/{{PROJECT}} ]; then
-        echo "no such project: {{PROJECT}}" >&2
-        just projects >&2
-        exit 1
-    fi
-    printf 'DW_UID=%s\nDW_GID=%s\nDW_PROJECT=%s\n' \
-        "$(id -u)" "$(id -g)" "{{PROJECT}}" > {{repo}}/.env
-    echo "active project: {{PROJECT}}"
-    if docker compose ps --status running -q rmfsim >/dev/null 2>&1; then
-        docker compose up -d --force-recreate rmfsim editor
-    fi
-
-# Stop everything.
-down:
-    docker compose down
-
-# Generate the world at one waypoint, from one panorama of it.
-#
-# panos/<id>.jpg is a single 360 of a place, aligned so its centre column faces
-# the building's +X. HY-World imagines the rest: ~400 views out of the one, then
-# a splat trained on them. `just plan` lists the ids this project's map defines,
-# and `just vertices` the ones on a level.
-#
-# ^C stops following; the job keeps running (watch it at :4200).
-#
-# Generate the world at one waypoint, from its panorama.
-generate id proj=project: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir={{assets}}/projects/{{proj}}
-    if [ ! -d "$dir" ]; then
-        echo "no such project: {{proj}}" >&2
-        just projects >&2
-        exit 1
-    fi
-    src=$(ls -d "$dir"/panos/{{id}}.* 2>/dev/null | head -1 || true)
-    if [ -z "$src" ]; then
-        echo "no panorama for '{{id}}' in {{proj}}" >&2
-        echo "have:" >&2
-        find "$dir/panos" -mindepth 1 -maxdepth 1 2>/dev/null \
-            | sed "s|$dir/panos/|  |" >&2
-        exit 1
-    fi
-    # ids contain dots (L11.cafe), so strip the extension, not to the first dot
-    id=$(basename "${src%.*}")
-    out="$dir/splats/$id"
-    if [ -f "$out/world.ply" ]; then
-        echo "{{proj}} $id: already built, skipping"
-        echo "   (delete assets/projects/{{proj}}/splats/$id to rebuild)"
-        exit 0
-    fi
-    mkdir -p "$out"
-    win=/workspace/projects/{{proj}}
-    cp "$src" "$out/_input.${src##*.}"
-    # HY-World reads panorama.png. One line, because a recipe body must be
-    # indented for `just` to parse it and that same indentation reaches
-    # `python -c` as an IndentationError — which is what this did, once.
-    docker compose exec -T generator python -c "from pathlib import Path; import PIL.Image as I; I.MAX_IMAGE_PIXELS=None; d=Path('$win/splats/$id'); s=next(p for p in d.iterdir() if p.stem=='_input'); I.open(s).convert('RGB').save(d/'panorama.png'); s.unlink()"
-    docker compose exec -T generator python submit.py \
-        generate-world/dreamworld \
-        scene="$win/splats/$id" \
-        gpus={{gpus}} steps={{steps}}
-    echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .paths.json)"
-    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
-
-# Build the Gazebo world + nav graph from a project's building map.
-#
-# Submitted as the build-world job. The nav graph it produces
-# (worlds/<map>/nav_graphs/0.yaml) is the output that outlives the simulation:
-# named waypoints, the lanes between them, and which lanes cross a door — the
-# building's traversal semantics, and what a capture is indexed against. The
-# run publishes that as a table in the Prefect UI.
-#
-# map defaults to the project's own name, or to the only map in its maps/.
-# proj defaults to the active project (just use <name>).
-#
-# Build the Gazebo world and nav graph from a project's map.
-world map="" proj=project: up
-    docker compose exec -T generator python submit.py \
-        build-world/dreamworld project={{proj}} map="{{map}}"
-    docker compose restart rmfsim 2>/dev/null || true
-
-# Drive the building by tool call — the splat viewer walks it and the Galaxea R1
-# walks it in Gazebo, edge for edge.
-#
-# The tool surface is the one ported from dreamworld/docker/dream_interactive:
-# go_to, turn, face, open_door, close_door, take a lift, pick, place, plan_route,
-# where. What changed is what a call rolls out onto. The dream stitched
-# pre-rendered clips into a video pane; there is no such video here, so a walk is
-# the splat viewer riding that waypoint's marked corridor and handing over at the
-# vertex, live.
-#
-#   curl localhost:8086/tools
-#   curl -X POST localhost:8086/tool -H 'Content-Type: application/json' \
-#        -d '{"tool":"go_to","args":{"vertex":"apex_lab"}}'
-#   curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
-#        -d '{"text":"go to apex_lab"}'
-#
-# Open the printed viewer URL in a browser: the ?agent= parameter is what hands
-# the camera over, and until a viewer connects the walking tools say so rather
-# than reporting a move that never happened.
-#
-# Drive the building by tool call, in the splat viewer and in Gazebo.
-interactive: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    scene=$(curl -s localhost:{{iport}}/state | python3 -c "import json,sys; print(json.load(sys.stdin)['scene'])")
-    echo
-    echo "  tools        http://localhost:{{iport}}/tools"
-    echo "  robot        http://localhost:8090/state"
-    echo "  viewer       http://localhost:8081/?url=files/{{project}}/splats/$scene/world.ply&agent=http://localhost:{{iport}}"
-    echo
-    echo "  open that viewer URL, then drive it:"
-    echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
+    python3 {{repo}}/scripts/summary.py {{assets}} {{project}} --urls
 
 # Everything about the project in one screen: where each waypoint is, how good
-# its world came out, and what to open.
+# its world came out, how far along it all is, and what to open.
 #
-# Calls the three recipes rather than reimplementing them, so there is still one
-# place each answer comes from — this is the order you want them in when picking
-# up work, not a fourth report.
+# The report lives in scripts/summary.py, which is also where its four sections
+# come from — this is a wrapper so the recipe never becomes a second place any of
+# it is written down.
+#
+#   just summary        every level
+#   just summary L11    one level
 #
 # The whole project in one screen.
 summary level="" proj=project:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    echo
-    echo "── waypoints ──────────────────────────────────────────────────────────"
-    just vertices "{{level}}" "{{proj}}"
-    echo
-    echo "── splat quality ──────────────────────────────────────────────────────"
-    just quality
-    echo
-    echo "── progress ───────────────────────────────────────────────────────────"
-    just plan "" "{{proj}}" | tail -4
-    echo
-    echo "── where to open it ───────────────────────────────────────────────────"
-    just urls "{{proj}}"
-
-# How good each generated world came out, measured rather than eyeballed.
-#
-# The 3DGS trainer holds views out of training and scores itself on them; this
-# reads those back for every splat, so a bad one is a line in a table rather than
-# something you notice weeks later while walking through it.
-#
-# Held-out views are self-consistency, not fidelity: every one of them was
-# generated by HY-World from a single photograph, so a world can score well and
-# still have invented a corridor. `just quality --renders` prints the paths of the
-# side-by-side rendered-against-truth images, which is the check that catches it.
-#
-# How good each generated world came out.
-quality *args:
-    @python3 {{repo}}/scripts/splat_quality.py {{assets}}/projects/{{project}} {{args}}
+    @python3 {{repo}}/scripts/summary.py {{assets}} {{proj}} {{level}}
 
 # The panorama alignment tool, on the host rather than in a container: it edits
 # assets/projects/*/panos in place and wants a browser pointed at it.
@@ -411,9 +218,6 @@ unbundle FILE:
 #   just vertices          every level
 #   just vertices L11      one level
 #
-# The waypoints of a project's nav graph, with their positions.
-vertices level="" proj=project:
-    @python3 {{repo}}/scripts/vertices.py {{proj}} {{level}}
 
 # What this project's map says exists, and how much of it you have.
 #
@@ -424,9 +228,6 @@ vertices level="" proj=project:
 #   just plan            every waypoint
 #   just plan missing    only the unfinished ones
 #
-# Every waypoint, and how far along it is.
-plan filter="" proj=project:
-    @python3 {{repo}}/scripts/plan_report.py {{assets}}/projects/{{proj}} {{filter}}
 
 # What's in assets/projects, and what each project has.
 projects:
