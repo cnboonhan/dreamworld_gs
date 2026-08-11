@@ -549,7 +549,12 @@ def main() -> None:
     def apply(name: str, degrees: float) -> int:
         f = src / name
         im = np.asarray(Image.open(f).convert("RGB"))
-        shift = int(round(degrees / 360.0 * im.shape[1]))
+        # Negative, and that is the whole bug this had. The preview shows
+        # content at longitude L appearing at L + corr; np.roll by +shift moves
+        # it from L to L - delta. Opposite signs, so a panorama turned until it
+        # looked right was saved turned the other way, and reopening it put the
+        # corridor at twice the angle on the wrong side.
+        shift = -int(round(degrees / 360.0 * im.shape[1]))
         Image.fromarray(np.roll(im, shift, axis=1)).save(f, quality=95)
         (previews / (f.stem + ".jpg")).unlink(missing_ok=True)
         preview_of(name)
