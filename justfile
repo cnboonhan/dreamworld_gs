@@ -4,8 +4,8 @@
 #
 #   maps/    the authored floorplan (<map>.building.yaml + its images)
 #   worlds/  generated from it: Gazebo world, models, nav graph
-#   panos/   360 captures of the real place, one folder per scene
-#   splats/  what those captures reconstruct into
+#   panos/   one 360 of the real place per waypoint, named for it
+#   splats/  the world generated from each
 #
 # One project is active at a time. DW_PROJECT in .env selects it, the whole
 # stack reads it, and every recipe below defaults to it:
@@ -19,8 +19,9 @@
 #   just up                          start everything, print the URLs
 #   just projects                    what's there, and which one is active
 #   just world                       maps/ -> a Gazebo world + nav graph
-#   just generate h2rc               panos/h2rc/ -> splats/h2rc/
-#   just video h2rc                  walkthrough mp4 along the capture path
+#   just align                       turn each panorama to face the building
+#   just generate L11.v6             panos/L11.v6.jpg -> splats/L11.v6/
+#   just plan                        every waypoint, and how far along it is
 #
 # Override for a single command without switching:  DW_PROJECT=htx just world
 #
@@ -204,26 +205,18 @@ world map="" proj=project: up
         build-world/dreamworld project={{proj}} map="{{map}}"
     docker compose restart rmfsim 2>/dev/null || true
 
-# Photograph one corridor of the simulated building.
-#
 # Stands a camera at points along the lane and captures a 360 panorama at each,
-# writing panos/<edge>/000.png ... — a folder of numbered images, and nothing
-# else. That is exactly what someone hands over after walking a corridor, so
-# everything downstream is exercised on the same input it will get for real.
+# writing panos/<edge>/000.png ... — the numbered images someone hands over
+# after walking a corridor, plus the poses and range maps the simulator alone
+# can know, which pano_check.py uses to prove a capture is not corrupt.
 #
 # spacing is how far apart you stop, as when walking — the number of stops
-# follows from the corridor's length. Half a metre is plenty for the generative
-# path, which takes one panorama of a corridor and imagines the rest.
-#
-# It matters far more if you reconstruct a corridor instead of generating one,
-# where it is the strongest lever on how the splat looks: nine standpoints
-# along a four-metre corridor fit the views they were trained on and fall apart
-# between them, which is exactly where a walkthrough goes. Halving it to 0.25 m
-# took a held-out viewpoint from 29.65 to 45.27 dB. It is also what makes a
-# reconstruction metric, so pass the same value to `generate`.
+# follows from the corridor's length. This is the sim reference to compare a
+# generated world against, not an input to one: worlds are generated from a
+# single panorama taken at a waypoint (`just generate`).
 #
 #   just capture L11.cafe--v7        stop every half metre
-#   just capture L11.cafe--v7 0.25   denser, for reconstructing rather than generating
+#   just capture L11.cafe--v7 0.25   denser
 #
 # Photograph one corridor of the simulated building.
 capture edge spacing="0.5" proj=project: up
@@ -270,8 +263,6 @@ align level="L11" proj=project:
     @echo "  http://localhost:8085"
     uv run {{repo}}/scripts/align_panos.py --project {{proj}} --level {{level}}
 
-# Package a project into one tarball, to carry to another node.
-#
 # A project is already self-contained — its map, its generated world, its
 # panoramas and its splats — so a tarball of it is everything that machine
 # needs. Model weights are not included: they are hundreds of GB and come from
