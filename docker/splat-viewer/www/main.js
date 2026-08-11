@@ -1217,7 +1217,13 @@ async function main() {
                 // clips were RENDERED at these rates, so a clip's duration was
                 // its distance over its speed. A live walk has no such duration
                 // until it is given one.
-                if (pace && pace.speed && w.metres)
+                // The duration is the server's when it sent one — computed from
+                // the lane's metres and the robot's speed, so both sides travel
+                // for the same time. Falling back to the lane's own metres keeps
+                // the hand-driven panel sensible.
+                if (pace && pace.walk_ms)
+                    tour.seconds = Math.max(0.4, pace.walk_ms / 1000);
+                else if (pace && pace.speed && w.metres)
                     tour.seconds = Math.max(0.4, w.metres / pace.speed);
                 if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
                 // By hand, the camera KEEPS the heading you gave it and simply
@@ -1582,7 +1588,8 @@ async function main() {
              * makes a corner look the same from both: the camera spends the turn
              * turning rather than carrying its old heading down the new corridor.
              */
-            async walk({to, pace}) {
+            async walk({to, pace, motion}) {
+                const m = motion || {};
                 const w = walkTo(to);
                 if (!w) {
                     const lane = laneTo(to);
@@ -1594,22 +1601,26 @@ async function main() {
                 const scene = `${here().split(".")[0]}.${shortOf(to)}`;
                 const lane = laneTo(to);
                 if (lane) {
-                    if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
-                    tourTurn(lane.dir);
-                    // hold until the swing lands, so the walk starts from the
-                    // heading the robot is also now holding
-                    await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));
+                    // The arc and its duration are the server's, computed from
+                    // both endpoints in the nav graph's own frame — the same two
+                    // numbers the robot is turning by. Deriving them here from
+                    // the camera's current heading would be a second answer to
+                    // the same question, and the two would differ at exactly the
+                    // corners where it shows.
+                    tourTurn(lane.dir, m.turn_ms);
+                    await new Promise((r) => setTimeout(r, m.turn_ms || 0));
                 }
-                window.__rideWalk(w, window.__paths, {...(pace || {}), facing: true});
+                window.__rideWalk(w, window.__paths,
+                                  {...(pace || {}), facing: true, walk_ms: m.walk_ms});
                 tour.playing = true;
                 return await arrivedAt(scene);
             },
             /** Turn in place to face a neighbour, without moving. */
-            async face({to, pace}) {
+            async face({to, pace, motion}) {
                 const lane = laneTo(to);
                 if (!lane) return {ok: false, error: `${shortOf(to)} is not a lane out of ${here()}`};
                 if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
-                tourTurn(lane.dir);
+                tourTurn(lane.dir, (motion || {}).turn_ms);
                 // Answer when the swing has finished, not when it was started —
                 // the robot is turning for exactly as long.
                 await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));

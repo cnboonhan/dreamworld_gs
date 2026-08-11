@@ -370,9 +370,19 @@ speed and the robot could not fall behind. Nothing forces a live walk to take an
 particular length of time — it ran at a fixed 10 s a corridor, so the robot
 crossed a 1.97 m lane in one second and the camera took ten.
 
-So the pace is handed to the viewer with every command: a walk takes
-`metres / DRIVE_SPEED` from the lane's own recorded length, a turn takes
-`|arc| / TURN_RATE`, and both sides step one edge at a time, started together.
+Both endpoints of every edge are known in both frames — the nav graph has them in
+metres, the marked walk has them in the splat world's own coordinates — so the
+motion is not approximated from a rate and checked afterwards. The server computes
+the leg once, from the graph: the arc is the shortest turn from the heading being
+held to the bearing of this leg, exactly as `drive_path` takes it, and the
+distance is the lane's. Both sides are handed those same two numbers and their
+durations, so they perform one motion rather than two motions timed alike.
+
+    lift_lobby       -> lift_lobby_north    0.0 deg in     0 ms | 1.97 m in  983 ms
+    lift_lobby_north -> v0                 -2.5 deg in    35 ms | 1.79 m in  893 ms
+    v0               -> v11                 0.6 deg in     9 ms | 4.41 m in 2203 ms
+
+Both step one edge at a time, started together.
 Per edge rather than per route matters — sending the robot the whole polyline up
 front let the two drift with nothing to pull them back, where now any difference
 is bounded by one corridor and corrected at every vertex. `DW_DRIVE_SPEED` and

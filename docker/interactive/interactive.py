@@ -162,6 +162,31 @@ def scene_of(i):
     return f"{ST['level']}.{lab(i)}"
 
 
+def leg_motion(u, v):
+    """The exact turn and travel for the leg u->v, in the nav graph's own frame.
+
+    Both ends of every edge are known in both frames — the graph has them in
+    metres, and the marked walk has them in the splat world's own coordinates —
+    so the motion is not something to approximate from a rate and hope both sides
+    landed on the same answer. The arc is the difference between the bearing we
+    are holding and the bearing of this leg, taken the short way round exactly as
+    drive_path takes it; the distance is the lane's. Handing both sides the same
+    two numbers is what makes them the same motion rather than two motions timed
+    alike.
+    """
+    heading = ST.get("yaw")
+    if heading is None:
+        heading = _az(ST["prev"], u) if ST.get("prev") is not None else _az(u, v)
+    target = _az(u, v)
+    arc = (target - heading + math.pi) % (2 * math.pi) - math.pi   # shortest turn
+    metres = math.hypot(ST["verts"][v][1] - ST["verts"][u][1],
+                        ST["verts"][v][2] - ST["verts"][u][2])
+    return {"arc": round(arc, 6), "yaw": round(target, 6),
+            "metres": round(metres, 4),
+            "turn_ms": round(abs(arc) / TURN_RATE * 1000),
+            "walk_ms": round(metres / DRIVE_SPEED * 1000)}
+
+
 def _az(a, b):
     """Bearing from waypoint a to waypoint b, in the nav graph's own frame."""
     return math.atan2(ST["verts"][b][2] - ST["verts"][a][2],
@@ -465,10 +490,14 @@ def go_to(vertex):
     walked = []
     for u, v in zip(path, path[1:]):
         # /goto's first act on a leg is to turn to face it, at TURN_RATE — the
-        # same turn the viewer now makes before it departs. Both start here, so
-        # they turn together and then travel together.
+        # same turn the viewer now makes before it departs. Both start here, and
+        # both are given the SAME arc and distance rather than each deriving its
+        # own, so the two motions are equal by construction.
+        motion = leg_motion(u, v)
         drive_robot([u, v])
-        res = viewer_call("walk", to=lab(v))
+        res = viewer_call("walk", to=lab(v), motion=motion)
+        with ST["lock"]:
+            ST["yaw"] = motion["yaw"]        # the heading both are now holding
         if not res.get("ok"):
             # The viewer failed partway. The robot is already driving the whole
             # line, so stop it where the walk actually got to rather than letting
@@ -508,8 +537,14 @@ def face(target):
         return {"ok": False, "error": "nothing to turn — no splat viewer connected "
                                       "and no robot bridge"}
     yaw = _az(cur, tgt)
+    arc = (yaw - (ST.get("yaw") if ST.get("yaw") is not None else yaw)
+           + math.pi) % (2 * math.pi) - math.pi
     turn_robot(yaw)
-    res = viewer_call("face", to=lab(tgt), timeout=30)
+    res = viewer_call("face", to=lab(tgt), timeout=30,
+                      motion={"arc": round(arc, 6), "yaw": round(yaw, 6),
+                              "turn_ms": round(abs(arc) / TURN_RATE * 1000)})
+    with ST["lock"]:
+        ST["yaw"] = yaw
     if not res.get("ok"):
         return res
     with ST["lock"]:
@@ -788,6 +823,7 @@ def switch_level(to, lift):
         ST.update({"level": level, "verts": verts, "adj": adj,
                    "doors": doors_of(ST["nav"], level), "lift_of": lifts,
                    "open_doors": set(), "cur": cabin, "prev": None, "face": None,
+                   "yaw": None,
                    "fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
     log(f"lift arrived — now on {level}")
     BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
@@ -2009,6 +2045,10 @@ def main():
         "nav": a.nav, "levels": levels_of(a.nav), "building": a.building,
         "open_doors": set(), "inventory": [], "mission": "", "todos": [],
         "prev": None, "face": None, "selected_lift": None, "sel_cabin": None,
+        # The heading both sides are holding, in the nav graph's frame. Kept here
+        # rather than asked for, so the arc of the next turn is computed against
+        # the same number the robot last turned to.
+        "yaw": None,
         "galaxea": os.environ.get("GALAXEA_URL", "").rstrip("/"),
         "project": a.project,
     })
