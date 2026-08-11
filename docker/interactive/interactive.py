@@ -310,46 +310,47 @@ def lift_states():
     return (bridge("/lift_state") or {}).get("lifts") or {}
 
 
-DOOR_OPEN = 2      # rmf_lift_msgs LiftState.DOOR_OPEN
-
-
-def lift_shut(u, v):
-    """Why a lane into or out of a lift cabin cannot be walked, or "".
-
-    The nav graph's `doors:` section does not list lift doors — the shaft and
-    cabin doors belong to liblift, not to the door plugin — so door_between is
-    blind to them, and a route into a cabin looked as clear as a corridor. It is
-    not: the cabin may be on another floor entirely, and walking in would step
-    into an empty shaft.
+def crossable(u, v):
+    """False if the edge u->v is an OBSTACLE — a door or a lift that has not been
+    opened. Ported from the dream's cross(): there a door edge is one the clip
+    manifest has a door_open clip for, and it blocks unless already opened. There
+    is no manifest here, so a door edge is one the nav graph puts a door on, or one
+    that enters a lift cabin — liblift owns those, so they are in no door list and
+    have to come from lift_of, exactly as the dream identified them.
     """
-    cabin = ST["lift_of"].get(v) or ST["lift_of"].get(u)
-    if not cabin:
-        return ""
-    st = lift_states().get(cabin)
-    if st is None:
-        # No bridge to ask. Treat it as shut rather than assume: an unverifiable
-        # lift is exactly the case this exists to stop.
-        return f"{cabin} state is unknown (no robot bridge) — cannot enter it"
-    if st.get("floor") != ST["level"]:
-        return (f"{cabin} is at {st.get('floor')}, not {ST['level']} — "
-                f"call_lift {ST['level']} first")
-    if int(st.get("door", 0)) != DOOR_OPEN:
-        return f"{cabin} is at {ST['level']} but its door is shut — open_door first"
-    return ""
+    if ST["lift_of"].get(u) or ST["lift_of"].get(v):
+        return (ST["lift_of"].get(v) or ST["lift_of"].get(u)) in ST["open_doors"]
+    name = door_between(u, v)
+    return not name or name in ST["open_doors"]
 
 
-def blocked_on(path):
-    """[(u, v, why)] for every shut door — hinged or lift — the path crosses."""
-    out = []
-    for u, v in zip(path, path[1:]):
-        name = door_between(u, v)
-        if name and name not in ST["open_doors"]:
-            out.append((u, v, name))
-            continue
-        why = lift_shut(u, v)
-        if why:
-            out.append((u, v, why))
-    return out
+def route_stop(path):
+    """(reached, obstacle) for walking `path`, opening nothing.
+
+    Ported from build_route_stop: walk from path[0], stopping BEFORE the first
+    unopened door/lift edge. `reached` is the path index that can be walked to;
+    `obstacle` is the blocking (u, v) edge, or None when the whole path is clear.
+    """
+    for k in range(len(path) - 1):
+        u, v = path[k], path[k + 1]
+        if not crossable(u, v):
+            return k, (u, v)
+    return len(path) - 1, None
+
+
+def blocked_message(tgt, path, reached, obstacle):
+    """The dream's own BLOCKED wording, which the agent prompt is written against."""
+    u, v = obstacle
+    lift = ST["lift_of"].get(v) or ST["lift_of"].get(u)
+    what = f"lift to {lab(v)}" if lift else f"door to {lab(v)}"
+    act = "call_lift then open_door" if lift else "open_door"
+    if reached == 0:                                  # the obstacle is right here
+        return (f"BLOCKED: the path to {lab(tgt)} is blocked by the {what} at "
+                f"{lab(ST['cur'])}. go_to only walks clear paths — {act} here first, "
+                f"then go_to.")
+    return (f"BLOCKED: the path to {lab(tgt)} is blocked by the {what} beyond "
+            f"{lab(path[reached])}. go_to {lab(path[reached])} first (that leg "
+            f"is clear), then {act}, then go_to {lab(tgt)}.")
 
 
 # ---- state ------------------------------------------------------------------
@@ -427,16 +428,13 @@ def go_to(vertex):
     path = dijkstra(ST["adj"], cur, tgt)
     if not path or len(path) < 2:
         return {"ok": False, "error": f"no path from {lab(cur)} to {lab(tgt)}"}
-    shut = blocked_on(path)
-    if shut:
-        u, v, why = shut[0]
-        if ST["lift_of"].get(v) or ST["lift_of"].get(u):
-            return {"ok": False, "error": f"BLOCKED: {why}. Take the lift with "
-                                          f"take_lift <level> rather than walking in."}
-        return {"ok": False,
-                "error": f"BLOCKED: {why} between {lab(u)} and {lab(v)} is shut. "
-                         f"go_to {lab(u)}, then face {lab(v)}, then open_door, "
-                         f"then go_to {lab(tgt)}."}
+    # go_to ONLY accepts UNBLOCKED paths: if any door/lift on the route is closed the
+    # target is invalid — it moves nothing and names the clear waypoint to go_to
+    # instead, plus the interaction that clears the obstacle. So a mission decomposes
+    # into go_to (clear waypoint) -> open_door/call_lift -> go_to ...
+    reached, obstacle = route_stop(path)
+    if obstacle:
+        return {"ok": False, "error": blocked_message(tgt, path, reached, obstacle)}
 
     if not ST.get("viewer_up") and not ST.get("galaxea"):
         return {"ok": False, "error": "nothing to walk with — no splat viewer "
@@ -537,8 +535,16 @@ def _door(to, mode):
     if tgt is None:
         return {"ok": False, "error": f"not facing anything — face <waypoint> first"}
     name = door_between(cur, tgt)
-    if not name:
+    lift_here = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
+    if not name and not lift_here:
         return {"ok": False, "error": f"no door between {lab(cur)} and {lab(tgt)}"}
+    if lift_here and mode == "open":
+        # The bridge refuses a shaft door whose cabin is elsewhere (409), which is
+        # what stops `open_door` from summoning a lift by opening its door.
+        st = lift_states().get(lift_here) or {}
+        if st.get("floor") and st["floor"] != ST["level"]:
+            return {"ok": False, "error": f"{lift_here} is at {st['floor']}, not "
+                                          f"{ST['level']} — call_lift {ST['level']} first"}
     # The bridge names the door from the EDGE, not from a name we pass it: two lift
     # doors can be colinear, and only the edge tells them apart. So send the two
     # waypoints and let it decide, which is also what makes its answer worth having.
@@ -550,8 +556,9 @@ def _door(to, mode):
                 "door": name}
     # Prefer the bridge's own naming; ours is a fallback for a viewer-only run.
     names = res.get("doors") or [name]
+    lift = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
     with ST["lock"]:
-        for n in names:
+        for n in list(names) + ([lift] if lift else []):
             ST["open_doors"].add(n) if mode == "open" else ST["open_doors"].discard(n)
     push_state()
     return {"ok": True, "door": names[0], "doors": names, "mode": mode}
@@ -623,8 +630,9 @@ def plan_route(to):
         return {"ok": False, "error": f"no path to {to}"}
     steps, walked = [], ST["cur"]
     for u, v in zip(path, path[1:]):
+        if crossable(u, v):
+            continue
         cabin = ST["lift_of"].get(v) or ST["lift_of"].get(u)
-        name = door_between(u, v)
         if cabin:
             # A lift is not a door with extra steps: it has to be called to this
             # floor before its door means anything, so it gets its own sequence.
@@ -633,7 +641,7 @@ def plan_route(to):
                 walked = u
             steps += [f"select_lift {cabin}", f"face {lab(v)}",
                       f"call_lift {ST['level']}", "open_door"]
-        elif name and name not in ST["open_doors"]:
+        else:
             if walked != u:
                 steps.append(f"go_to {lab(u)}")
                 walked = u
