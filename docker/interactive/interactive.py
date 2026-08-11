@@ -310,6 +310,9 @@ def door_between(u, v):
     return ""
 
 
+DOOR_OPEN = 2      # rmf_lift_msgs LiftState.DOOR_OPEN
+
+
 def lift_states():
     """{lift: {floor, door, motion}} from the bridge, or {} without one."""
     return (bridge("/lift_state") or {}).get("lifts") or {}
@@ -323,8 +326,9 @@ def crossable(u, v):
     that enters a lift cabin — liblift owns those, so they are in no door list and
     have to come from lift_of, exactly as the dream identified them.
     """
-    if ST["lift_of"].get(u) or ST["lift_of"].get(v):
-        return (ST["lift_of"].get(v) or ST["lift_of"].get(u)) in ST["open_doors"]
+    lift = ST["lift_of"].get(u) or ST["lift_of"].get(v)
+    if lift:
+        return lift in ST["open_doors"]
     name = door_between(u, v)
     return not name or name in ST["open_doors"]
 
@@ -529,6 +533,36 @@ def close_door(to=""):
     return _door(to, "close")
 
 
+def has_door(u, v):
+    """Whether the edge u->v carries a door at all — hinged, or a lift's.
+
+    Either end being a cabin makes it a lift edge: standing in the cabin, the door
+    out is still the lift's. This is the same test crossable() applies before
+    asking whether it is open, so the two cannot disagree about what a door is.
+    """
+    return bool(door_between(u, v) or ST["lift_of"].get(u) or ST["lift_of"].get(v))
+
+
+def door_neighbors(cur):
+    """Neighbours of cur whose edge carries a door."""
+    return [v for v, _ in ST["adj"].get(cur, []) if has_door(cur, v)]
+
+
+def door_target(cur):
+    """Which door a bare `open_door` means. (vertex, error). Ported from
+    _door_target: the faced one, else the only one, else the one you are heading
+    toward, else ask rather than guess."""
+    dn = door_neighbors(cur)
+    if ST["face"] in dn:
+        return ST["face"], None
+    if len(dn) == 1:
+        return dn[0], None
+    if not dn:
+        return None, f"no door adjacent to {lab(cur)}"
+    return None, ("which door? turn to face one, or 'open door to <"
+                  + " | ".join(ST["lift_of"].get(x) or lab(x) for x in dn) + ">'")
+
+
 def _door(to, mode):
     cur = ST["cur"]
     tgt = ST["face"]
@@ -538,13 +572,9 @@ def _door(to, mode):
         except SystemExit as e:
             return {"ok": False, "error": str(e)}
     if tgt is None:
-        # A dead end or a lift cabin has one way out, so a bare `open_door` there is
-        # unambiguous — asking the operator to face the only option first is noise.
-        ns = [v for v, _ in ST["adj"].get(cur, [])]
-        if len(ns) == 1:
-            tgt = ns[0]
-        else:
-            return {"ok": False, "error": "not facing anything — face <waypoint> first"}
+        tgt, err = door_target(cur)
+        if err:
+            return {"ok": False, "error": err}
     name = door_between(cur, tgt)
     lift_here = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
     if not name and not lift_here:
@@ -568,6 +598,9 @@ def _door(to, mode):
     # Prefer the bridge's own naming; ours is a fallback for a viewer-only run.
     names = res.get("doors") or [name]
     lift = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
+    if lift and not wait_lift_door(lift, mode == "open"):
+        return {"ok": False, "door": names[0],
+                "error": f"{lift}'s door did not reach {mode}"}
     with ST["lock"]:
         for n in list(names) + ([lift] if lift else []):
             ST["open_doors"].add(n) if mode == "open" else ST["open_doors"].discard(n)
@@ -605,19 +638,21 @@ def call_lift(level=""):
             return {"ok": False, "error": f"no lift at {lab(ST['cur'])}"}
         lift = cabins[0]
     floor = str(level).strip() or ST["level"]
-    res = bridge("/call_lift", {"lift": lift, "floor": floor})
+    # `ride` tells the bridge the robot is standing in the cabin, so the lift
+    # physically carries it and the bridge re-levels itself on arrival. It must not
+    # teleport the robot instead — that fights the cabin.
+    riding = floor != ST["level"] and ST["lift_of"].get(ST["cur"]) == lift
+    res = bridge("/call_lift", {"lift": lift, "floor": floor, "ride": riding})
     # Riding it is not the same as calling it: you have ridden only if you were
     # standing in the cabin when it moved. Then the graph underneath changes, and
     # every level-keyed thing has to be rebuilt before the next tool call reads it.
     rode = False
-    if floor != ST["level"] and ST["lift_of"].get(ST["cur"]) == lift:
-        t0 = time.time()
-        while time.time() - t0 < 120:
-            st = lift_states().get(lift) or {}
-            if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
-                break
-            time.sleep(0.5)
-        rode = switch_level(floor, lift)
+    if riding:
+        rode = _ride_lift(lift, floor)
+    elif not wait_lift(lift, floor):
+        return {"ok": False, "lift": lift, "floor": floor,
+                "error": f"{lift} has not reached {floor} — it is at "
+                         f"{(lift_states().get(lift) or {}).get('floor')}"}
     return {"ok": True, "lift": lift, "floor": floor, "rode": rode,
             "at": lab(ST["cur"]), "level": ST["level"]}
 
@@ -674,6 +709,54 @@ def take_lift(to_level=""):
             "note": "execute these subtasks strictly in order (each verified)."}
 
 
+def wait_lift(lift, floor, timeout=120):
+    """Block until `lift` has arrived at `floor` with motion stopped.
+
+    Ported from _wait_lift. A control tool blocks until the bridge's RMF state
+    confirms the motion actually finished — otherwise call_lift returns while the
+    cabin is still travelling and the next step opens a door onto an empty shaft.
+    """
+    if not ST.get("galaxea") or not lift:
+        return True
+    end = time.time() + timeout
+    while time.time() < end:
+        st = lift_states().get(lift) or {}
+        if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def wait_lift_door(lift, want_open, timeout=20):
+    """Block until `lift`'s door reaches open (2) / closed (0). From _wait_lift_door."""
+    if not ST.get("galaxea") or not lift:
+        return True
+    target = DOOR_OPEN if want_open else 0
+    end = time.time() + timeout
+    while time.time() < end:
+        if (lift_states().get(lift) or {}).get("door") == target:
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _ride_lift(lift, floor):
+    """Wait for the gazebo lift to reach `floor`, then switch the map there."""
+    deadline = time.time() + 90
+    arrived = False
+    while ST.get("galaxea") and time.time() < deadline:
+        time.sleep(1.0)
+        st = lift_states().get(lift) or {}
+        if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
+            arrived = True
+            break
+    if not arrived and ST.get("galaxea"):
+        log(f"{lift} has not reported reaching {floor}", "err")
+    elif not ST.get("galaxea"):
+        time.sleep(3)          # no sim to ride -> switch after a nominal delay
+    return switch_level(floor, lift)
+
+
 def switch_level(to, lift):
     """Move the whole world model onto another level, after a lift has carried the
     robot there.
@@ -690,22 +773,12 @@ def switch_level(to, lift):
     if cabin is None:
         return False
     png, fw, fh, m2px = build_floorplan(ST.get("building", ""), level)
-    # You rode in facing the cabin, so you step out facing the lobby: the exit is
-    # the cabin's only lane, and the template's next step is a bare `open_door`,
-    # which needs something to be facing.
-    exit_v = next((v for v, _ in adj.get(cabin, [])), None)
     with ST["lock"]:
         ST.update({"level": level, "verts": verts, "adj": adj,
                    "doors": doors_of(ST["nav"], level), "lift_of": lifts,
-                   "open_doors": set(), "cur": cabin, "prev": None, "face": exit_v,
+                   "open_doors": set(), "cur": cabin, "prev": None, "face": None,
                    "fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
-    # Re-level the bridge too. It drives by set_pose at a fixed z captured when it
-    # started, so after a ride every drive would put the robot back at the old
-    # floor's elevation — the ride would visibly undo itself on the next go_to.
-    bridge("/reset", {"level": level,
-                      "x": ST["verts"][cabin][1], "y": ST["verts"][cabin][2],
-                      "yaw": _az(cabin, exit_v) if exit_v is not None else 0.0})
-    log(f"rode {lift} to {level} — now at {lab(cabin)}")
+    log(f"lift arrived — now on {level}")
     BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
     push_state()
     _push_context()
@@ -1827,6 +1900,29 @@ def r_health():
                    galaxea=bool(ST.get("galaxea")), at=lab(ST["cur"]))
 
 
+def galaxea_reset():
+    """Resync the gazebo robot to this dashboard's level + start vertex on startup.
+
+    Ported from galaxea_reset: the bridge keeps its state across dashboard
+    restarts — a lift ride can leave it on another floor — so it is the bridge
+    that has to be told where we think we are, not the other way round. Retries in
+    the background; best-effort, and a no-op with no sim.
+    """
+    if not ST.get("galaxea"):
+        return
+    cur = ST["cur"]
+    body = {"level": ST["level"], "x": ST["verts"][cur][1], "y": ST["verts"][cur][2],
+            "yaw": _az(cur, ST["face"]) if ST["face"] is not None else 0.0}
+
+    def _post():
+        for _ in range(30):
+            if bridge("/reset", body, timeout=3):
+                return
+            time.sleep(2)
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--nav", required=True)
@@ -1857,6 +1953,7 @@ def main():
                         f"{scene_of(ST['cur'])}/world.ply"
                         f"&agent=http://localhost:{a.port}")
 
+    galaxea_reset()
     print(f"[interactive] {len(verts)} waypoints on {level}, standing at {lab(ST['cur'])}",
           flush=True)
     print(f"[interactive] tools: {', '.join(sorted(TOOLS))}", flush=True)
