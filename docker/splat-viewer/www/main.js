@@ -1580,13 +1580,16 @@ async function main() {
 
     window.stepThrough = () => {
         const a = arrival;
-        if (!a.records || !a.doc) return false;
+        // say why, not just no. Two silent refusals in a row cost more time
+        // than the bugs behind them.
+        if (!a.records) { say(`${a.scene || "next world"}: not loaded yet`); return false; }
+        if (!a.doc) { say(`${a.scene}: no paths.json`); return false; }
         // marked is best — that mark and this world's mark for itself are the
         // same physical place. Unmarked, the world's origin is where its
         // panorama was shot, which is the waypoint by construction: close
         // enough to arrive at and then correct by hand.
         const stand = (a.doc.placed || {})[a.to] || a.doc.origin;
-        if (!stand) return false;
+        if (!stand) { say(`${a.scene}: no position for ${a.to}`); return false; }
         splatData = a.records;
         worker.postMessage({buffer: a.records.buffer,
                             vertexCount: Math.floor(a.records.length / rowLength)});
@@ -2139,7 +2142,10 @@ async function main() {
                     const play = document.getElementById("tourPlay");
                     if (play) play.textContent = "play";
                     // arrived: if the next world is ready, step into it
-                    if (tour.t >= 1 && window.stepThrough) window.stepThrough();
+                    if (tour.t >= 1) {
+                        if (window.stepThrough) window.stepThrough();
+                        else console.warn("no stepThrough on arrival");
+                    }
                 }
                 document.getElementById("tourAt").value = tour.t * 1000;
             }
