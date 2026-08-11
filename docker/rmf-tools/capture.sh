@@ -99,18 +99,34 @@ tree = ET.parse(src)
 world = tree.getroot().find("world")
 
 
+LEAVES = ("left_door", "right_door")
+
+
 def open_leaves(parent, what):
     """Take out a door's two leaves, leaving its frame, ramp and car behind.
 
     A cabin door is a model nested inside its lift, a shaft door's leaves are
-    links of its own model, so this looks for both rather than assuming.
+    links of its own model, so this looks for both rather than assuming. The
+    joints that drive them go too: a joint whose child link no longer exists
+    stops Gazebo loading the model at all, and the first sign of that is a
+    capture that reports no frames from the camera.
     """
-    gone = [el for el in parent.iter()
-            if el.tag in ("link", "model") and el.get("name") in ("left_door", "right_door")]
-    owners = {c: p for p in parent.iter() for c in p}
-    for el in gone:
-        owners[el].remove(el)
-    print(f"opened {what}" if gone else f"nothing to open on {what}")
+    def prune(pick):
+        owners = {c: p for p in parent.iter() for c in p}
+        out = [el for el in parent.iter() if el is not parent and pick(el)]
+        for el in out:
+            owners[el].remove(el)
+        return {el.get("name") for el in out}
+
+    dead = prune(lambda el: el.tag in ("link", "model") and el.get("name") in LEAVES)
+    # A cabin door's only links are its two leaves, so taking them out leaves a
+    # model with none, and a model with no link will not load — the world fails
+    # whole and the capture reports no frames from the camera.
+    dead |= prune(lambda el: el.tag == "model" and not list(el.iter("link")))
+    dead |= prune(lambda el: el.tag == "joint" and dead & {
+        s for end in ("child", "parent")
+        for s in (el.findtext(end) or "").strip().split("::")})
+    print(f"opened {what}" if dead else f"nothing to open on {what}")
 
 
 if door:
