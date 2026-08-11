@@ -446,14 +446,22 @@ def _door(to, mode):
     name = door_between(cur, tgt)
     if not name:
         return {"ok": False, "error": f"no door between {lab(cur)} and {lab(tgt)}"}
-    bridge("/door", {"door": name, "mode": mode})
+    # The bridge names the door from the EDGE, not from a name we pass it: two lift
+    # doors can be colinear, and only the edge tells them apart. So send the two
+    # waypoints and let it decide, which is also what makes its answer worth having.
+    res = bridge("/door", {"waypoints": [[ST["verts"][cur][1], ST["verts"][cur][2]],
+                                         [ST["verts"][tgt][1], ST["verts"][tgt][2]]],
+                           "mode": mode})
+    if ST.get("galaxea") and not res.get("ok", True):
+        return {"ok": False, "error": res.get("error") or f"the robot refused to {mode} it",
+                "door": name}
+    # Prefer the bridge's own naming; ours is a fallback for a viewer-only run.
+    names = res.get("doors") or [name]
     with ST["lock"]:
-        if mode == "open":
-            ST["open_doors"].add(name)
-        else:
-            ST["open_doors"].discard(name)
+        for n in names:
+            ST["open_doors"].add(n) if mode == "open" else ST["open_doors"].discard(n)
     push_state()
-    return {"ok": True, "door": name, "mode": mode}
+    return {"ok": True, "door": names[0], "doors": names, "mode": mode}
 
 
 @tool("Which lift to take, chosen before facing it.", [("lift", "lift name, e.g. lift1")])
