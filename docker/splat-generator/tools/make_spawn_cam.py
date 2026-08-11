@@ -191,16 +191,19 @@ def colmap_cameras(model: Path) -> tuple[np.ndarray, list[str]]:
 def colmap_walk(model: Path) -> tuple[np.ndarray, np.ndarray]:
     """(standpoints, up) for a reconstructed world, from its COLMAP model.
 
-    Views are named <panorama>_<k>, so grouping by prefix gives one centre per
-    standpoint. That is what render_video.py fits its line through; fitting
-    through the raw per-view poses instead would tilt the line slightly and the
-    tour would no longer match the video.
+    reproject writes view_<k>/<panorama>.jpg — a directory per view direction,
+    the panorama's name inside — so the standpoint is the basename and the
+    directory is the direction. Splitting on the last underscore instead put
+    every image in one group called "view", and the walk came out as a single
+    point: `length_m 0.0`, `fitted through 1 standpoints`. It grouped by the
+    thing that varies within a standpoint rather than across them.
     """
     w2c, names = colmap_cameras(model)
     centres = np.stack([-m[:3, :3].T @ m[:3, 3] for m in w2c])
     groups: dict[str, list[np.ndarray]] = {}
     for name, c in zip(names, centres):
-        groups.setdefault(name.rsplit("_", 1)[0], []).append(c)
+        key = Path(name).name if "/" in name else name.rsplit("_", 1)[0]
+        groups.setdefault(key, []).append(c)
     pts = np.stack([np.median(np.stack(v), 0) for _, v in sorted(groups.items())])
     up = np.stack([-m[:3, :3].T @ np.array([0.0, 1.0, 0.0]) for m in w2c]).mean(0)
     return pts, unit(up)
@@ -278,6 +281,17 @@ def main() -> None:
     if args[0] == "--colmap":
         world = Path(args[2])
         pts, up = colmap_walk(Path(args[1]))
+        # The align stage rewrites the ply into building metres but leaves the
+        # sparse model in COLMAP's frame, so a walk fitted straight from it
+        # stands thirty metres from its own splat and renders black. Carry it
+        # over by the same rigid motion the gaussians were moved by.
+        info = world.parent / "world.info.json"
+        if info.is_file():
+            doc = json.loads(info.read_text())
+            if doc.get("aligned") and "transform" in doc:
+                R = np.asarray(doc["transform"]["R"], dtype=np.float64)
+                t = np.asarray(doc["transform"]["t"], dtype=np.float64)
+                pts, up = pts @ R.T + t, unit(R @ up)
         line = fit_walk(pts, up)
         # a reconstruction is already metric, scaled by the walked interval
         length = float(np.linalg.norm(line[-1] - line[0]))

@@ -299,7 +299,10 @@ world-edge edge proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
-    if ! compgen -G "$dir/panos/{{edge}}/*.png" >/dev/null; then
+    # Any panorama, not just a simulated one. This globbed *.png, and a real
+    # 360 camera writes .JPG — so a corridor already photographed by hand read
+    # as unphotographed, and the simulator was sent to shoot over it.
+    if ! compgen -G "$dir/panos/{{edge}}/*.[pPjJ]*[gG]" >/dev/null; then
         just capture {{edge}} 0.5 {{proj}}
     fi
     pick=$(docker compose exec -T generator python /opt/tools/pick_panorama.py \
