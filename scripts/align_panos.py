@@ -583,6 +583,12 @@ def main() -> None:
 
     srv.scenes = scenes
     srv.place, srv.rewalk = place, rewalk
+    # Built up front, not on the first request. Downscaling a thirty-megapixel
+    # JPEG takes a second or two, and a browser waiting on that looks exactly
+    # like a file that will not load — which it was reported as, twice.
+    for entry in scan():
+        if not entry.get("problem") and (src / entry["file"]).is_file():
+            preview_of(entry["file"])
     found = scan()
     print(f"{len(found)} panoramas — http://localhost:{a.port}")
     for m in found:
