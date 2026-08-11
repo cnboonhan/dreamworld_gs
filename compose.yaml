@@ -196,21 +196,19 @@ services:
       - ./assets/projects:/workspace/projects
     environment:
       HOME: /tmp
-      # Every card except 0, which the VLM holds. Reconstructions take one
-      # each and run one per device, so this also sets how wide a batch goes;
-      # `just` reads the same variable to size HY-World's rank count, since
-      # that shards across every visible GPU and would otherwise broadcast
-      # from ranks torchrun never launched.
+      # Every card except 0, which the VLM holds. `just` reads the same
+      # variable to size HY-World's rank count, since that shards across every
+      # visible GPU and would otherwise broadcast from ranks torchrun never
+      # launched.
       CUDA_VISIBLE_DEVICES: "${DW_GPU_IDS:-1,2,3,4}"
       PREFECT_API_URL: http://127.0.0.1:${DW_PREFECT_PORT:-4200}/api
       PREFECT_HOME: /tmp/prefect
     depends_on:
       prefect:
         condition: service_healthy
-      # Started, not healthy. Only generate-world talks to the VLM — the
-      # single-panorama generative path — and it needs it when a job runs, not
-      # when this container boots. Gating on health made every reconstruction
-      # wait on a 17 GB model load that none of them use.
+      # Started, not healthy. generate-world talks to the VLM when a job runs,
+      # not when this container boots, and gating on health made the worker
+      # wait on a 17 GB model load before it would accept anything at all.
       vlm:
         condition: service_started
     restart: unless-stopped

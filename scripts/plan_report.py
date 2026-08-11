@@ -1,11 +1,18 @@
 """Report a project's capture plan against what is actually on disk.
 
-build-world writes worlds/<map>/capture_plan.json: one entry per vertex and per
-edge of the nav graph, with the id its panoramas belong under. This reads that
-back against the project directory, so the gap between what the building has
-and what has been photographed is a list rather than a guess — followed by the
-quality of every splat already built, so two of them can be compared without
-opening two flow runs.
+build-world writes worlds/<map>/capture_plan.json: every waypoint of the nav
+graph, and the lanes between them. A waypoint is what you photograph — one
+panorama, one generated world — so this reads that back against the project
+directory, and the gap between what the building has and what has been shot is
+a list rather than a guess.
+
+Four things have to be true before you can walk out of a waypoint, and the
+state column is whichever is missing first:
+
+  1. a panorama of it exists                    panos/<id>.jpg
+  2. it has been turned to face the building    scripts/align_panos.py
+  3. a world has been generated from it         just generate <id>
+  4. its neighbours are marked in that world    the viewer's edge panel
 
     python plan_report.py <project-dir> [missing]
 
@@ -13,131 +20,54 @@ Used by `just plan`; standalone so the recipe stays a one-liner.
 """
 
 import json
-import re
 import sys
 from pathlib import Path
 
-# how many registered views, as a fraction of those offered, before the
-# reconstruction is thin enough to be worth flagging
-THIN_REGISTRATION = 0.5
-# A gaussian this much longer than it is wide draws a line rather than a
-# surface. Aspect ratio, not length: the needles that streak worst are under
-# 25 cm and hair-thin, so anything weighted by size scored them as harmless.
-MAX_RATIO = 16.0
-# held-out PSNR below this reads as blurry rather than merely soft
-LOW_PSNR = 22.0
+IMAGES = (".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG")
 
 
-def ply_gaussians(ply: Path) -> int | None:
-    """Gaussian count from the PLY header, for splats built before the pipeline
-    recorded its own metrics. The header is ASCII however large the body is."""
+def pano_of(panos: Path, vid: str) -> Path | None:
+    """The panorama for a waypoint, whatever extension the camera wrote."""
+    for ext in IMAGES:
+        f = panos / (vid + ext)
+        if f.is_file():
+            return f
+    return None
+
+
+def marks(splat: Path) -> tuple[int, int]:
+    """(lanes marked, lanes total) in a generated world.
+
+    A walk exists only where both ends are marked, so this counts the lanes
+    that have a walk against the lanes leaving the waypoint at all.
+    """
+    f = splat / "world.paths.json"
+    if not f.is_file():
+        return 0, 0
     try:
-        with ply.open("rb") as fh:
-            head = fh.read(2048).decode("ascii", "replace")
-    except OSError:
-        return None
-    m = re.search(r"element vertex (\d+)", head)
-    return int(m.group(1)) if m else None
+        doc = json.loads(f.read_text())
+    except ValueError:
+        return 0, 0
+    return len(doc.get("walks") or []), len(doc.get("lanes") or [])
 
 
-def splat_metrics(splat: Path) -> dict:
-    """What is known about a built splat, from whatever it left behind."""
-    info = {}
-    f = splat / "world.info.json"
-    if f.is_file():
-        try:
-            info = json.loads(f.read_text())
-        except ValueError:
-            info = {}
-    ply = splat / "world.ply"
-    if "gaussians" not in info:
-        n = ply_gaussians(ply)
-        if n is not None:
-            info["gaussians"] = n
-            info["partial"] = True          # predates full metric recording
-    info["mb"] = round(ply.stat().st_size / 1e6, 1) if ply.is_file() else None
-    info["video"] = (splat / "walkthrough.mp4").is_file()
-    return info
-
-
-def fmt(v, spec="", dash="—"):
-    return dash if v is None else format(v, spec)
-
-
-def coverage(doc: dict, root: Path, only_missing: bool) -> tuple[list, int, int]:
-    """One row per place the map defines: what has been shot, whether it has
-    been reconstructed, and whether a walkthrough has been rendered from it."""
-    rows, have = [], 0
-    for c in doc["capture"]:
-        panos = root / c["panos"]
-        splat = root / c["splat"]
-        n = len(list(panos.glob("*"))) if panos.is_dir() else 0
-        built = (splat / "world.ply").is_file()
-        video = (splat / "walkthrough.mp4").is_file()
-        if n:
-            have += 1
-        if only_missing and n:
-            continue
-        if built:
-            state = "built + video" if video else "built"
-        else:
-            state = f"{n} panos" if n else "—"
-        rows.append((c["kind"], c["level"], c["id"], state))
-    return rows, have, len(doc["capture"])
-
-
-def quality_table(root: Path) -> list[dict]:
-    """Every built splat in the project, with what is known about each."""
-    out = []
-    for splat in sorted((root / "splats").glob("*")):
-        if not (splat / "world.ply").is_file():
-            continue
-        m = splat_metrics(splat)
-        # an edge id joins two vertices; a vertex id does not
-        m["kind"] = "edge" if "--" in splat.name else "vertex"
-        m["id"] = splat.name
-        out.append(m)
-    return out
-
-
-def print_quality(rows: list[dict]) -> None:
-    if not rows:
-        return
-    w = max(max(len(r["id"]) for r in rows), 2)
-    print()
-    print("built splats")
-    print(f"  {'id':{w}}  {'panos':>5} {'reg/views':>10} {'gaussians':>10} "
-          f"{'PSNR':>7} {'ratio':>6} {'max':>7} {'scale':>7} {'MB':>7}  video")
-    for r in rows:
-        reg, views = r.get("registered"), r.get("views")
-        regs = f"{reg}/{views}" if reg is not None and views else "—"
-        flags = []
-        if reg is not None and views and reg < views * THIN_REGISTRATION:
-            flags.append("thin SfM")
-        if r.get("psnr_db") is not None and r["psnr_db"] < LOW_PSNR:
-            flags.append("low PSNR")
-        if r.get("sfm_models", 1) > 1:
-            flags.append(f"{r['sfm_models']} fragments")
-        if (r.get("worst_ratio") or 0) > MAX_RATIO:
-            flags.append("needles — expect streaking")
-        if r.get("partial"):
-            flags.append("metrics not recorded — rebuild to fill in")
-        print(f"  {r['id']:{w}}  {fmt(r.get('panoramas'), '>5'):>5} "
-              f"{regs:>10} {fmt(r.get('gaussians'), '>10,'):>10} "
-              f"{fmt(r.get('psnr_db'), '>7.2f'):>7} "
-              f"{fmt(r.get('worst_ratio'), '>6.1f'):>6} "
-              f"{fmt(r.get('metric_scale'), '>7.4f'):>7} "
-              f"{fmt(r.get('mb'), '>7.1f'):>7}  "
-              f"{'yes' if r['video'] else '—'}"
-              + (f"   ({'; '.join(flags)})" if flags else ""))
-    print(f"  -- {len(rows)} splat(s). PSNR is on held-out *viewpoints* — a "
-          f"whole standpoint the")
-    print(f"     training never saw, so it tests depth and not just direction. "
-          f"'—' means the walk")
-    print(f"     was too short to spare one. It says the splat matches the "
-          f"photographs, not that")
-    print(f"     the room is covered — that is what the capture count above "
-          f"tells you.")
+def state_of(root: Path, vid: str) -> tuple[str, bool]:
+    """(what stage this waypoint has reached, whether it is finished)."""
+    panos = root / "panos"
+    pano = pano_of(panos, vid)
+    if not pano:
+        return "—", False
+    if not (panos / ".aligned" / (pano.name + ".json")).is_file():
+        return "shot, not aligned", False
+    splat = root / "splats" / vid
+    if not (splat / "world.ply").is_file():
+        return "aligned, not generated", False
+    done, total = marks(splat)
+    if not total:
+        return "built, no lanes", False
+    if done < total:
+        return f"built, {done}/{total} lanes walkable", False
+    return f"built, {total} lanes walkable", True
 
 
 def report(project_dir: Path, only_missing: bool = False) -> int:
@@ -149,15 +79,29 @@ def report(project_dir: Path, only_missing: bool = False) -> int:
 
     for path in plans:
         doc = json.loads(path.read_text())
+        rows, ready = [], 0
+        ids = [v["id"] for data in doc["levels"].values()
+               for v in data["vertices"]]
+        for vid in ids:
+            state, ok = state_of(project_dir, vid)
+            ready += ok
+            if not (only_missing and ok):
+                rows.append((vid.split(".")[0], vid, state))
         print(f"{doc['project']}/{doc['map']}")
-        rows, have, total = coverage(doc, project_dir, only_missing)
-        width = max((len(r[2]) for r in rows), default=10)
-        for kind, level, cid, state in rows:
-            print(f"  {kind:6} {level:5} {cid:{width}}  {state}")
-        note = "  (showing only what is missing)" if only_missing else ""
-        print(f"  -- {have}/{total} captured{note}")
+        if rows:
+            width = max(len(r[1]) for r in rows)
+            for level, vid, state in rows:
+                print(f"  {level:5} {vid:{width}}  {state}")
+        note = "  (showing only what is unfinished)" if only_missing else ""
+        print(f"  -- {ready}/{len(ids)} waypoints walkable{note}")
 
-    print_quality(quality_table(project_dir))
+    known = {v["id"] for p in plans
+             for data in json.loads(p.read_text())["levels"].values()
+             for v in data["vertices"]}
+    for splat in sorted(project_dir.glob("splats/*/world.ply")):
+        if splat.parent.name not in known:
+            print(f"  (splats/{splat.parent.name} is built but is not a "
+                  f"waypoint of any map)")
     return 0
 
 

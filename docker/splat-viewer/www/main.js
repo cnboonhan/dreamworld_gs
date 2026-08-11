@@ -1130,43 +1130,6 @@ function tourPlace(t) {
     viewMatrix = m;
 }
 
-// A route is a walk across several corridors, and the splats stream along it.
-//
-// This works only because each splat is already in building coordinates — it
-// was placed by the poses its capture recorded — so two of them become one
-// scene by putting their gaussians in the same buffer. Nothing is merged,
-// blended or re-solved: the worker depth-sorts the union exactly as it sorts
-// one splat, and neither the sort nor the shader learns there was more than
-// one. The tour parameter then runs 0..1 across the whole building, so play,
-// pause, scrub and speed work over the route for free.
-const route = {
-    on: false, base: "", segments: [], doors: [],
-    cache: new Map(),      // splat url -> its packed 32-byte records
-    resident: "",          // the window currently in the worker
-    busy: false, dir: 1, lastT: 0, note: "",
-};
-
-/** The segment covering this point of the tour. */
-function segmentAt(t) {
-    const s = route.segments;
-    for (let i = 0; i < s.length; i++) if (t <= s[i].t_end) return i;
-    return Math.max(0, s.length - 1);
-}
-
-/** What to keep resident: where you are, where you are going, where you were.
- *
- * Crossing a vertex means both its corridors are loaded before you reach it,
- * so the junction is never half-built; keeping the one behind means turning
- * round costs nothing. Three splats is ~30 MB here against ~90 MB for this
- * route and far more for a long one — the window is the point.
- */
-function windowAt(i, dir) {
-    const n = route.segments.length;
-    return [...new Set([i, i + dir, i - dir])].filter((k) => k >= 0 && k < n);
-}
-
-const windowKey = (w) => w.slice().sort((a, b) => a - b).join(",");
-// L11.cafe reads as cafe on the tour bar; the level is there to disambiguate
 // unnamed vertices, and on a single-level route it is noise
 const shortName = (s) => String(s).replace(/^[^.]*\./, "");
 
@@ -1182,9 +1145,7 @@ async function main() {
     // spawn camera tagged to the splat: <name>.ply -> <name>.cam.json
     // (written by the generator; without it the default camera is arbitrary
     //  and scenes whose up-axis isn't +Y look upside down until you drag)
-    // (a route spans several splats, each with its own spawn camera, so it
-    //  picks the camera itself further down and this would only 404)
-    if (carousel && !params.get("route")) {
+    if (carousel) {
         try {
             const camUrl = url.href.replace(/\.ply$/, "") + ".cam.json";
             const camRes = await fetch(camUrl);
@@ -1233,109 +1194,54 @@ async function main() {
         carousel = false;               // the tour owns the camera now
     };
 
-    // ?route=<project>/<from>__<to> — the traversal the planner wrote, rather
-    // than one splat. The route replaces the tour's path with the walk through
-    // the building; which splat is loaded then follows from where you are.
-    const routeParam = params.get("route");
-    if (routeParam) {
-        const rel = /\.json$/.test(routeParam) ? routeParam
-            : `files/${routeParam.split("/")[0]}/traversals/` +
-              `${routeParam.split("/").slice(1).join("/")}.route.json`;
-        const res = await fetch(new URL(rel, location.href).href);
-        if (!res.ok) throw new Error(`${res.status} no route at ${rel}`);
-        const doc = await res.json();
-        if (!Array.isArray(doc.points) || doc.points.length < 2)
-            throw new Error(`route ${rel} has no path`);
-        route.on = true;
-        route.segments = doc.segments || [];
-        route.doors = doc.doors || [];
-        // splat paths in the route are relative to the project
-        route.base = new URL(`files/${doc.project}/`, location.href).href;
-        // the heading follows the route; there is no single spawn camera for
-        // one, since every splat it crosses has its own
-        tourInit(doc, true);
-        showTourBar();
-        // a walking pace, so a long route is not a sprint
-        tour.seconds = Math.min(60, Math.max(5, Math.round((doc.metres || 10) * 1.5)));
-        document.getElementById("tourSecs").value = tour.seconds;
-        document.getElementById("tourNote").textContent =
-            (doc.waypoints || []).map(shortName).join(" → ") +
-            `  ·  ${doc.metres} m`;
-    } else {
-        // the capture path, for the tour: <name>.ply -> <name>.path.json
-        // The tour is how a scene opens: it plays straight away, gliding along
-        // the line the panoramas were shot from. That is the only part of the
-        // world any camera actually observed, so it is where the splat looks
-        // right.
-        // A world generated at a waypoint has no single walk: it has one per
-        // corridor leaving it, in world.paths.json. Riding one line through a
-        // junction picks a corridor arbitrarily and ignores the rest.
-        let picked = false;
-        try {
-            const many = await fetch(url.href.replace(/\.ply$/, "") + ".paths.json");
-            if (many.ok) {
-                const doc = await many.json();
-                if (Array.isArray(doc.lanes) && doc.lanes.length) {
-                    window.__openPanel = (d) => {
-                        const old = document.getElementById("edges");
-                        if (old) old.remove();
-                        edgePicker(d, window.__rideWalk);
-                    };
-                    window.__rideWalk = (w, d) => {
-                        // not follow: the camera keeps the heading you gave it
-                        // and simply travels the corridor. Swinging it to face
-                        // the path throws away the view you were lining up,
-                        // which is the work this panel exists for.
-                        const was = cameraForward();
-                        tourInit({points: w.points, up: d.up}, true);
-                        if (was) tourTurn(was);
-                        showTourBar();
-                        // start fetching the world this corridor ends at, so it
-                        // is ready before the walk is
-                        const proj = decodeURIComponent(location.search)
-                            .match(/files\/([^/]+)\//);
-                        const level = d.waypoint.split(".")[0];
-                        window.__cameFrom = d.waypoint;
-                        if (proj && window.prepareArrival)
-                            window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
-                    };
-                    edgePicker(doc, window.__rideWalk);
-                    picked = true;
-                }
-            }
-        } catch (err) {}
-        try {
-            if (picked) throw 0;
-            const pathRes = await fetch(url.href.replace(/\.ply$/, "") + ".path.json");
-            if (pathRes.ok) {
-                const p = await pathRes.json();
-                if (Array.isArray(p.points) && p.points.length > 1) {
-                    tourInit(p);
-                    showTourBar();
-                }
-            }
-        } catch (err) {}
+    // The tour, from <name>.paths.json: one walk per corridor leaving this
+    // waypoint. A world generated at a waypoint has no single walk, and riding
+    // one line through a junction would pick a corridor arbitrarily and ignore
+    // the rest — so the panel offers them all and you choose.
+    try {
+        const res = await fetch(url.href.replace(/\.ply$/, "") + ".paths.json");
+        const doc = res.ok ? await res.json() : null;
+        if (doc && Array.isArray(doc.lanes) && doc.lanes.length) {
+            window.__openPanel = (d) => {
+                const old = document.getElementById("edges");
+                if (old) old.remove();
+                edgePicker(d, window.__rideWalk);
+            };
+            window.__rideWalk = (w, d) => {
+                // not follow: the camera keeps the heading you gave it and
+                // simply travels the corridor. Swinging it to face the path
+                // throws away the view you were lining up, which is the work
+                // this panel exists for.
+                const was = cameraForward();
+                tourInit({points: w.points, up: d.up}, true);
+                if (was) tourTurn(was);
+                showTourBar();
+                // start fetching the world this corridor ends at, so it is
+                // ready before the walk is
+                const proj = decodeURIComponent(location.search)
+                    .match(/files\/([^/]+)\//);
+                const level = d.waypoint.split(".")[0];
+                window.__cameFrom = d.waypoint;
+                if (proj && window.prepareArrival)
+                    window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
+            };
+            edgePicker(doc, window.__rideWalk);
+        }
+    } catch (err) {
+        console.error("paths.json:", err);
     }
 
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
-    // A route streams its splats in as the tour reaches them, so there is no
-    // one file to pull here; everything below reads splatData, which the
-    // loader replaces each time the resident window changes.
-    let req = null, reader = null;
-    let splatData = new Uint8Array(0);
-    if (!route.on) {
-        req = await fetch(url, {
-            mode: "cors", // no-cors, *cors, same-origin
-            credentials: "omit", // include, *same-origin, omit
-        });
-        console.log(req);
-        if (req.status != 200)
-            throw new Error(req.status + " Unable to load " + req.url);
-        reader = req.body.getReader();
-        splatData = new Uint8Array(req.headers.get("content-length"));
-    }
+    const req = await fetch(url, {
+        mode: "cors", // no-cors, *cors, same-origin
+        credentials: "omit", // include, *same-origin, omit
+    });
+    if (req.status != 200)
+        throw new Error(req.status + " Unable to load " + req.url);
+    const reader = req.body.getReader();
+    let splatData = new Uint8Array(req.headers.get("content-length"));
 
-    const downsample = route.on || splatData.length / rowLength > 500000
+    const downsample = splatData.length / rowLength > 500000
         ? 1 : 1 / devicePixelRatio;
     console.log(splatData.length / rowLength, downsample);
 
@@ -1611,77 +1517,7 @@ async function main() {
         return true;
     };
 
-    const routeLoad = async (rel) => {
-        const res = await fetch(new URL(rel, route.base).href);
-        if (!res.ok) throw new Error(`${res.status} ${rel}`);
-        const ply = await res.arrayBuffer();
-        return await new Promise((resolve) => {
-            unpacking = resolve;
-            unpacker.postMessage({ ply, save: false }, [ply]);
-        });
-    };
-
-    /** Put a window's splats on screen as one buffer. */
-    const routeShow = (win, key) => {
-        const parts = win.slice().sort((a, b) => a - b)
-            .map((k) => route.cache.get(route.segments[k].splat))
-            .filter(Boolean);
-        const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-        let at = 0;
-        for (const p of parts) { all.set(p, at); at += p.length; }
-        // exactly the shape a single splat arrives in, so the sort and the
-        // shader below are untouched — the union is just a longer buffer
-        splatData = all;
-        worker.postMessage({ buffer: all.buffer,
-                             vertexCount: Math.floor(all.length / rowLength) });
-        route.resident = key;
-        console.log(`route: ${win.length} splat(s) resident, ` +
-                    `${Math.floor(all.length / rowLength)} gaussians`);
-    };
-
     /** Each frame: where are we, which way are we going, what should be loaded. */
-    const routeTick = () => {
-        if (!route.on) return;
-        if (tour.t !== route.lastT) {
-            route.dir = tour.t > route.lastT ? 1 : -1;   // scrubbing back loads back
-            route.lastT = tour.t;
-        }
-        const i = segmentAt(tour.t);
-        const seg = route.segments[i];
-        if (seg) {
-            const door = route.doors.find((d) => Math.abs(d.t - tour.t) < 0.02);
-            const note = `${shortName(seg.from)} → ${shortName(seg.to)}` +
-                (door ? `  ·  door ${shortName(door.name)}` : "");
-            if (note !== route.note) {
-                route.note = note;
-                document.getElementById("tourNote").textContent = note;
-            }
-        }
-        if (route.busy) return;
-        const win = windowAt(i, route.dir);
-        const key = windowKey(win);
-        if (key === route.resident) return;
-        route.busy = true;
-        (async () => {
-            try {
-                for (const k of win) {
-                    const s = route.segments[k].splat;
-                    if (!route.cache.has(s)) route.cache.set(s, await routeLoad(s));
-                }
-                // drop what left the window, so memory tracks the window and
-                // not the length of the route
-                const keep = new Set(win.map((k) => route.segments[k].splat));
-                for (const u of [...route.cache.keys()])
-                    if (!keep.has(u)) route.cache.delete(u);
-                routeShow(win, key);
-            } catch (err) {
-                console.error("route:", err);
-                document.getElementById("message").innerText = String(err);
-            } finally {
-                route.busy = false;
-            }
-        })();
-    };
 
     let activeKeys = [];
     let currentCameraIndex = 0;
@@ -2151,10 +1987,6 @@ async function main() {
             }
             tourPlace(tour.t);
         }
-        // outside the tour guard: leaving the path to fly must not strand you
-        // with whatever happened to be loaded
-        routeTick();
-
         if (isJumping) {
             jumpDelta = Math.min(1, jumpDelta + 0.05);
         } else {
@@ -2264,10 +2096,6 @@ async function main() {
     let bytesRead = 0;
     let lastVertexCount = -1;
     let stopLoading = false;
-
-    // a route has no single file to stream: routeTick loads each splat as the
-    // tour reaches it, and the frame loop is already running
-    if (route.on) return;
 
     while (true) {
         const { done, value } = await reader.read();

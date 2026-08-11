@@ -133,6 +133,8 @@ def edge_id(level: str, a: str, b: str) -> str:
 def plan(project: str, map_name: str, rows: list[dict]) -> dict:
     """Name every vertex and edge, and record what to photograph where.
 
+    Vertices are what you photograph; edges are what you walk between them.
+
     This is the join between the two halves: a capture belongs to a place in
     the building, and this file says which places exist and what each is
     called."""
@@ -157,7 +159,13 @@ def plan(project: str, map_name: str, rows: list[dict]) -> dict:
                      "lift": bool(props.get("lift") or props.get("lift_cabin"))}
             levels.setdefault(level, {"vertices": [], "edges": []})
             levels[level]["vertices"].append(entry)
-
+            # One panorama per waypoint, as a file rather than a folder:
+            # HY-World imagines a whole world from a single vantage point, so
+            # standing at a place and shooting once is the whole capture. The
+            # corridors between them are then walks across worlds, not
+            # captures of their own.
+            capture.append({"kind": "vertex", "id": vid, "level": level,
+                            "pano": f"panos/{vid}", "splat": f"splats/{vid}"})
 
         seen = set()
         for lane in (data.get("lanes") or []):
@@ -176,12 +184,6 @@ def plan(project: str, map_name: str, rows: list[dict]) -> dict:
                 "length_m": round(((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5, 2),
                 "door": props.get("door_name") or "",
             })
-            # Only edges are captured. A corridor walk starts and ends on its
-            # two vertices, so the vertex views are already in it — and the
-            # capture burden halves. Vertices stay above as routing nodes.
-            capture.append({"kind": "edge", "id": eid, "level": level,
-                            "panos": f"panos/{eid}",
-                            "splat": f"splats/{eid}"})
 
     doc = {"project": project, "map": map_name, "levels": levels,
            "capture": capture}
@@ -200,10 +202,10 @@ def plan(project: str, map_name: str, rows: list[dict]) -> dict:
     )
     create_table_artifact(
         key=f"capture-plan-{project}-{map_name}".lower().replace("_", "-"),
-        table=[{"kind": c["kind"], "id": c["id"], "level": c["level"],
-                "panoramas go in": c["panos"]} for c in capture],
-        description=f"Where to photograph {project}/{map_name}: one folder per "
-                    f"vertex and per edge",
+        table=[{"id": c["id"], "level": c["level"],
+                "panorama goes in": f"{c['pano']}.jpg"} for c in capture],
+        description=f"Where to photograph {project}/{map_name}: one panorama "
+                    f"per waypoint",
     )
     return {"world": f"{project}/worlds/{map_name}/{map_name}.world",
             "nav_graph": f"{project}/worlds/{map_name}/nav_graphs/0.yaml",

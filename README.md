@@ -1,9 +1,10 @@
 # dreamworld_gs
 
 Two halves of one building. **RMF** simulates it from an annotated floorplan —
-doors, lifts, waypoints, the lanes between them. **Gaussian splatting**
-reconstructs what it actually looks like, from 360 photos of the real place.
-They meet at the nav graph.
+doors, lifts, waypoints, the lanes between them. **Gaussian splatting** shows
+what it actually looks like, generated from one 360 photo taken at each
+waypoint. They meet at the nav graph: a waypoint is a place you photograph, and
+the lanes leaving it are the ways you can walk out.
 
 Everything runs on this box, offline, behind `docker compose`.
 
@@ -16,12 +17,12 @@ assets/projects/<project>/
   maps/            <map>.building.yaml + floorplans             (you author)
   worlds/<map>/    <map>.world, models/, nav_graphs/0.yaml,
                    capture_plan.json                            (generated)
-  panos/<id>/      360 captures of one corridor                 (you shoot)
+  panos/<id>.jpg   one 360, taken standing at that waypoint     (you shoot)
   splats/<id>/     world.ply, world.usdz, world.cam.json,
-                   world.path.json, walkthrough.mp4             (generated)
+                   world.paths.json                             (generated)
 ```
 
-Panoramas live under the place they photograph, so a splat is addressed by
+A panorama is named for the place it was taken, so a splat is addressed by
 where it is in the building rather than by a name someone invented. See
 [naming](#naming) for the ids.
 
@@ -32,11 +33,11 @@ justfile                 every workflow — just --list
 compose.yaml             the seven services; reads DW_PROJECT from .env
 samples/                 starter projects, seeded into assets/ by `just setup`
 docker/
-  splat-generator/       reconstruct + generate + render-video flows (GPU)
+  splat-generator/       the world-generation flow (GPU)
   splat-viewer/          WebGL splat viewer
   pano-viewer/           360 viewer for the input panoramas
   rmf-tools/             RMF + Gazebo + traffic editor + the build-world flow
-scripts/                 host-side model downloads
+scripts/                 host-side tools: model downloads, panorama alignment
 assets/                  gitignored: model weights, job history, projects/
 ```
 
@@ -98,11 +99,8 @@ list of splats and worlds rather than random adjectives:
 | Job | Runs in | Stages | Produces |
 | --- | --- | --- | --- |
 | `build-world` | `worldjobs` | generate → inspect → plan | one world + nav graph + capture plan |
-| `capture-edge` | `worldjobs` | capture | one corridor's panoramas |
-| `reconstruct-world` | `generator` | reproject → SfM → gaussian splatting → export | one splat, measured |
-| `generate-world` | `generator` | 6 HY-World stages | one splat, imagined |
-| `render-video` | `generator` | plan path → render → encode | one walkthrough |
-| `plan-route` | `generator` | route → resolve → write | one route through the building |
+| `capture-edge` | `worldjobs` | capture | one corridor's panoramas, in simulation |
+| `generate-world` | `generator` | 6 HY-World stages | one waypoint's world |
 
 Two workers, because the work needs different machines: world generation wants
 Gazebo and `rmf_building_map_tools`, the splat flows want CUDA. Each is served
@@ -133,64 +131,54 @@ just world
 start if it is missing, so a fresh checkout comes up with something to look at.
 
 **Panoramas of a corridor, without walking it.** The simulated building can be
-photographed, so the whole pipeline runs with no camera:
+photographed, so there is something to compare a real capture against:
 
 ```bash
 just capture L11.cafe--v7        # -> panos/L11.cafe--v7/000.png ...
-just capture L11.cafe--v7 0.25   # stop closer together, for reconstructing
 just capture-all                 # every corridor not yet shot, one job each
 ```
 
-A camera weaves along the lane, stopping every half metre and taking a full 360 at
-each, alternating between 1.25 m and 1.95 m so every surface is seen from two
-different angles rather than ten nearly identical ones. The weave matters: walking a corridor straight is the worst
-baseline for the surfaces you are walking toward, because consecutive
-standpoints move *along* the line of sight and the far wall barely shifts
-between them. Weaving gives lateral baseline, which is what triangulates depth
-— and it is how photogrammetry is done by hand.
+A camera weaves along the lane, stopping every half metre and taking a full 360
+at each, alternating between 1.25 m and 1.95 m so every surface is seen from two
+angles rather than ten nearly identical ones. Doors and lifts on the lane are
+opened first, since a closed one is a wall the camera cannot see past.
+
 It writes **panoramas and nothing else** — no poses, no positions, no marker
 that it came from a simulator — because a synthetic run that leaked what a real
 capture cannot would be testing the pipeline under conditions it never faces.
 
-The run reports the interval it actually walked, because a corridor's length is
-rarely a whole number of strides. **Pass that to `generate`**: the interval is
-what makes the reconstruction metric, so getting it wrong scales the whole
-splat. Walking 0.549 m apart and reconstructing as 0.5 m makes it 9% small,
-which then shows up as an alignment residual.
-
-**A splat**, from panoramas of one corridor:
+**A world**, from one panorama of one waypoint:
 
 ```bash
-just generate L11.cafe--v7       # panos/<id>/ -> splats/<id>/
-just generate L11.cafe--v7 0.5   # if you walked 0.5m apart (default 0.25)
+just generate L11.v6             # panos/L11.v6.jpg -> splats/L11.v6/
 ```
 
-A *folder* of panoramas is reconstructed together — reproject → COLMAP →
-gaussian splatting — and is faithful to the real room. A *single image file*
-takes the generative HY-World path instead: one real vantage point, the rest
-imagined. Output is `world.ply` (web) and `world.usdz` (Isaac Sim, NuRec).
+HY-World takes the single vantage point and imagines the rest: it plans a
+trajectory over a navmesh, renders along it, expands that into consistent video
+with Wan2.1, and trains a splat on the ~400 views that come out. Output is
+`world.ply` (web) and `world.usdz` (Isaac Sim, NuRec).
 
-The spacing argument is the distance you walked between standpoints. SfM is
-scale-free, so this is the only thing that puts the world in metres; pass `0`
-to leave it unitless.
+`generate` skips a waypoint that already has a `world.ply` — delete the splat
+directory to rebuild. One waypoint per job, so each gets its own run to inspect,
+retry or compare.
 
-`generate` skips a scene that already has a `world.ply` — delete the scene
-directory to rebuild.
-
-**A video**, along the walk:
+**Facing the right way.** A 360 records no heading, so a panorama arrives turned
+by whatever way the photographer happened to be standing, and the world
+generated from it inherits that. The alignment tool puts it right:
 
 ```bash
-just video L11.cafe--v7@world    # -> splats/<id>/walkthrough.mp4
+uv run scripts/align_panos.py    # http://localhost:8085
 ```
 
-The camera rides `world.path.json`, which the build writes beside the splat: a
-generated world's corridor straight out of the building map, a reconstructed
-one's walk through its own standpoints. It is paced at walking speed from the
-length recorded there, so a one-metre corridor and a six-metre one are watched
-at the same speed rather than stretched to a common duration.
+Pick a waypoint, pick a corridor leaving it, and rotate the panorama until you
+are looking down that corridor. Saving rewrites the file itself, so everything
+downstream — generation, the viewer, the walks — loads it already facing the
+building's +X, and nothing has to carry a correction around. `panos/.aligned/`
+records what was applied, which is how `just plan` knows a panorama has been
+looked at.
 
-One scene per job — build them one at a time and each gets its own run to
-inspect, retry or compare.
+Do this **before** generating: the world is built from the panorama, so turning
+it afterwards means generating again.
 
 ## Moving a project
 
@@ -210,27 +198,25 @@ already exists.
 
 ## Naming
 
-Every part of the building gets an id, and its panoramas go in the folder of
-that name. `build-world` computes them and writes
+Every part of the building gets an id, and a panorama is named for the place it
+was taken. `build-world` computes the ids and writes
 `worlds/<map>/capture_plan.json`; `just plan` reads it back.
 
-**Corridors are what you capture.** A walk from `a` to `b` starts and ends on
-the two vertices, so the vertex views are already in it — and the capture
-burden halves, 26 walks instead of 53 places. Junctions come out better than a
-dedicated capture would: `L11.lift_lobby` has four corridors meeting it, so
-four walks each contribute a standpoint there from a different direction.
+**Waypoints are what you photograph.** HY-World imagines a whole world from one
+vantage point, so a place needs one 360 rather than a walk, and the corridors
+between places are then walks *across* worlds rather than captures of their own.
 
 | | id | goes in |
 | --- | --- | --- |
-| a corridor between two waypoints | `<level>.<a>--<b>` | `panos/L11.cafe--v7/` |
-| its endpoints, named | `<level>.<name>` | — already in the corridor |
-| its endpoints, unnamed | `<level>.v<index>` | — already in the corridor |
+| a waypoint, named | `<level>.<name>` | `panos/L11.cafe.jpg` |
+| a waypoint, unnamed | `<level>.v<index>` | `panos/L11.v7.jpg` |
+| the corridor between two of them | `<level>.<a>--<b>` | — walked, not shot |
 
 Three decisions worth knowing:
 
 **The level is always part of the id.** Waypoint names are not unique across a
 building — the sample map has a `lift_lobby` on L1 and another on L11, one
-directly above the other. Two different places must not share a folder.
+directly above the other. Two different places must not share a name.
 
 **Unnamed vertices fall back to their index.** Most vertices are unnamed
 corners with no other handle. The index comes from the nav graph, so it can
@@ -238,102 +224,73 @@ shift if you insert vertices in the traffic editor.
 
 **An edge is one corridor, not two.** Every lane in these graphs is
 bidirectional, so the endpoints are sorted and the edge gets one name whichever
-way you walked it. The level is written once, since lanes never cross levels.
+way you walk it. The level is written once, since lanes never cross levels.
 
 ```bash
-just plan            # every id, what is captured for it, and how good it came out
-just plan missing    # only what still needs photographing
-just capture L11.cafe--v7     # photograph it in sim
-just generate L11.cafe--v7    # panos/<id>/ -> splats/<id>/
+just plan            # every waypoint and how far along it is
+just plan missing    # only what is unfinished
+just vertices L11    # the waypoints on one level, with their positions
 ```
 
-`just plan` ends with a table of every splat already built, so two of them can
-be compared without opening two flow runs:
+`just plan` reads as a checklist, because that is what it is:
 
 ```
-built splats
-  id        panos  reg/views  gaussians    PSNR   scale      MB  video
-  L11.cafe      4      48/48    778,449   27.58  0.1238    52.9  yes   (2 fragments)
+  L11   L11.v6                 built, 2 lanes walkable
+  L11   L11.v5                 aligned, not generated
+  L11   L11.v4                 shot, not aligned
+  L11   L11.cafe               —
+  -- 2/27 waypoints walkable
 ```
 
-Each splat records these in `world.info.json` at export. What to watch:
-**reg/views** well under half means SfM fragmented and only the largest piece
-was trained; **PSNR** is measured on held-out views, so it says the splat
-matches the photographs — not that the room is covered, which is what the
-capture count tells you; **scale** is the multiplier that put it in metres.
-
-`generate` reads `panos/<id>/` and writes `splats/<id>/`, so the id is the only
-name you ever type.
+A waypoint is walkable when four things are true, and the state names whichever
+is missing first: the panorama exists, it has been turned to face the building,
+a world has been generated from it, and its neighbours have been marked in that
+world.
 
 ## Walking the building
 
-Reconstructing a corridor now places it where it belongs. A COLMAP solve is
-metric in scale but arbitrary in origin and orientation, so the `align` stage
-solves the rigid transform that puts it in the building's frame and rewrites
-`world.ply` there. Three constraints, all from the capture itself:
-
-| | |
-| --- | --- |
-| the walk axis | → the lane's direction |
-| the camera up | → the building's up |
-| the walk centre | → the lane's midpoint |
-
-`world.info.json` records the transform and `align_residual_m`, how far the
-walk's own endpoints land from the lane's. What the capture *cannot* say is
-which end you started from — the axis fits the lane just as well backwards — so
-that comes from the id by convention (`L11.cafe--v7` means walked cafe → v7),
-overridable with a `capture.json` next to the panoramas.
-
-With every corridor in one frame, a route is just data:
-
-```bash
-just route cafe playpen      # -> traversals/L11.cafe__L11.playpen.route.json
-```
-
-That holds the path through the building in metres and which splat covers which
-stretch of it. Nothing is rendered — the viewer walks it live:
+The viewer opens one waypoint's world:
 
 ```
-http://localhost:8081/?route=multilevel_office/L11.cafe__L11.v6
+http://localhost:8081/?url=files/multilevel_office/splats/L11.v6/world.ply
 ```
 
-The tour parameter now runs 0→1 across the whole route rather than along one
-capture, so play, pause, scrub and speed work over the building unchanged.
-Three splats stay resident — where you are, where you are going, and where you
-were — so a junction is loaded before you reach it and turning round costs
-nothing; what leaves the window is dropped, and memory tracks the window rather
-than the length of the route.
+Each generated world stands alone — its own scale, its own origin — so there is
+no single frame to place them all in and no route to precompute. What they do
+share is a heading, because every panorama was aligned to the building before
+its world was generated. That is enough: a corridor is a direction, and a
+direction is comparable across worlds even when nothing else is.
 
-The splats are concatenated into one buffer and depth-sorted together, which
-works only because each was placed in building coordinates. Nothing is merged
-or blended: the renderer never learns there was more than one.
+**Marking a corridor.** `world.paths.json` lists the lanes leaving this
+waypoint, straight out of the nav graph, with the bearing and length of each.
+What it cannot know is where in *this* world those neighbours are, since the
+world has no building coordinates. So you say: stand where the corridor ends
+and mark it. Two marks make a walk — one at each end — and no walk exists until
+both are placed, which is what `just plan` counts.
 
-For someone not at the machine, the same walk renders to a file:
-
-```bash
-just route-video L11.cafe L11.v3    # -> traversals/L11.cafe__L11.v3.mp4
-```
-
-That is also the check the viewer cannot easily make. Every frame is rasterised
-from the union of the corridors' gaussians, so a vertex where two independently
-reconstructed splats disagree shows up as a step.
-
+**Crossing.** Riding a walk to the end hands over to the world at the far end:
+its splat is fetched and unpacked while you are still walking, in a second
+worker so the one on screen keeps rendering, and swapped in when you arrive.
+The camera keeps its heading through the swap — which is the whole reason the
+panoramas were aligned — so a corridor you were walking down is still ahead of
+you in the world you land in. No loading screen, and nothing is stitched: the
+renderer only ever holds one world.
 
 ## Notes
 
-- **Capture coverage dominates quality.** 3 → 7 standpoints took one room from
-  16.6 to 28.8 dB PSNR, far more than any training knob. Scale spacing to the
-  room: 0.5m for a small one, 2–3m for an atrium, since a 0.5m baseline against
-  10–20m walls is only ~3% parallax. Bare white walls and glass give SfM
-  nothing to match.
-- **Watch the registered-image count** the reconstruct job logs. Well under the
-  number of reprojected views means SfM fragmented, and only the largest
-  fragment is trained.
+- **Align before you generate.** The world is built from the panorama, so a
+  panorama turned the wrong way produces a world turned the wrong way, and the
+  only fix is to generate it again.
+- **A splat is only as good as the one photo it came from.** Everything past
+  the first vantage point is imagined, so a panorama shot in the middle of a
+  junction gives a better world than one shot against a wall.
 - **Splats train in classic, not antialiased, mode** so the PLY stays portable
   across SuperSplat, web viewers and Isaac.
 - **SAM 3 weights** come from ModelScope; `facebook/sam3` on HuggingFace is
   gated. See `scripts/README.md`.
 - **Upstream patches** to HY-World live in `docker/splat-generator/hyworld.patch`;
   environment fixes are documented inline in `build_env.sh`.
+- **The viewer is baked into its image**, so a change to `main.js` needs
+  `just build && just up` before nginx serves it.
 
 Third-party code and model licenses: see `NOTICE.md`.

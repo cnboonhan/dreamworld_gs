@@ -138,30 +138,15 @@ use PROJECT:
 down:
     docker compose down
 
-# Reconstruct one part of the building from its panoramas.
+# Generate the world at one waypoint, from one panorama of it.
 #
-# Panoramas live under the place they photograph:
+# panos/<id>.jpg is a single 360 of a place, aligned so its centre column faces
+# the building's +X. HY-World imagines the rest: ~400 views out of the one, then
+# a splat trained on them. `just plan` lists the ids this project's map defines,
+# and `just vertices` the ones on a level.
 #
-#   panos/vertices/<id>/   a standpoint — one room, one junction, one waypoint
-#   panos/edges/<a>--<b>/  the corridor between two of them
-#
-# and the splat lands in splats/vertices/<id>/ or splats/edges/<a>--<b>/.
-# `just plan` lists the ids this project's map defines.
-#
-# What you hand it decides the pipeline:
-#
-#   a folder of panoramas   several viewpoints of a real place, so geometry is
-#                           measured — reproject, COLMAP, gaussian splatting.
-#                           This is the path for real 360 captures.
-#   a single image file     one viewpoint, so the rest is imagined — the
-#                           generative HY-World path, which is the only thing
-#                           in this repo that uses the VLM.
-#
-# spacing: metres between consecutive standpoints, default 0.5. SfM is
-# scale-free, so this is what puts the world in metres, which a simulator
-# needs; pass 0 to leave it unitless. ^C stops following, the job keeps
-# running (watch it at :4200).
-generate id spacing="0.25" proj=project: up
+# ^C stops following; the job keeps running (watch it at :4200).
+generate id proj=project: up
     #!/usr/bin/env bash
     set -euo pipefail
     dir={{assets}}/projects/{{proj}}
@@ -170,17 +155,16 @@ generate id spacing="0.25" proj=project: up
         just projects >&2
         exit 1
     fi
-    src=$(ls -d "$dir"/panos/{{id}} "$dir"/panos/{{id}}.* 2>/dev/null | head -1 || true)
+    src=$(ls -d "$dir"/panos/{{id}}.* 2>/dev/null | head -1 || true)
     if [ -z "$src" ]; then
-        echo "nothing to reconstruct for '{{id}}' in {{proj}}" >&2
-        echo "captured so far:" >&2
+        echo "no panorama for '{{id}}' in {{proj}}" >&2
+        echo "have:" >&2
         find "$dir/panos" -mindepth 1 -maxdepth 1 2>/dev/null \
             | sed "s|$dir/panos/|  |" >&2
-        echo "run 'just plan' for the ids this project's map defines" >&2
         exit 1
     fi
-    # ids contain dots (L11.cafe), so strip an extension only from a file
-    if [ -d "$src" ]; then id=$(basename "$src"); else id=$(basename "${src%.*}"); fi
+    # ids contain dots (L11.cafe), so strip the extension, not to the first dot
+    id=$(basename "${src%.*}")
     out="$dir/splats/$id"
     if [ -f "$out/world.ply" ]; then
         echo "{{proj}} $id: already built, skipping"
@@ -189,41 +173,16 @@ generate id spacing="0.25" proj=project: up
     fi
     mkdir -p "$out"
     win=/workspace/projects/{{proj}}
-
-    if [ -d "$src" ]; then
-        # `|| true`: an unmatched glob makes ls fail, and pipefail turns that
-        # into an exit before anything is submitted
-        n=$(find "$src" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' \) 2>/dev/null | wc -l || true)
-        # Two different jobs, because they are two different pieces of work: a
-        # simulated capture recorded where it stood, a real one cannot. The
-        # choice is made here, at submission, so the queue names which ran.
-        if [ -f "$src/poses.json" ]; then
-            echo "reconstructing {{proj}} $id from $n simulated panoramas (poses recorded)"
-            docker compose exec -T generator python submit.py \
-                reconstruct-simulated/dreamworld \
-                scene="$win/splats/$id" \
-                panos="$win/panos/$id"
-        else
-            echo "reconstructing {{proj}} $id from $n panoramas"
-            docker compose exec -T generator python submit.py \
-                reconstruct-world/dreamworld \
-                scene="$win/splats/$id" \
-                panos="$win/panos/$id" \
-                spacing={{spacing}}
-        fi
-    else
-        cp "$src" "$out/_input.${src##*.}"
-        # The generative pipeline reads panorama.png. One line, because a
-        # recipe body must be indented for `just` to parse it and that same
-        # indentation reaches `python -c` as an IndentationError — which is
-        # what this branch did, before anything else could run.
-        docker compose exec -T generator python -c "from pathlib import Path; import PIL.Image as I; I.MAX_IMAGE_PIXELS=None; d=Path('$win/splats/$id'); s=next(p for p in d.iterdir() if p.stem=='_input'); I.open(s).convert('RGB').save(d/'panorama.png'); s.unlink()"
-        docker compose exec -T generator python submit.py \
-            generate-world/dreamworld \
-            scene="$win/splats/$id" \
-            gpus={{gpus}} steps={{steps}}
-    fi
-    echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .path.json)"
+    cp "$src" "$out/_input.${src##*.}"
+    # HY-World reads panorama.png. One line, because a recipe body must be
+    # indented for `just` to parse it and that same indentation reaches
+    # `python -c` as an IndentationError — which is what this did, once.
+    docker compose exec -T generator python -c "from pathlib import Path; import PIL.Image as I; I.MAX_IMAGE_PIXELS=None; d=Path('$win/splats/$id'); s=next(p for p in d.iterdir() if p.stem=='_input'); I.open(s).convert('RGB').save(d/'panorama.png'); s.unlink()"
+    docker compose exec -T generator python submit.py \
+        generate-world/dreamworld \
+        scene="$win/splats/$id" \
+        gpus={{gpus}} steps={{steps}}
+    echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .paths.json)"
     echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
 
 # Build the Gazebo world + nav graph from a project's building map.
@@ -267,34 +226,6 @@ capture edge spacing="0.5" proj=project: up
         project={{proj}} edge={{edge}} spacing={{spacing}}
     @echo "-> assets/projects/{{proj}}/panos/{{edge}}/"
 
-# One generated world per corridor, from a single panorama of it.
-#
-# HY-World takes one vantage point and imagines the rest, so a corridor needs
-# one panorama, not a walk: this photographs it if that has not been done, then
-# hands one standpoint to generate-world — the one that can see the most of the
-# corridor, measured from the range map the capture wrote (see
-# tools/pick_panorama.py).
-#
-#   just world-edge L11.cafe--v7
-world-edge edge proj=project: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir={{assets}}/projects/{{proj}}
-    # Any panorama, not just a simulated one. This globbed *.png, and a real
-    # 360 camera writes .JPG — so a corridor already photographed by hand read
-    # as unphotographed, and the simulator was sent to shoot over it.
-    if ! compgen -G "$dir/panos/{{edge}}/*.[pPjJ]*[gG]" >/dev/null; then
-        just capture {{edge}} 0.5 {{proj}}
-    fi
-    pick=$(docker compose exec -T generator python /opt/tools/pick_panorama.py \
-        /workspace/projects/{{proj}}/panos/{{edge}} | tr -d '\r')
-    # keep the extension: a real capture arrives as .jpg, and naming a JPEG
-    # .png works only because PIL sniffs the content rather than the name
-    cp "$dir/panos/{{edge}}/$pick" "$dir/panos/{{edge}}@world.${pick##*.}"
-    echo "generating a world for {{edge}} from $pick"
-    # spacing is inert on this branch — one panorama, so nothing is walked
-    just generate "{{edge}}@world" 0.5 {{proj}}
-
 # Photograph every corridor that has no panoramas yet — one job each, so a bad
 # one is a single re-run rather than a lost batch.
 capture-all spacing="0.5" proj=project: up
@@ -314,42 +245,6 @@ capture-all spacing="0.5" proj=project: up
     n=$(printf '%s' "$todo" | grep -c . || true)
     echo "$n corridor(s) to photograph"
     for e in $todo; do just capture "$e" {{spacing}} {{proj}}; done
-
-# Plan the walk between two waypoints, as a route the viewer streams along.
-#
-# Writes traversals/<from>__<to>.route.json: the path through the building in
-# metres, and which splat covers which stretch of it. Nothing is rendered — the
-# viewer follows the polyline with its tour parameter and loads each splat as it
-# reaches it.
-#
-#   just route cafe playpen
-#   just route L11.cafe L11.apex_lab
-route start goal proj=project: up
-    docker compose exec -T generator python submit.py \
-        plan-route/dreamworld project={{proj}} start={{start}} goal={{goal}}
-    @echo "-> assets/projects/{{proj}}/traversals/"
-    @echo "   walk it: http://localhost:8081/?route={{proj}}/<from>__<to>"
-
-# Render a planned route to an mp4, for showing someone not at this machine.
-#
-# The viewer walks a route live and needs no render — this is the same walk
-# written to a file. It is also the check that the corridors meet without a
-# step at each vertex, since every frame is rasterised from the union of their
-# gaussians.
-#
-#   just route-video L11.cafe L11.v3
-route-video start goal proj=project: up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    f={{assets}}/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json
-    if [ ! -f "$f" ]; then
-        echo "no route {{start}} -> {{goal}} — run: just route {{start}} {{goal}}" >&2
-        exit 1
-    fi
-    docker compose exec -T generator python submit.py \
-        render-route/dreamworld \
-        route=/workspace/projects/{{proj}}/traversals/{{start}}__{{goal}}.route.json
-    echo "-> assets/projects/{{proj}}/traversals/{{start}}__{{goal}}.mp4"
 
 # Package a project into one tarball, to carry to another node.
 #
