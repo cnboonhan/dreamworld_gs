@@ -538,7 +538,13 @@ def _door(to, mode):
         except SystemExit as e:
             return {"ok": False, "error": str(e)}
     if tgt is None:
-        return {"ok": False, "error": f"not facing anything — face <waypoint> first"}
+        # A dead end or a lift cabin has one way out, so a bare `open_door` there is
+        # unambiguous — asking the operator to face the only option first is noise.
+        ns = [v for v, _ in ST["adj"].get(cur, [])]
+        if len(ns) == 1:
+            tgt = ns[0]
+        else:
+            return {"ok": False, "error": "not facing anything — face <waypoint> first"}
     name = door_between(cur, tgt)
     lift_here = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
     if not name and not lift_here:
@@ -600,7 +606,20 @@ def call_lift(level=""):
         lift = cabins[0]
     floor = str(level).strip() or ST["level"]
     res = bridge("/call_lift", {"lift": lift, "floor": floor})
-    return {"ok": True, "lift": lift, "floor": floor, "bridge": res}
+    # Riding it is not the same as calling it: you have ridden only if you were
+    # standing in the cabin when it moved. Then the graph underneath changes, and
+    # every level-keyed thing has to be rebuilt before the next tool call reads it.
+    rode = False
+    if floor != ST["level"] and ST["lift_of"].get(ST["cur"]) == lift:
+        t0 = time.time()
+        while time.time() - t0 < 120:
+            st = lift_states().get(lift) or {}
+            if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
+                break
+            time.sleep(0.5)
+        rode = switch_level(floor, lift)
+    return {"ok": True, "lift": lift, "floor": floor, "rode": rode,
+            "at": lab(ST["cur"]), "level": ST["level"]}
 
 
 @tool("Take a lift to another LEVEL. Installs the canonical lift-taking template as "
@@ -653,6 +672,44 @@ def take_lift(to_level=""):
     _push_context()
     return {"ok": True, "template": template, "lift": lift_name, "next": template[0],
             "note": "execute these subtasks strictly in order (each verified)."}
+
+
+def switch_level(to, lift):
+    """Move the whole world model onto another level, after a lift has carried the
+    robot there.
+
+    Everything keyed to a level has to be rebuilt, not adjusted: the vertices are a
+    different list with a different numbering, and so are the lanes, the doors and
+    the lift cabins. `cur` becomes this lift's cabin vertex on the new level, which
+    is where the robot physically is. Doors opened on the old level are forgotten
+    because they are not these doors.
+    """
+    level, verts, adj, _ = load_nav(ST["nav"], to)
+    lifts = lift_of(ST["nav"], level)
+    cabin = next((v for v, l in lifts.items() if l == lift), None)
+    if cabin is None:
+        return False
+    png, fw, fh, m2px = build_floorplan(ST.get("building", ""), level)
+    # You rode in facing the cabin, so you step out facing the lobby: the exit is
+    # the cabin's only lane, and the template's next step is a bare `open_door`,
+    # which needs something to be facing.
+    exit_v = next((v for v, _ in adj.get(cabin, [])), None)
+    with ST["lock"]:
+        ST.update({"level": level, "verts": verts, "adj": adj,
+                   "doors": doors_of(ST["nav"], level), "lift_of": lifts,
+                   "open_doors": set(), "cur": cabin, "prev": None, "face": exit_v,
+                   "fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
+    # Re-level the bridge too. It drives by set_pose at a fixed z captured when it
+    # started, so after a ride every drive would put the robot back at the old
+    # floor's elevation — the ride would visibly undo itself on the next go_to.
+    bridge("/reset", {"level": level,
+                      "x": ST["verts"][cabin][1], "y": ST["verts"][cabin][2],
+                      "yaw": _az(cabin, exit_v) if exit_v is not None else 0.0})
+    log(f"rode {lift} to {level} — now at {lab(cabin)}")
+    BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
+    push_state()
+    _push_context()
+    return True
 
 
 @tool("Pick an item up at this waypoint.", [("item", "item name")])
@@ -1528,6 +1585,9 @@ def as_message(name, res):
     if name == "select_lift":
         return f"selected {res.get('selected_lift')}, cabin {res.get('cabin')}"
     if name == "call_lift":
+        if res.get("rode"):
+            return (f"rode {res.get('lift')} to {res.get('level')} — now at "
+                    f"{res.get('at')}")
         return f"{res.get('lift')} called to {res.get('floor')}"
     return json.dumps({k: v for k, v in res.items()
                        if k not in ("recent_log", "ok")})[:200]
@@ -1783,7 +1843,7 @@ def main():
         "lock": threading.RLock(), "waiting": {}, "seq": 0,
         "level": level, "verts": verts, "adj": adj,
         "doors": doors_of(a.nav, level), "lift_of": lift_of(a.nav, level),
-        "nav": a.nav, "levels": levels_of(a.nav),
+        "nav": a.nav, "levels": levels_of(a.nav), "building": a.building,
         "open_doors": set(), "inventory": [], "mission": "", "todos": [],
         "prev": None, "face": None, "selected_lift": None, "sel_cabin": None,
         "galaxea": os.environ.get("GALAXEA_URL", "").rstrip("/"),
