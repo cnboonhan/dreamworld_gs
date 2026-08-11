@@ -314,6 +314,24 @@ def blocked_on(path):
 
 
 # ---- state ------------------------------------------------------------------
+def built_scenes():
+    """The waypoints that actually have a splat world on disk.
+
+    Read per call rather than cached: worlds land one at a time over hours, and a
+    map that still showed yesterday's coverage would be the least useful part of
+    the page.
+    """
+    root = os.path.join("/projects", ST.get("project", ""), "splats")
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    pre = ST["level"] + "."
+    return sorted(n[len(pre):] for n in names
+                  if n.startswith(pre)
+                  and os.path.isfile(os.path.join(root, n, "world.ply")))
+
+
 def state_dict():
     cur = ST["cur"]
     return {"level": ST["level"], "cur": cur, "at": lab(cur), "scene": scene_of(cur),
@@ -325,7 +343,8 @@ def state_dict():
             "viewer": bool(ST.get("viewer_up")),
             "galaxea": bool(ST.get("galaxea")),
             "mission": ST.get("mission", ""),
-            "todos": ST.get("todos", [])}
+            "todos": ST.get("todos", []),
+            "built": built_scenes()}
 
 
 def push_state():
@@ -627,6 +646,75 @@ def handle(text):
                                   f"open door, where."}
 
 
+# ---- floorplan overlay: nav-metres -> floorplan-pixels affine ----------------
+# The building.yaml drawing (the floorplan PNG) has vertices in PIXELS; the nav
+# graph is in METRES. Both name the same waypoints, so fit an affine from the
+# shared names and project every nav vertex onto the image. Ported from the dream
+# dashboard — the same fit this repo measured at 0.04875 m/px on L11.
+def _solve3(A, b):
+    M = [A[i][:] + [b[i]] for i in range(3)]
+    for i in range(3):
+        p = max(range(i, 3), key=lambda r: abs(M[r][i]))
+        M[i], M[p] = M[p], M[i]
+        piv = M[i][i] or 1e-9
+        for j in range(i, 4):
+            M[i][j] /= piv
+        for r in range(3):
+            if r != i:
+                f = M[r][i]
+                for j in range(i, 4):
+                    M[r][j] -= f * M[i][j]
+    return [M[0][3], M[1][3], M[2][3]]
+
+
+def _fit_affine(src, tgt):
+    sxx = sxy = sx = syy = sy = n = tx = ty = t = 0.0
+    for (ax, ay), m in zip(src, tgt):
+        sxx += ax * ax; sxy += ax * ay; sx += ax
+        syy += ay * ay; sy += ay; n += 1
+        tx += ax * m; ty += ay * m; t += m
+    return _solve3([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]], [tx, ty, t])
+
+
+def build_floorplan(building, level):
+    """(png path, w, h, metres->pixels) for a level, or (None, 0, 0, None)."""
+    if not building or not os.path.isfile(building):
+        return None, 0, 0, None
+    B = yaml.safe_load(open(building))
+    BL = (B.get("levels") or {}).get(level)
+    if not BL:
+        return None, 0, 0, None
+    png = os.path.join(os.path.dirname(building),
+                       (BL.get("drawing") or {}).get("filename", ""))
+    if not os.path.isfile(png):
+        return None, 0, 0, None
+    w = h = 0
+    try:
+        import struct
+        with open(png, "rb") as f:
+            f.read(16)
+            w, h = struct.unpack(">II", f.read(8))      # PNG IHDR
+    except (OSError, struct.error):
+        pass
+    # A drawing vertex is [px, py, z, name, params]; only the named ones can be
+    # matched to the nav graph, and three of them pin an affine.
+    bname = {v[3]: (v[0], v[1]) for v in BL.get("vertices", [])
+             if len(v) > 3 and isinstance(v[3], str) and v[3]}
+    nname = {n: (x, y) for (n, x, y) in ST["verts"] if n}
+    shared = [k for k in bname if k in nname]
+    if len(shared) < 3:
+        print(f"[interactive] floorplan: only {len(shared)} shared name(s), "
+              f"no projection", flush=True)
+        return png, w, h, None
+    src = [nname[k] for k in shared]
+    ax = _fit_affine(src, [bname[k][0] for k in shared])
+    ay = _fit_affine(src, [bname[k][1] for k in shared])
+    print(f"[interactive] floorplan: {os.path.basename(png)} {w}x{h}, "
+          f"fitted on {len(shared)} shared waypoints", flush=True)
+    return png, w, h, (lambda x, y: (ax[0] * x + ax[1] * y + ax[2],
+                                     ay[0] * x + ay[1] * y + ay[2]))
+
+
 # ---- verification: a subtask completes when the world says it did ------------
 # Ported from the dream harness, and kept for the same reason: an agent that marks
 # its own work done will mark it done. Here the world is the viewer's reported
@@ -895,56 +983,68 @@ def build_agent():
 PAGE = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <title>interactive — walk the building</title>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--dim:#8b98a8;--line:#22303f;--ok:#6ea8fe;--err:#ff7b72}
+:root{--bg:#0d1117;--fg:#c9d1d9;--dim:#8b98a8;--line:#22303f;--ok:#6ea8fe;--err:#ff7b72;--warn:#e3b341}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;height:100vh;display:flex}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;height:100vh;display:flex;flex-direction:column}
+#mission{display:flex;gap:6px;align-items:center;padding:10px;border-bottom:1px solid var(--line);background:#0b0f14}
+#mission label{color:var(--dim);text-transform:uppercase;font-size:11px;letter-spacing:.08em}
+#main{flex:1 1 auto;display:flex;min-height:0}
 #left{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
-#right{flex:0 0 380px;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
-iframe{flex:1 1 auto;border:0;width:100%;background:#000}
-h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0;padding:8px 10px;border-bottom:1px solid var(--line)}
+#right{flex:0 0 360px;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0;padding:8px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
 .pane{display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--line)}
 .pane.grow{flex:1 1 0}
 pre{margin:0;padding:8px 10px;overflow:auto;white-space:pre-wrap;font-size:12px;flex:1 1 auto}
-#bar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line);background:#0b0f14}
-input,button,select{background:#161b22;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px 8px;font:inherit}
+input,button{background:#161b22;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font:inherit}
 input{flex:1 1 auto;min-width:0}
 button{cursor:pointer;white-space:nowrap}
 button:hover{border-color:var(--ok);color:var(--ok)}
 #tools{display:flex;flex-wrap:wrap;gap:4px;padding:8px}
 #tools button{font-size:11px;padding:3px 7px}
 .log div{padding:1px 10px}
-.log .err{color:var(--err)} .log .warn{color:#e3b341} .log .mission{color:var(--ok)}
+.log .err{color:var(--err)} .log .warn{color:var(--warn)} .log .mission{color:var(--ok)}
 #status{padding:6px 10px;color:var(--dim);border-bottom:1px solid var(--line);font-size:12px}
 #status b{color:var(--fg);font-weight:600}
-canvas{display:block;width:100%;background:#0b0f14}
+#mapwrap{flex:1 1 auto;position:relative;overflow:hidden;background:#0b0f14}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+#bar{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line);background:#0b0f14}
+a{color:var(--ok)}
 </style></head><body>
-<div id=left>
-  <div id=status>connecting…</div>
-  <iframe id=view></iframe>
-  <div id=bar>
-    <input id=cmd placeholder="go to apex_lab   ·   face v0   ·   open door   ·   where">
-    <button onclick=send()>run</button>
-    <button onclick=mission()>mission</button>
-    <button onclick=post('/pause')>pause</button>
-    <button onclick=post('/resume')>resume</button>
-    <button onclick=post('/cancel')>cancel</button>
+
+<div id=mission>
+  <label for=msn>mission</label>
+  <input id=msn placeholder="take the apple from apex_lab to the cafe">
+  <button onclick=runMission()>run</button>
+  <button onclick=post('/pause')>pause</button>
+  <button onclick=post('/resume')>resume</button>
+  <button onclick=post('/cancel')>cancel</button>
+</div>
+
+<div id=main>
+  <div id=left>
+    <div id=status>connecting…</div>
+    <div id=mapwrap><canvas id=map></canvas></div>
+    <div id=bar>
+      <input id=cmd placeholder="go to apex_lab   ·   face v0   ·   open door   ·   where">
+      <button onclick=send()>run</button>
+    </div>
+  </div>
+  <div id=right>
+    <div class=pane><h2>tools</h2><div id=tools></div></div>
+    <div class="pane grow"><h2>world model</h2><pre id=model>…</pre></div>
+    <div class="pane grow"><h2>log</h2><pre class=log id=log></pre></div>
   </div>
 </div>
-<div id=right>
-  <div class=pane><h2>tools</h2><div id=tools></div></div>
-  <div class="pane grow"><h2>world model</h2><pre id=model>…</pre></div>
-  <div class="pane grow"><h2>log</h2><pre class=log id=log></pre></div>
-</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
-let ST = {};
+let ST = {}, G = null, FP = null;
 
 const say = (text, level) => {
   const d = document.createElement("div");
   d.className = level || "ok"; d.textContent = text;
   $("log").appendChild(d); $("log").scrollTop = 1e9;
 };
-
 const post = (path, body) =>
   fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
                body: JSON.stringify(body || {})}).then((r) => r.json());
@@ -952,44 +1052,111 @@ const post = (path, body) =>
 function send() {
   const text = $("cmd").value.trim();
   if (!text) return;
-  $("cmd").value = "";
-  say("> " + text);
+  $("cmd").value = ""; say("> " + text);
   post("/command", {text}).then((r) => { if (!r.ok) say(r.error, "err"); });
 }
-function mission() {
-  const text = $("cmd").value.trim() || prompt("mission?");
+function runMission() {
+  const text = $("msn").value.trim();
   if (!text) return;
-  $("cmd").value = "";
   say("mission: " + text, "mission");
   post("/agent", {text}).then((r) => { if (!r.ok) say(r.error, "err"); });
 }
 $("cmd").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+$("msn").addEventListener("keydown", (e) => { if (e.key === "Enter") runMission(); });
 
-// The viewer is the rollout, embedded rather than linked: one page, and the
-// ?agent= parameter is what hands its camera to this server.
-function openView(scene) {
-  const url = `${VIEWER}/?url=files/${PROJECT}/splats/${scene}/world.ply` +
-              `&agent=${encodeURIComponent(location.origin)}`;
-  if ($("view").dataset.scene !== scene) {
-    $("view").dataset.scene = scene;
-    $("view").src = url;
+// ---- minimap: the nav graph on the level's floorplan ----------------------
+// Drawn from /graph, which projects metres onto the drawing's own pixels where a
+// fit was possible. Falls back to the raw metric layout, so a project with no
+// floorplan still gets a map rather than a blank panel.
+function fit(cv) {
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = devicePixelRatio || 1;
+  cv.width = r.width * dpr; cv.height = r.height * dpr;
+  return {w: r.width, h: r.height, dpr};
+}
+
+function draw() {
+  const cv = $("map"), g = G;
+  if (!g) return;
+  const {w, h, dpr} = fit(cv);
+  const c = cv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, w, h);
+
+  const xs = g.vertices.map((v) => v.x), ys = g.vertices.map((v) => v.y);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (FP && g.projected) { x0 = 0; y0 = 0; x1 = g.w; y1 = g.h; }
+  const pad = 24;
+  const k = Math.min((w - 2 * pad) / Math.max(x1 - x0, 1),
+                     (h - 2 * pad) / Math.max(y1 - y0, 1));
+  const ox = (w - (x1 - x0) * k) / 2 - x0 * k;
+  const oy = (h - (y1 - y0) * k) / 2 - y0 * k;
+  const P = (v) => [v.x * k + ox, v.y * k + oy];
+
+  if (FP && g.projected) {
+    c.globalAlpha = 0.5;
+    c.drawImage(FP, ox, oy, g.w * k, g.h * k);
+    c.globalAlpha = 1;
+  }
+  const at = {};
+  for (const v of g.vertices) at[v.id] = P(v);
+
+  for (const e of g.edges) {
+    const a = at[e.a], b = at[e.b];
+    if (!a || !b) continue;
+    const open = (ST.open_doors || []).includes(e.door);
+    c.strokeStyle = !e.door ? "#3f5470" : (open ? "#3fb950" : "#ff7b72");
+    c.lineWidth = e.door ? 3 : 1.5;
+    c.setLineDash(e.door && !open ? [4, 3] : []);
+    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke();
+  }
+  c.setLineDash([]);
+
+  for (const v of g.vertices) {
+    const [x, y] = at[v.id];
+    const isHere = v.id === ST.at, isFace = v.id === ST.face;
+    const built = (ST.built || []).includes(v.id);
+    c.beginPath(); c.arc(x, y, isHere ? 7 : 4, 0, 7);
+    c.fillStyle = isHere ? "#6ea8fe" : isFace ? "#e3b341"
+                : v.lift ? "#a371f7" : built ? "#3fb950" : "#30363d";
+    c.fill();
+    if (isHere) { c.strokeStyle = "#fff"; c.lineWidth = 2; c.stroke(); }
+    c.fillStyle = isHere ? "#fff" : "#8b98a8";
+    c.font = `${isHere ? 12 : 10}px ui-monospace,monospace`;
+    c.fillText(v.id, x + 9, y + 3);
   }
 }
+addEventListener("resize", draw);
 
 function paint(s) {
   ST = s;
+  const url = `${VIEWER}/?url=files/${PROJECT}/splats/${s.scene}/world.ply` +
+              `&agent=${encodeURIComponent(location.origin)}`;
   $("status").innerHTML =
     `at <b>${s.at}</b> · ${s.level} · facing ${s.face || "—"} · ` +
-    `neighbours ${s.neighbours.join(", ")} · ` +
-    `viewer ${s.viewer ? "<b>on</b>" : "off"} · robot ${s.galaxea ? "<b>on</b>" : "off"}`;
-  if (!$("view").dataset.scene) openView(s.scene);
+    `viewer ${s.viewer ? "<b>connected</b>" : "<b style=color:#ff7b72>not connected</b>"} · ` +
+    `robot ${s.galaxea ? "on" : "off"} · ` +
+    `<a href="${url}" target="_blank" rel=noopener>open the splat viewer ↗</a>`;
+  draw();
 }
+
+fetch("/graph").then((r) => r.json()).then((g) => {
+  G = g;
+  if (g.projected) {
+    // Only worth loading when there is a fit to draw it under; unprojected, the
+    // image and the graph would not line up and the map would lie.
+    const img = new Image();
+    img.onload = () => { FP = img; draw(); };
+    img.src = "/floorplan.png";
+  }
+  draw();
+});
 
 fetch("/tools").then((r) => r.json()).then((tools) => {
   for (const name of Object.keys(tools).sort()) {
     const b = document.createElement("button");
-    b.textContent = name;
-    b.title = tools[name].desc;
+    b.textContent = name; b.title = tools[name].desc;
     b.onclick = () => {
       const args = {};
       for (const p of tools[name].params) {
@@ -1069,7 +1236,30 @@ def r_command():
 
 @app.route("/graph")
 def r_graph():
-    return jsonify(get_graph())
+    """The nav graph, in floorplan pixels where a projection could be fitted, so
+    the minimap draws the building rather than an abstract diagram."""
+    m2px = ST.get("m2px")
+    verts = []
+    for i, (_, x, y) in enumerate(ST["verts"]):
+        px, py = m2px(x, y) if m2px else (x, y)
+        verts.append({"id": lab(i), "x": round(px, 1), "y": round(py, 1),
+                      "lift": ST["lift_of"].get(i, "")})
+    edges = sorted({tuple(sorted((i, j))) for i in ST["adj"] for j, _ in ST["adj"][i]})
+    return jsonify(ok=True, level=ST["level"], projected=bool(m2px),
+                   w=ST.get("fp_w", 0), h=ST.get("fp_h", 0),
+                   vertices=verts,
+                   edges=[{"a": lab(a), "b": lab(b), "door": door_between(a, b)}
+                          for a, b in edges])
+
+
+@app.route("/floorplan.png")
+def r_floorplan():
+    png = ST.get("fp_png")
+    if not png:
+        return ("no floorplan for this level", 404)
+    with open(png, "rb") as f:
+        return (f.read(), 200, {"Content-Type": "image/png",
+                                "Cache-Control": "max-age=3600"})
 
 
 @app.route("/events")
@@ -1232,6 +1422,8 @@ def main():
         "project": a.project,
     })
     ST["cur"] = find_vertex(verts, a.start)
+    png, fw, fh, m2px = build_floorplan(a.building, level)
+    ST["fp_png"], ST["fp_w"], ST["fp_h"], ST["m2px"] = png, fw, fh, m2px
     ST["viewer_base"] = a.viewer.rstrip("/")
     ST["viewer_url"] = (f"{a.viewer}/?url=files/{a.project}/splats/"
                         f"{scene_of(ST['cur'])}/world.ply"

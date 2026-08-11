@@ -285,9 +285,16 @@ dashboard drives this one unchanged:
 | items | `pick` `place` |
 | planning | `plan_route` `where` `get_path` `get_graph` `write_mission` `write_todos` |
 
-The dashboard is at **http://localhost:8086** — the tool palette, the live log, the
-world model the agent reads, and the splat viewer embedded as the rollout, already
-carrying the `?agent=` parameter that hands over its camera.
+The dashboard is at **http://localhost:8086** — a mission bar across the top, a
+minimap of the level, the tool palette, the live log, and the world model the agent
+reads each turn. The splat viewer opens in its own window from the link in the
+status line, already carrying the `?agent=` parameter that hands over its camera.
+
+The minimap is the nav graph drawn on the level's own floorplan: the projection is
+an affine fitted from the waypoints that the drawing and the nav graph both name
+(7 of them on L11), so it is the building rather than an abstract diagram. Doors are
+the coloured edges — red dashed shut, green open — and a waypoint is green once a
+splat world has been generated for it, so what is walkable is visible at a glance.
 
 ```bash
 just interactive
