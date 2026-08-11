@@ -301,7 +301,7 @@ $("save").onclick=async()=>{if(SEL===null||!hasCand)return;
 // ── levels + init ───────────────────────────────────────────────────────────────
 function loadGraph(){return fetch("/graph").then(r=>r.json()).then(g=>{G=g;
   SEL=null;hasCand=false;$("sel").textContent="none";$("gen").disabled=true;reflectCand();
-  $("blast").textContent="—";$("inptool").classList.remove("on");P.cur.showmask=0;
+  $("inptool").classList.remove("on");P.cur.showmask=0;
   ["cur","cand"].forEach(k=>{P[k].ready=false;clearTex(P[k]);});layout();
   $("vsel").innerHTML='<option value="">— select vertex —</option>'+
     g.verts.map(v=>`<option value="${v.id}">v${v.id}${v.name?" — "+v.name:""}</option>`).join("");

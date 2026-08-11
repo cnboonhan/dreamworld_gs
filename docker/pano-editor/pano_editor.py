@@ -428,6 +428,16 @@ def edit():
     return jsonify(ok=ok, error=None if ok else msg, v=v)
 
 
+@app.route("/level", methods=["POST"])
+def switch_level():
+    """Switch the editor to another level of the building."""
+    lv = (request.get_json(force=True) or {}).get("level")
+    if lv not in G["levels"]:
+        return jsonify(ok=False, error=f"no level {lv}; have {G['levels']}"), 400
+    set_level(lv)
+    return jsonify(ok=True, level=lv)
+
+
 @app.route("/save", methods=["POST"])
 def save():
     """Adopt the candidate as the waypoint's panorama.
