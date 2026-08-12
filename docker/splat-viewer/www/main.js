@@ -1303,19 +1303,6 @@ function cameraForward() {
         cp * (cy * tour.a[j] + sy * tour.b[j]) + sp * tour.up[j]));
 }
 
-// A heading trace. Three stages set a heading during a leg and they have each
-// been wrong once; a single run now says which one reversed rather than needing
-// another guess. window.__hlog reads them back.
-window.__hlog = [];
-function hlog(stage, leg, extra) {
-    const f = (typeof cameraForward === "function" && cameraForward()) || null;
-    const row = {stage, leg, yaw: +(tour.yaw || 0).toFixed(3),
-                 fwd: f && f.map((v) => +v.toFixed(3)), ...(extra || {})};
-    window.__hlog.push(row);
-    console.log(`[hdg] ${stage} ${leg || ""}`, row);
-    return row;
-}
-
 /** THE writer of tour.yaw: point the camera along `worldDir`, this world's frame.
  *
  * Every heading decision comes through here — the departure aim, the ride, the
@@ -2176,9 +2163,6 @@ async function main() {
         }
         // Hand the direction to the panel, which sets it after building its axes
         // — setting it here is undone by the standHome() at the end of it.
-        hlog("3-arrived", a.scene,
-             {cameFrom: window.__cameFrom || null,
-              dir: dir && dir.map((v) => +v.toFixed(3))});
         if (window.__openPanel) window.__openPanel(a.doc, dir);
         const warmDoc = a.doc, warmProj = a.project;
         arrival.records = null;
@@ -2266,9 +2250,6 @@ async function main() {
                 const scene = `${here().split(".")[0]}.${shortOf(to)}`;
                 window.__rideWalk(w, window.__paths,
                                   {...(pace || {}), walk_ms: m.walk_ms});
-                hlog("2-riding", `${here()}->${shortOf(to)}`,
-                     {first: w.points[0].map((v) => +v.toFixed(2)),
-                      last: w.points[w.points.length - 1].map((v) => +v.toFixed(2))});
                 tour.playing = true;
                 return await arrivedAt(scene);
             },
