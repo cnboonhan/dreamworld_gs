@@ -1829,6 +1829,11 @@ async function main() {
     // being left — its corridors are not this one's, and acting on them starts
     // a second swap on top of the first. So the page is sealed for the duration.
     const unpacked = new Map();          // scene -> records, most recent last
+    const KEEP = 4;                      // a junction's worth, plus where you are
+    const remember = (scene, recs) => {
+        unpacked.set(scene, recs);
+        for (const k of [...unpacked.keys()].slice(0, -KEEP)) unpacked.delete(k);
+    };
     const sealed = (on) => {
         document.body.classList.toggle("swapping", !!on);
         window.__swapping = !!on;
@@ -1852,10 +1857,23 @@ async function main() {
             const base = new URL(`files/${project}/splats/${scene}/`,
                                  location.href);
             try {
-                const r = await fetch(new URL("world.ply", base).href,
-                                      {priority: "low"});
-                if (!r.ok) continue;
-                await r.arrayBuffer();             // drain it, so it is cached
+                if (depth === 2) {
+                    // The corridors out of here: unpacked, not merely fetched.
+                    // The decode is the rest of the wait once the bytes are
+                    // local, so paying it now makes a first step into a
+                    // neighbour as quick as stepping back into a world already
+                    // visited. Only at this depth — further out is speculative
+                    // enough that the bytes are worth having and the work is
+                    // not.
+                    remember(scene, await unpackPly(
+                        new URL("world.ply", base).href, scene));
+                } else {
+                    const r = await fetch(new URL("world.ply", base).href,
+                                          {priority: "low"});
+                    if (!r.ok) continue;
+                    await r.arrayBuffer();         // drain it, so it is cached
+                }
+                if (window.__swapping) return;     // a real load wants the thread
                 const d = await fetch(new URL("world.paths.json", base).href)
                     .then((x) => x.ok ? x.json() : null).catch(() => null);
                 await warm(project, d, depth - 1);
@@ -1890,8 +1908,7 @@ async function main() {
             } else {
                 arrival.records = await unpackPly(new URL("world.ply", base).href,
                                                   scene);
-                unpacked.set(scene, arrival.records);
-                for (const k of [...unpacked.keys()].slice(0, -3)) unpacked.delete(k);
+                remember(scene, arrival.records);
             }
         } catch (err) {
             arrival.records = null;
