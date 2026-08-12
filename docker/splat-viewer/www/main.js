@@ -964,11 +964,28 @@ async function edgePicker(doc, choose) {
             standHome();
             return;
         }
-        // a neighbour is a journey: ride that corridor if it has a walk. The
-        // camera is not moved or turned — only which corridor the tour rides.
+        // A neighbour is a journey: clicking it walks that corridor. It used to
+        // only select it, which looked identical to nothing happening on the
+        // ones that were ready.
         const lane = doc.lanes[target - 1];
         const k = lane ? doc.walks.findIndex(w => w.to === lane.to) : -1;
-        if (k >= 0) { at = k; choose(doc.walks[k], doc); }
+        if (k >= 0) {
+            at = k;
+            choose(doc.walks[k], doc);
+            tour.playing = true;
+            if (play) play.textContent = "pause";
+            return;
+        }
+        // No walk: a walk needs BOTH ends marked, so a ticked neighbour whose
+        // home end is unmarked has nothing to ride. Say which is missing rather
+        // than doing nothing, since the button looks the same either way.
+        // Not say(): that lives inside main() and this function does not, so
+        // calling it here throws at click time and the button looks dead — which
+        // is precisely the failure this message exists to prevent.
+        const need = placed[me] ? lane && lane.to : me;
+        const msg = document.getElementById("message");
+        if (msg) msg.textContent = lane
+            ? `no walk to ${lane.to} yet — mark ${need} to make one` : "";
     };
 
     saveSpot.onclick = async () => {
