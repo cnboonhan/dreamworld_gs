@@ -1725,8 +1725,17 @@ async function main() {
             tour.turn = null;
         }
         tour.t = 0; tour.playing = false;
-        history.replaceState(null, "",
-            `?url=files/${a.project}/splats/${a.scene}/world.ply&from=${window.__cameFrom || ""}`);
+        // Keep every parameter the page was opened with, not just the two this
+        // line knows about. It wrote url and from only, so a handover silently
+        // dropped &agent= and &speed= — the live connection survived, being
+        // already open, but the URL left in the address bar could no longer
+        // reproduce the session. Reload after a transition and the viewer came
+        // back with no agent, while the server still believed one was attached
+        // from the connection that had just died: every command then timed out.
+        const keep = new URLSearchParams(location.search);
+        keep.set("url", `files/${a.project}/splats/${a.scene}/world.ply`);
+        keep.set("from", window.__cameFrom || "");
+        history.replaceState(null, "", "?" + keep.toString());
         say("");
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here

@@ -1976,8 +1976,14 @@ def r_viewer_events():
     would each walk half the corridors and neither would be where the robot is."""
     def stream(q):
         with ST["lock"]:
+            # Count them. A page that navigated away leaves its connection to be
+            # collected whenever the server next tries to write, so a flag set by
+            # any listener and cleared by any disconnect can read "attached"
+            # while nothing is listening — and every command then times out
+            # against a viewer that is not there.
+            ST["viewers"] = ST.get("viewers", 0) + 1
             ST["viewer_up"] = True
-        log("splat viewer connected")
+        log(f"splat viewer connected ({ST['viewers']} attached)")
         push_state()
         try:
             while True:
@@ -1988,8 +1994,9 @@ def r_viewer_events():
         finally:
             VIEWER.drop(q)
             with ST["lock"]:
-                ST["viewer_up"] = False
-            log("splat viewer disconnected", "err")
+                ST["viewers"] = max(0, ST.get("viewers", 1) - 1)
+                ST["viewer_up"] = ST["viewers"] > 0
+            log(f"splat viewer disconnected ({ST['viewers']} left)", "err")
             push_state()
     return Response(stream(VIEWER.listen()), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
