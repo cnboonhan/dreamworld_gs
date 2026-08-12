@@ -1685,6 +1685,7 @@ document.addEventListener('keydown',e=>{const a=document.activeElement;
 
 let curLevel='';
 function onState(s){last=s;if(s.level)curLevel=s.level;
+ if(!$('tplevel').value)$('tplevel').value=curLevel;   // never blank on arrival
  $('pos').textContent='@ '+s.cur_label+(s.level?'  ·  '+s.level:'')
   +(s.heading!=null?'  ·  hdg '+s.heading+'°':'')
   +(s.door_open?'  ·  door→'+s.door_open+' open':'');
@@ -1732,7 +1733,7 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
   else{tip.style.display='none';map.style.cursor='default'}});
  map.addEventListener('mouseleave',()=>{tip.style.display='none'});
  map.addEventListener('dblclick',e=>{const best=vertAt(e);      // straight there
-  if(best)teleport(best.name||('v'+best.id),'')});
+  if(best)teleport(best.name||('v'+best.id),curLevel)});
  // Click a waypoint to name it somewhere. With a tool field open that is the
  // tool's argument; otherwise it is the teleport box, which is the other thing
  // on this page that takes a waypoint — and doing nothing was the third option,
@@ -1740,7 +1741,10 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
  map.addEventListener('click',e=>{const best=vertAt(e);if(!best)return;
   const label=best.name||('v'+best.id);
   if(selTool){$('argbox').value=label;$('argbox').focus()}
-  else{$('tpwhere').value=label;$('tpwhere').focus()}})})();
+  // The map only ever draws one level, so a waypoint clicked on it is on that
+  // level and the box should say which — an empty level box means "wherever the
+  // dashboard already is", which is the same place today and not tomorrow.
+  else{$('tpwhere').value=label;$('tplevel').value=curLevel;$('tpwhere').focus()}})})();
 loadTools();
 connect();
 </script></body></html>"""
