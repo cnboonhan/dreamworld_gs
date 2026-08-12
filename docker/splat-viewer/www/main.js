@@ -1573,6 +1573,13 @@ async function main() {
                     window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
             };
             window.__paths = doc;
+            // Start the sweep here as well as after a step. A world opened
+            // directly — a fresh tab, a reload, a link — never stepped into
+            // anything, so nothing had ever started downloading the building
+            // and the counter had nothing to count. That is why it was not
+            // there: not everything cached, nothing counted.
+            if (proj && window.__warm)
+                setTimeout(() => window.__warm(proj[1], doc), 2000);
             // A world opened directly still knows where you came from — the
             // handover puts it in the URL as &from=. So face the continuation
             // here too, exactly as a live handover does. Without this, only a
