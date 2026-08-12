@@ -1638,14 +1638,21 @@ function drawMap(s){const c=$('map'),g=c.getContext('2d');if(!G){return}
  // robot + facing arrow (dir is a unit vector already projected into floorplan pixels)
  if(s&&s.px!=null){const[x,y]=P(s.px,s.py);
   const dir=s.dir||headingDir(s);
-  if(dir){const dx=dir[0]*sx,dy=dir[1]*sy,dl=Math.hypot(dx,dy)||1,ux=dx/dl,uy=dy/dl;
-   const tx=x+ux*20,ty=y+uy*20;                       // arrow tip
-   g.strokeStyle='#3fb950';g.lineWidth=3;g.beginPath();g.moveTo(x,y);g.lineTo(tx,ty);g.stroke();
-   const a=Math.atan2(uy,ux);g.fillStyle='#3fb950';g.beginPath();  // arrowhead
-   g.moveTo(tx,ty);g.lineTo(tx-7*Math.cos(a-0.5),ty-7*Math.sin(a-0.5));
-   g.lineTo(tx-7*Math.cos(a+0.5),ty-7*Math.sin(a+0.5));g.closePath();g.fill();g.lineWidth=1}
-  g.fillStyle='#3fb950';g.beginPath();g.arc(x,y,7,0,7);g.fill();
-  g.strokeStyle='#0d1117';g.lineWidth=2;g.stroke();g.lineWidth=1}
+  // A triangle, not a dot: the robot has a heading and the marker should carry
+  // it. A dot with a separate arrow said the same thing twice and still left
+  // the position looking directionless at a glance, which is the glance the
+  // minimap exists for.
+  if(dir){const dx=dir[0]*sx,dy=dir[1]*sy,dl=Math.hypot(dx,dy)||1;
+   const a=Math.atan2(dy/dl,dx/dl);
+   const P2=(r,off)=>[x+r*Math.cos(a+off),y+r*Math.sin(a+off)];
+   const tip=P2(13,0),l=P2(9,2.55),r=P2(9,-2.55);      // long nose, swept back
+   g.fillStyle='#3fb950';g.beginPath();
+   g.moveTo(tip[0],tip[1]);g.lineTo(l[0],l[1]);
+   g.lineTo(x,y);g.lineTo(r[0],r[1]);                  // notched tail, so the
+   g.closePath();g.fill();                             // point is unmistakable
+   g.strokeStyle='#0d1117';g.lineWidth=1.5;g.stroke();g.lineWidth=1}
+  else{g.fillStyle='#3fb950';g.beginPath();g.arc(x,y,7,0,7);g.fill();
+   g.strokeStyle='#0d1117';g.lineWidth=2;g.stroke();g.lineWidth=1}}
 }
 function headingDir(s){if(!G||!s||s.facing==null)return null;
  // point the arrow at the currently-faced neighbour (pixel space)
