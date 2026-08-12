@@ -790,7 +790,7 @@ function norm3(v) {
 // The same view the alignment tool gives: the waypoint you are standing at,
 // the walls around it, and every lane leaving it. Picking a lane switches the
 // tour to that corridor's walk rather than loading another scene.
-async function edgePicker(doc, choose) {
+async function edgePicker(doc, choose, facing) {
     // The alignment tool draws these same walls correctly, so when the plan
     // comes up bare the data is fine and the fetch is not — which an empty
     // catch hid. Say which, rather than drawing an empty box in silence.
@@ -916,7 +916,26 @@ async function edgePicker(doc, choose) {
         if (doc.walks.length && at < doc.walks.length) choose(doc.walks[at], doc);
     };
 
-    const standHome = () => {
+    /** Point the camera along a world direction. THE place the view angle is set.
+     *
+     * Everything else that positions the camera — tourInit, tourTurn, a walk
+     * ending — either derives the yaw from where the camera already looks or
+     * animates it. So a heading set before any of those runs is not kept; this
+     * is called after them, and is the last word.
+     *
+     * To change which way a splat opens facing, change the direction passed in
+     * (or negate it here). One line, one place.
+     */
+    const faceWorld = (d) => {
+        if (!d || !tour.a || !tour.b) return;
+        tour.turn = null;                       // no animation to overwrite it
+        tour.yaw = Math.atan2(dot3(d, tour.b), dot3(d, tour.a));
+        tour.pitch = 0;
+        tourPlace(tour.t);                      // apply now, not next frame
+    };
+    window.__faceWorld = faceWorld;
+
+    const standHome = (face) => {
         // The marked position when there is one, else the world's own origin —
         // where its panorama was shot, which every world knows about itself
         // whether or not anyone has marked it. Without the fallback "here" did
@@ -936,6 +955,8 @@ async function edgePicker(doc, choose) {
         // WASD did nothing at all — and tour.release only exists once the tour
         // bar has been shown, which on a world nobody has walked yet it has not.
         tourPlace(0);
+        // After the axes are built, so it cannot be re-derived away.
+        if (face) faceWorld(face);
         tour.on = false;
         const play = document.getElementById("tourPlay");
         if (play) play.textContent = "play";
@@ -1073,7 +1094,10 @@ async function edgePicker(doc, choose) {
         + (from ? "  \u00b7  from " + from : "")
         + (why ? "  \u00b7  no plan: " + why : "");
     paintSpots();
-    standHome();
+    // `facing` is a world direction the caller wants this splat to open along —
+    // the handover passes the corridor being continued into. Without it the
+    // camera keeps whatever heading it had.
+    standHome(facing);
 }
 
 function tourInit(p, follow) {
@@ -1698,7 +1722,9 @@ async function main() {
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here
         window.__paths = a.doc;
-        if (window.__openPanel) window.__openPanel(a.doc);
+        // Hand the direction to the panel, which sets it after building its axes
+        // — setting it here is undone by the standHome() at the end of it.
+        if (window.__openPanel) window.__openPanel(a.doc, dir);
         arrival.records = null;
         arrival.said = null;
         return true;
