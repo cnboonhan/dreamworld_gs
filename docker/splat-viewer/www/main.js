@@ -2169,16 +2169,24 @@ async function main() {
 
     // However a world came to be open — a link, a reload, the chooser, go-to,
     // a step, or the agent moving the tour — it ends with paths on the window.
-    // So that is what starts the download, rather than each way in remembering
-    // to. Two of them already did and a third would have been forgotten.
+    // So that is what starts the download AND the preheat, rather than each
+    // way in remembering to. The per-site kickoffs schedule before these
+    // functions exist on window — everything here sits below an await in
+    // main — so on a fresh page their `if` quietly skipped, the preheat never
+    // began, and the counter sat at 1 until the first move. The watcher has
+    // no such ordering: by its first tick everything is defined.
     setInterval(() => {
-        if (sweeping || !window.__paths) return;
+        if (!window.__paths) return;
         // Decoded first: the url parameter is normally percent-encoded, so
         // files%2Fproject%2Fsplats%2F... never matched and the sweep only ever
         // started from the one call site that had the project already parsed.
         const m = decodeURIComponent(location.search)
             .match(/files\/([^/]+)\/splats\//);
-        if (m) warm(decodeURIComponent(m[1]), window.__paths);
+        if (!m) return;
+        if (!sweeping) warm(decodeURIComponent(m[1]), window.__paths);
+        // +1 for the world on screen, which the preheat skips
+        if (!heating && !(total && unpacked.size + 1 >= total))
+            preheat(decodeURIComponent(m[1]), window.__paths);
     }, 5000);
     window.__warm = warm;
 
