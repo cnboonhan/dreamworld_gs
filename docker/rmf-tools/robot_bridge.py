@@ -453,25 +453,42 @@ def close_all():
     # where the cabin is rather than by a request, and pushing 21 names through
     # one loop meant the lift entries ran first and the doors after them never
     # reliably got theirs.
-    names = [n for n, _, _ in G.get("doors", []) if not _lift_of(n)]
-    # Empty the set in place rather than rebinding it: the /door route takes a
-    # reference with setdefault and holds it for the length of its request, so a
-    # rebind here can leave that request re-adding to the set nobody reads.
     G.setdefault("held_doors", set()).clear()
+    # Only the doors that are actually open, and by the same call `close door`
+    # makes for one of them. Blasting CLOSED at all nineteen every 0.3s did not
+    # shut the one that was open — the same door closes immediately when it is
+    # the only one asked.
+    open_now = [n for n, m in (G.get("door_state") or {}).items()
+                if m != 0 and not _lift_of(n)]
 
     def _shut():
-        # Re-assert, as close_all_startup does. One DoorRequest is not enough:
-        # a door already open stays open through a single CLOSED, and the shaft
-        # doors need the lift's own request repeated while the cabin settles.
-        # Doing it once left a door reporting OPEN nine seconds later.
-        for _ in range(20):
-            if G.get("held_doors"):        # an explicit open arrived — stop forcing
+        """One door at a time, spaced, and re-asked until it reports closed.
+
+        Sending CLOSED to every door at once shut none of them; sending it to the
+        two that were open shut one. They cannot go out back to back — so each
+        gets its own request with a gap, and anything still open on the next pass
+        is asked again, which is also what makes this correct if a door was
+        mid-swing when we looked.
+        """
+        for _ in range(10):
+            still = [n for n in open_now
+                     if (G.get("door_state") or {}).get(n, 0) != 0]
+            if not still:
+                print(f"[galaxea] closed {len(open_now)} door(s)", flush=True)
                 return
-            close_doors(names)
-            time.sleep(0.3)
+            for name in still:
+                try:
+                    _door_req(name, DoorMode.MODE_CLOSED)
+                except Exception as e:                # noqa: BLE001
+                    print(f"[galaxea] close {name}: {e}", flush=True)
+                time.sleep(0.4)
+            time.sleep(1.0)
+        print(f"[galaxea] still open after close_all: "
+              f"{[n for n in open_now if (G.get('door_state') or {}).get(n, 0) != 0]}",
+              flush=True)
 
     threading.Thread(target=_shut, daemon=True).start()
-    return jsonify(ok=True, closed=names, n=len(names))
+    return jsonify(ok=True, closed=open_now, n=len(open_now))
 
 
 @app.route("/door", methods=["POST"])
