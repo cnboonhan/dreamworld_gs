@@ -1952,7 +1952,13 @@ async function main() {
         // afterwards. That last-writer-wins race is the whole heading saga.
         const want = window.__faceOnArrival;
         window.__faceOnArrival = null;
-        if (want) {
+        // Only when there is no arriving edge to continue. A move along a
+        // corridor — including one the dashboard drove — has a direction of
+        // travel, and that is what the camera should face on landing. The named
+        // corridor is for a teleport, which has no edge behind it; taking it
+        // first made every synced move face wherever the model was pointing
+        // instead of the way it had just come.
+        if (want && !dir) {
             const l = (a.doc.lanes || []).find((x) => x.to === want);
             if (l) dir = l.dir;
         }
