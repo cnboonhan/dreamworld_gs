@@ -885,7 +885,12 @@ async function edgePicker(doc, choose) {
     };
 
     const standHome = () => {
-        const p = placed[me];
+        // The marked position when there is one, else the world's own origin —
+        // where its panorama was shot, which every world knows about itself
+        // whether or not anyone has marked it. Without the fallback "here" did
+        // nothing at all until a waypoint had been marked, which is exactly when
+        // you most want to get back to where you started.
+        const p = placed[me] || doc.origin;
         if (!p) return false;
         const d = (doc.lanes[0] && doc.lanes[0].dir) || [1, 0, 0];
         const was = cameraForward();
