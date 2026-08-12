@@ -2012,6 +2012,10 @@ async function main() {
         // a fact — and otherwise follows what comes back. One owner, so a
         // disagreement has a defined resolution instead of two halves each
         // waiting for the other to move.
+        // Detached by hand: the viewer stays open and drivable, but stops being
+        // told where to be. Useful for marking a corridor without the model
+        // pulling the camera back to where it thinks the tour is.
+        let detached = false;
         let fixing = false, awaiting = false;
         // A world takes a few seconds to come down and unpack. Until it has,
         // there is no "here" to compare against, so truth that lands during a
@@ -2025,7 +2029,7 @@ async function main() {
             tick();
         });
         async function follow(truth) {
-            if (!truth || !truth.scene) return;
+            if (detached || !truth || !truth.scene) return;
             if (!window.__paths) {
                 if (awaiting) return;            // one waiter, not one per poll
                 awaiting = true;
@@ -2077,6 +2081,7 @@ async function main() {
         // channel the moment it changes. This catches one missed while the
         // stream was reconnecting, and settles what was deferred during a walk.
         setInterval(async () => {
+            if (detached) return;
             if (fixing || tour.playing || busyDepth || !window.__paths) return;
             try {
                 const s = await (await fetch(new URL("/state", agentBase).href,
@@ -2106,8 +2111,23 @@ async function main() {
                     ? `driven by ${agentBase}` : `no agent at ${agentBase}`;
             };
             setChip("", "agent connecting");
+            // The chip is the switch as well as the light: click to stop taking
+            // orders, click again to take them.
+            if (chip) chip.onclick = () => {
+                if (detached) {
+                    detached = false;
+                    say("agent: reconnecting");
+                    connect();
+                } else {
+                    detached = true;
+                    es.close();
+                    setChip("off", "agent off — click to connect");
+                    say("agent: disconnected by hand");
+                }
+            };
             es.onerror = () => {
                 es.close();
+                if (detached) return;            // switched off here, not lost
                 if (window.__stoodDown) {
                     // Evicted, not dropped. Reconnecting here would start the
                     // fight over: this tab would take the stream back from the
@@ -2122,7 +2142,8 @@ async function main() {
                 setTimeout(connect, 2000);
             };
             es.onopen = () => {
-                setChip("on", "agent connected");
+                if (detached) { es.close(); return; }
+                setChip("on", "agent connected — click to disconnect");
                 say("");
                 // The server answers hello with where it expects this viewer to
                 // be. On a refresh the URL still names whatever world was open
