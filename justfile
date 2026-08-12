@@ -57,7 +57,9 @@ _default:
 
 # Everything needed to run offline: model weights + the images (~500GB).
 #
-# Both halves are idempotent, so running it again is how you update either. They
+# Both halves are idempotent and cheap to re-run: a model already in the cache is
+# recognised without a network call, so re-running this on a complete box is
+# about three seconds and a docker build with everything layered. They
 # are one recipe because they answer one question — can this box run the pipeline
 # — but they stay separable, because the answer is usually yes for the weights
 # and no for the images: a code change needs `images`, and re-checking eight
