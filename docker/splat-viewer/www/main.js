@@ -2216,7 +2216,20 @@ async function main() {
                     // the camera's current heading would be a second answer to
                     // the same question, and the two would differ at exactly the
                     // corners where it shows.
-                    tourTurn(lane.dir, m.turn_ms);
+                    // Aim, then ease from where we were. tourTurn eases FROM
+                    // its argument TO the current yaw, so passing the lane
+                    // faced the corridor and swung straight back to whatever
+                    // heading this leg started with — and the walk was ridden
+                    // facing that. Which heading it was varied, so the view
+                    // landed right, square, or reversed by turns. The panel
+                    // never called this; that was the whole difference between
+                    // walking from the dashboard and walking from the panel.
+                    const wasFwd = cameraForward();
+                    tour.turn = null;
+                    tour.yaw = Math.atan2(dot3(lane.dir, tour.b),
+                                          dot3(lane.dir, tour.a));
+                    tour.pitch = 0;
+                    if (wasFwd) tourTurn(wasFwd, m.turn_ms);
                     await new Promise((r) => setTimeout(r, m.turn_ms || 0));
                 }
                 window.__rideWalk(w, window.__paths,
@@ -2360,6 +2373,14 @@ async function main() {
         });
         async function follow(truth) {
             if (detached || !truth || !truth.scene) return;
+            // A move is in flight: the walk commands are doing it, one corridor
+            // at a time, and each arrival faces the edge it travelled. Standing
+            // into the same waypoint instead skips the walk and takes its
+            // heading from whichever neighbour the model happens to name — a
+            // different corridor each time, which is why the view landed
+            // sometimes right, sometimes square to the way it came, sometimes
+            // reversed. Reconciliation is for when nothing is moving.
+            if (truth.moving) return;
             if (!window.__paths) {
                 if (awaiting) return;            // one waiter, not one per poll
                 awaiting = true;

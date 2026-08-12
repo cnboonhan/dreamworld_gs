@@ -520,7 +520,12 @@ def push_state():
     facing = None if ST.get("face") is None else lab(ST["face"])
     VIEWER.send({"op": "truth", "scene": st.get("scene"),
                  "level": st.get("level"), "yaw": st.get("heading"),
-                 "facing": facing})
+                 "facing": facing,
+                 # Whether a move is in flight. A walk publishes truth at every
+                 # vertex it passes, and those are not instructions to jump —
+                 # the walk commands are already doing the moving, corridor by
+                 # corridor, and they are what give the camera its heading.
+                 "moving": MOVE.locked()})
 
 
 def robot_watchdog():
