@@ -760,6 +760,9 @@ const tour = {
     // rad/s for an in-place turn, handed over by the interactive server so the
     // camera and the robot spin at one rate rather than two
     turnRate: 0,
+    // metres per second for a walk driven from the panel, when no server pace
+    // has been sent. ?speed= overrides it; the default matches the robot's.
+    speed: 2.0,
     // when following, the heading is the path's own direction and yaw is an
     // offset from it; otherwise the camera keeps whatever heading you gave it
     // and simply travels the corridor.
@@ -1290,6 +1293,11 @@ async function main() {
     } catch (err) {}
     // resolve ?url= relative to this server so mounted splats load same-origin
     const url = new URL(params.get("url") || "files/splat.ply", location.href);
+    // ?speed=<m/s> — how fast a corridor is walked when driving by hand. An
+    // agent-driven walk still uses the robot's pace, because those two have to
+    // land together and a viewer preference cannot be allowed to break that.
+    const wantSpeed = parseFloat(params.get("speed"));
+    if (Number.isFinite(wantSpeed) && wantSpeed > 0) tour.speed = wantSpeed;
     // spawn camera tagged to the splat: <name>.ply -> <name>.cam.json
     // (written by the generator; without it the default camera is arbitrary
     //  and scenes whose up-axis isn't +Y look upside down until you drag)
@@ -1375,10 +1383,16 @@ async function main() {
                 // the lane's metres and the robot's speed, so both sides travel
                 // for the same time. Falling back to the lane's own metres keeps
                 // the hand-driven panel sensible.
+                // How long this corridor takes. The server's duration when it
+                // sent one — that is the robot's own, so the two arrive
+                // together. Otherwise metres over the walking speed, which
+                // ?speed= sets: 2.0 m/s matches the robot and is brisk to watch,
+                // ?speed=0.5 is a stroll, and a marking pass wants slower still.
                 if (pace && pace.walk_ms)
                     tour.seconds = Math.max(0.4, pace.walk_ms / 1000);
-                else if (pace && pace.speed && w.metres)
-                    tour.seconds = Math.max(0.4, w.metres / pace.speed);
+                else if (w.metres)
+                    tour.seconds = Math.max(0.4, w.metres /
+                        ((pace && pace.speed) || tour.speed));
                 if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
                 // By hand, the camera KEEPS the heading you gave it and simply
                 // travels the corridor: swinging it to face the path would throw

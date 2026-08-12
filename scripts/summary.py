@@ -59,7 +59,11 @@ def standing_at(default: str = "<scene>") -> str:
 
 def urls(project: str) -> None:
     scene = standing_at()
-    view = f"http://localhost:{VIEWER}/?url=files/{project}/splats/{scene}/world.ply"
+    # ?speed= is how fast a hand-driven walk crosses a corridor, in m/s. The
+    # default matches the robot; slower is easier to mark and to watch.
+    speed = os.environ.get("DW_VIEWER_SPEED", "")
+    view = (f"http://localhost:{VIEWER}/?url=files/{project}/splats/{scene}/world.ply"
+            + (f"&speed={speed}" if speed else ""))
     rows = [
         (4200, "jobs + logs", "http://localhost:4200"),
         (VIEWER, "splat viewer", view),
