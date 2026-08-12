@@ -1313,6 +1313,19 @@ function cameraForward() {
 // cost a day — a spin in the face op, and every dashboard-driven leg ridden
 // facing wherever the last one ended. To turn TOWARD something, set tour.yaw
 // from the direction first, then call this with cameraForward().
+// A heading trace. Three stages set a heading during a leg and they have each
+// been wrong once; a single run now says which one reversed rather than needing
+// another guess. window.__hlog reads them back.
+window.__hlog = [];
+function hlog(stage, leg, extra) {
+    const f = (typeof cameraForward === "function" && cameraForward()) || null;
+    const row = {stage, leg, yaw: +(tour.yaw || 0).toFixed(3),
+                 fwd: f && f.map((v) => +v.toFixed(3)), ...(extra || {})};
+    window.__hlog.push(row);
+    console.log(`[hdg] ${stage} ${leg || ""}`, row);
+    return row;
+}
+
 function tourTurn(worldFwd, ms) {
     if (!tour.a || !tour.b) return;
     const from = Math.atan2(dot3(worldFwd, tour.b), dot3(worldFwd, tour.a));
@@ -2136,6 +2149,9 @@ async function main() {
         }
         // Hand the direction to the panel, which sets it after building its axes
         // — setting it here is undone by the standHome() at the end of it.
+        hlog("3-arrived", a.scene,
+             {cameFrom: window.__cameFrom || null,
+              dir: dir && dir.map((v) => +v.toFixed(3))});
         if (window.__openPanel) window.__openPanel(a.doc, dir);
         const warmDoc = a.doc, warmProj = a.project;
         arrival.records = null;
@@ -2240,10 +2256,15 @@ async function main() {
                                           dot3(lane.dir, tour.a));
                     tour.pitch = 0;
                     if (wasFwd) tourTurn(wasFwd, m.turn_ms);
+                    hlog("1-aimed", `${here()}->${shortOf(to)}`,
+                         {lane: lane.dir.map((v) => +v.toFixed(3))});
                     await new Promise((r) => setTimeout(r, m.turn_ms || 0));
                 }
                 window.__rideWalk(w, window.__paths,
                                   {...(pace || {}), facing: true, walk_ms: m.walk_ms});
+                hlog("2-riding", `${here()}->${shortOf(to)}`,
+                     {first: w.points[0].map((v) => +v.toFixed(2)),
+                      last: w.points[w.points.length - 1].map((v) => +v.toFixed(2))});
                 tour.playing = true;
                 return await arrivedAt(scene);
             },
