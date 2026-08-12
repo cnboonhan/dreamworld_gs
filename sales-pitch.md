@@ -24,8 +24,9 @@ photoreal worlds of your own buildings you can edit into any scenario.*
 
 One slide, referenced twice: at 1:05 (trace the plan → act → verify loop —
 "the model only proposes; this loop owns correctness, and it plans around
-the physics") and at 2:30 (point at the dashed arrows — "the part that ages
-is outside the framework, and your data tunes its replacement").
+the physics — and note it verifies against estimates, the way real sensors
+report") and at 2:33 (point at the dashed arrows — "the part that ages is
+outside the framework, and your data tunes its replacement").
 
 ```mermaid
 flowchart LR
@@ -51,12 +52,14 @@ flowchart LR
         end
         TS["EXTENSIBLE TOOL SURFACE<br/>go_to · open_door · take_lift · pick …<br/>a new capability = one new tool,<br/>gated and verified like the rest"]
         TWIN["PHOTOREALISTIC, EDITABLE WORLDS<br/>walkthrough + robot simulation<br/>doors, lifts, distances are real state"]
+        SE["STATE ESTIMATION<br/>pose · door state · progress, reported at<br/>sensor rates — in sim the simulator reports it,<br/>in the field your robots' perception does"]
         D[("Mission data<br/>verified runs · refusals · operator corrections")]
         SM --> PL
         SM --- TWIN
         ACT --> TS
         TS --> TWIN
-        TWIN -->|"physical reality pushes back:<br/>blocked, closed, wrong level"| V
+        TWIN -->|"physical reality pushes back:<br/>blocked, closed, wrong level"| SE
+        SE -->|"estimates, not oracles"| V
         V --> D
     end
 
@@ -80,7 +83,12 @@ around, not failures. The **tool surface** is how the loop touches
 anything — extensible, one new function per new capability, gated and
 verified like the rest, and the same surface a real fleet implements
 tomorrow. The **worlds** are photorealistic, and editable by typed
-instruction into any scenario. The model sits *outside*, on a dashed line,
+instruction into any scenario. And between the worlds and VERIFY sits
+**state estimation**: the loop never sees ground truth, only reports —
+pose, door state, progress, arriving at sensor rates — which is exactly
+the shape real-world perception has. In the field, the reporter changes
+(localization and sensors instead of the simulator); the discipline of
+consuming estimates does not. The model sits *outside*, on a dashed line,
 because it is the part the industry improves monthly and the part you
 replace in one configuration line — and your own mission data is what tunes
 each replacement toward how your operators actually work.
@@ -148,12 +156,16 @@ can't improvise around a constraint — the harness rejects out-of-order
 calls. And it cannot mark its own work done: every step is verified against
 the world — where the viewer stands *and* where the robot actually is,
 within 0.8 of a metre — and a failed step stays open and gets replanned.
-That is why one small 8-billion-parameter model, hosted on this box, runs
-missions safely: the model proposes, the harness disposes. Pause it —
-*[click pause]* — it stops at the next action, auditable to the line.
-*[resume]*
+Note what "the world" means here: state *estimates*, not oracles — the
+robot's pose and the door's state arrive as reports, noisy and at sensor
+rates, the same shape your real robots' perception has. The tolerances and
+the stall detection are built for that, so in the field you swap the
+reporter, not the discipline. And that is why one small 8-billion-parameter
+model, hosted on this box, runs missions safely: the model proposes, the
+harness disposes. Pause it — *[click pause]* — it stops at the next action,
+auditable to the line. *[resume]*
 
-**[1:55 — switch to the panorama editor tab; toggle the pre-baked
+**[2:00 — switch to the panorama editor tab; toggle the pre-baked
 before/after]**
 
 The last pillar: the worlds are photorealistic *and editable*. This is a
@@ -163,14 +175,14 @@ building held still. Regenerate that waypoint overnight and you have a
 variant world: obstacles, hazards, cleared rooms. Scenario authoring for
 rehearsal, without touching the real site or exposing it to anyone.
 
-**[2:15 — back to the dashboard log]**
+**[2:18 — back to the dashboard log]**
 
 And every run you just watched became data. Verified trajectories, refused
 calls, retries, operator pauses and corrections — structured, labelled by
 outcome. Exactly the data you need to tune models toward *your* operators'
 preferences, accumulating as a by-product of normal use.
 
-**[2:30 — close, facing them, the diagram back on screen]**
+**[2:33 — close, facing them, the diagram back on screen]**
 
 The models will keep improving — monthly, and not by us. That's the design
 bet: here the model is one configuration line. What endures is everything
@@ -205,6 +217,14 @@ under your control.
   (ordering, pause, cancel) and gets its own verifier — and every model,
   current or future, can call it immediately. `pick`/`place` are exactly
   such additions.
+- **"How close is the sim's state to real perception?"** — Deliberately the
+  same shape. Pose arrives as periodic reports (~1.5 Hz here), commands
+  return before the motion completes, doors report their own state — so the
+  harness already verifies with tolerances (0.8 m), detects a stalled robot
+  by observed stillness rather than by trusting a dispatch, and treats every
+  reading as an estimate. Moving to the field replaces the reporter —
+  localization and sensors instead of the simulator — not the discipline,
+  which has been rehearsed on every mission run in sim.
 - **"Why not wait for the industry to ship this?"** — Waiting buys a better
   model, and this framework will run it the day it ships. It won't buy your
   buildings captured, your operators' data accumulated, or a harness your
