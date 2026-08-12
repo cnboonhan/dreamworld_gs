@@ -14,7 +14,9 @@ window. Numbers cited are measured on this deployment; the deep reference is
 
 **The one-liner:** *One person photographs a facility in an afternoon; by
 morning it is a walkable digital twin an AI agent can be trusted to operate
-in — entirely on your own hardware, and the AI is the replaceable part.*
+in — entirely on your own hardware. The AI is the replaceable part. What you
+keep is the framework: the harness, the tool surface, the semantic map, and
+photoreal worlds of your own buildings you can edit into any scenario.*
 
 ---
 
@@ -115,7 +117,8 @@ This building is real — it's this facility. One person walked it with a 360
 camera, one photograph per waypoint, one afternoon. Everything you're about
 to see was generated from those photographs overnight, on this machine, and
 runs with the network cable out. Nothing — not the photos, not the model, not
-the missions — ever leaves the box.
+the missions — ever leaves the box. And everything you're about to watch is
+four things you keep, plus one part you'll replace as the industry improves.
 
 **[0:20 — type: `go to the apex lab`, press Run. Let it move while you
 talk.]**
@@ -153,11 +156,12 @@ missions safely: the model proposes, the harness disposes. Pause it —
 **[1:55 — switch to the panorama editor tab; toggle the pre-baked
 before/after]**
 
-The twin is also editable. This is a photograph of that corridor; before the
-meeting we typed one instruction — "add a pallet blocking the corridor" —
-and only those pixels changed. Regenerate that waypoint overnight and you
-have a variant world: obstacles, hazards, cleared rooms. Scenario authoring
-for rehearsal, without touching the real site or exposing it to anyone.
+The last pillar: the worlds are photorealistic *and editable*. This is a
+photograph of that corridor; before the meeting we typed one instruction —
+"add a pallet blocking the corridor" — and only those pixels changed, the
+building held still. Regenerate that waypoint overnight and you have a
+variant world: obstacles, hazards, cleared rooms. Scenario authoring for
+rehearsal, without touching the real site or exposing it to anyone.
 
 **[2:15 — back to the dashboard log]**
 
