@@ -1851,16 +1851,31 @@ async function main() {
                 // tourPlace while tour.on — and standHome clears it when a world
                 // opens. So a turn was set up and never drawn: the arrow buttons
                 // moved the robot and left the camera where it was.
-                const was = tour.on;
+                const wasOn = tour.on;
                 tour.on = true;
-                tourTurn(lane.dir, (motion || {}).turn_ms);
+                // tourTurn means "ease FROM this heading to the current yaw" —
+                // it sets yaw to face its argument and animates back. Passing
+                // the lane made the camera swing to the corridor and straight
+                // back to where it started, which is the full turn that appeared
+                // to be a 360 and left the yaw exactly as it was.
+                //
+                // So: aim first, then ease from where we were.
+                const wasFwd = cameraForward();
+                tour.turn = null;
+                tour.yaw = Math.atan2(dot3(lane.dir, tour.b),
+                                      dot3(lane.dir, tour.a));
+                tour.pitch = 0;
+                if (wasFwd) tourTurn(wasFwd, (motion || {}).turn_ms);
+                else tourPlace(tour.t);
                 // Answer when the swing has finished, not when it was started —
                 // the robot is turning for exactly as long.
                 await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));
                 // Put it back: left on, tourPlace re-pins the camera every frame
                 // and the keys stop working.
-                tour.on = was;
-                return {ok: true, at: here(), facing: shortOf(to)};
+                tourPlace(tour.t);            // land on the target, not mid-ease
+                tour.on = wasOn;
+                return {ok: true, at: here(), facing: shortOf(to),
+                        yaw: +tour.yaw.toFixed(4)};
             },
             /** Jump straight to a world, for a reset or a level change. */
             async stand({scene}) {
