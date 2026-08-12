@@ -29,28 +29,30 @@ where it is in the building rather than by a name someone invented. See
 The rest of the repo:
 
 ```
-justfile                 every workflow — just --list
-compose.yaml             the seven services; reads DW_PROJECT from .env
+justfile                 every workflow — just --list; a wrapper over scripts/
+compose.yaml             the twelve services; reads DW_PROJECT from .env
 samples/                 starter projects, seeded into assets/ by `just setup`
 docker/
   splat-generator/       the world-generation flow (GPU)
-  splat-viewer/          WebGL splat viewer
+  splat-viewer/          WebGL splat viewer, and the agent channel into it
   pano-viewer/           360 viewer for the input panoramas
-  rmf-tools/             RMF + Gazebo + traffic editor + the build-world flow
-scripts/                 host-side tools: model downloads, panorama alignment
+  pano-editor/           edit a panorama by prompt, and the model behind it
+  interactive/           the tool surface: go_to, open_door, take_lift …
+  rmf-tools/             RMF + Gazebo + traffic editor + build-world + the robot
+scripts/                 the host side: downloads, alignment, and every report
 assets/                  gitignored: model weights, job history, projects/
 ```
 
 ## Running it
 
 ```bash
-just setup      # one-time: model weights + images (~500GB, needs network)
+just setup      # one-time: model weights + images (~550GB, needs network)
                 #            `just setup images` alone after a code change
 just up         # start everything, print the URLs
 just summary    # waypoints, splat quality, progress, and every address
 ```
 
-Five web UIs come up and stay up:
+Seven web UIs come up and stay up:
 
 | | |
 | --- | --- |
@@ -62,7 +64,8 @@ Five web UIs come up and stay up:
 | http://localhost:8086 | the dashboard — tools, mission agent, minimap |
 | http://localhost:8087 | the panorama editor — face a view, prompt an edit, save |
 
-(Eight containers: those five plus the VLM and the two job workers.)
+(Twelve containers: those seven plus the robot bridge, the editor's model, the
+VLM and the two job workers.)
 
 One more runs on the host rather than in a container, because it rewrites files
 in `assets/` in place:
@@ -94,12 +97,15 @@ DW_PROJECT=htx just world  # or override for a single command
 
 Requirements: NVIDIA GPUs (4+, ~60GB VRAM for generation) with CUDA 12.8, the
 NVIDIA container runtime, [just](https://github.com/casey/just),
-[uv](https://docs.astral.sh/uv/), ~350GB disk.
+[uv](https://docs.astral.sh/uv/), and about 600GB of disk — the model weights are
+550GB of that, and one building's panoramas and splat worlds add ~35GB.
 
 ## The pipeline
 
-Every operation is a Prefect job. Nothing does real work outside one, and the
-justfile is only a wrapper — it submits and follows:
+The two expensive things are Prefect jobs — building a world takes minutes, and
+generating a splat takes twenty of them on four GPUs, so both belong on a queue
+that can be watched and retried rather than in a terminal that can be closed. The
+justfile only submits and follows:
 
 ```
 just <recipe>  ->  submit.py  ->  Prefect (:4200)  ->  the worker that can do it
@@ -114,9 +120,14 @@ list of splats and worlds rather than random adjectives:
 | `generate-world` | `generator` | 6 HY-World stages | one waypoint's world |
 
 Two workers, because the work needs different machines: world generation wants
-Gazebo and `rmf_building_map_tools`, the splat flows want CUDA. Each is served
+Gazebo and `rmf_building_map_tools`, the splat flow wants CUDA. Each is served
 from the image that has what it needs, and both register with the same Prefect
 server — so it is still one queue.
+
+Everything else is a live service rather than a job, because it is interactive:
+the viewers, the panorama aligner and editor, the tool surface at :8086 and the
+robot bridge at :8090 all answer while you are looking at them. A job you submit
+and come back to; a service you talk to.
 
 At :4200 you get per-stage timing and logs, retries, and the parameters a run
 was submitted with. `build-world` also publishes its nav graph as a table
@@ -328,10 +339,10 @@ renderer only ever holds one world.
 
 ## Driving it by tool call
 
-The building is walkable by API as well as by hand. `just interactive` brings up a
-tool surface ported from `dreamworld/docker/dream_interactive` — the same tools,
-name for name and argument for argument, so a client written against that
-dashboard drives this one unchanged:
+The building is walkable by API as well as by hand. The tool surface is ported
+from `dreamworld/docker/dream_interactive` — the same tools, name for name and
+argument for argument, so a client written against that dashboard drives this one
+unchanged. It comes up with the stack; `just interactive` prints where:
 
 | | |
 | --- | --- |
@@ -456,6 +467,14 @@ R1 meshes are ~32 MB and live at `assets/projects/<p>/GalaxeaR1/`, outside git.
   gated. See `scripts/README.md`.
 - **Upstream patches** to HY-World live in `docker/splat-generator/hyworld.patch`;
   environment fixes are documented inline in `build_env.sh`.
+- **The VLM needs two flags before the mission agent can call a tool.** vllm
+  serves tool calls only with `--enable-auto-tool-choice` and a
+  `--tool-call-parser`; both are set in `compose.yaml`, but the running server
+  predates them until it is restarted. A Claude proxy serves them natively.
+- **A generated world is only ever self-consistent.** `just summary` scores each
+  against views held out of training — but those views were themselves generated
+  from the one photograph, so a world can score well and still have invented a
+  corridor. Nothing in this pipeline can catch that; the renders and your eye can.
 - **The viewer is baked into its image**, so a change to `main.js` needs
   `just setup images && just up` before nginx serves it.
 

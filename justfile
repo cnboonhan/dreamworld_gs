@@ -55,7 +55,7 @@ export DW_GID := `id -g`
 _default:
     @just --list
 
-# Everything needed to run offline: model weights + the images (~500GB).
+# Everything needed to run offline: model weights + the images (~550GB).
 #
 # Both halves are idempotent and cheap to re-run: a model already in the cache is
 # recognised without a network call, so re-running this on a complete box is
@@ -69,7 +69,7 @@ _default:
 #   just setup images    after a code change
 #   just setup models    weights only (the list is scripts/models.txt)
 #
-# Everything needed to run offline: weights + images.
+# Everything needed to run offline: weights + images (~550GB).
 setup what="all": _env
     #!/usr/bin/env bash
     set -euo pipefail
