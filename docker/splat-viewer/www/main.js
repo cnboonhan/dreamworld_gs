@@ -1828,6 +1828,7 @@ async function main() {
     // While a world is coming down, clicks land on a panel describing the world
     // being left — its corridors are not this one's, and acting on them starts
     // a second swap on top of the first. So the page is sealed for the duration.
+    const unpacked = new Map();          // scene -> records, most recent last
     const sealed = (on) => {
         document.body.classList.toggle("swapping", !!on);
         window.__swapping = !!on;
@@ -1880,7 +1881,18 @@ async function main() {
             const paths = await fetch(new URL("world.paths.json", base).href,
                                       {cache: "no-store"});
             arrival.doc = paths.ok ? await paths.json() : null;
-            arrival.records = await unpackPly(new URL("world.ply", base).href, scene);
+            // Kept unpacked, three worlds deep. Warming the cache saves the
+            // transfer; this saves the decode too, which is the rest of the
+            // wait — so stepping back into the world you just left is instant
+            // rather than a second download's worth of work on a cached file.
+            if (unpacked.has(scene)) {
+                arrival.records = unpacked.get(scene);
+            } else {
+                arrival.records = await unpackPly(new URL("world.ply", base).href,
+                                                  scene);
+                unpacked.set(scene, arrival.records);
+                for (const k of [...unpacked.keys()].slice(0, -3)) unpacked.delete(k);
+            }
         } catch (err) {
             arrival.records = null;
             say(`${scene}: ${err.message || err}`);
@@ -1951,6 +1963,18 @@ async function main() {
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here
         window.__paths = a.doc;
+        // Fade the new world in. The swap itself is a single frame — one buffer
+        // replaced by another — and that hard cut is what reads as a jolt when
+        // walking a building. A short fade makes it a transition instead.
+        const cv = document.querySelector("canvas");
+        if (cv) {
+            cv.style.transition = "none";
+            cv.style.opacity = "0";
+            requestAnimationFrame(() => {
+                cv.style.transition = "opacity .32s ease";
+                cv.style.opacity = "1";
+            });
+        }
         // Tell the server where the camera has landed. Corridors can be walked
         // by hand from the panel, and until now the server never heard about it
         // — so it went on believing you were at the waypoint it last moved you

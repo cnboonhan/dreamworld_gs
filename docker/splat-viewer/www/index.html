@@ -57,6 +57,11 @@
 body.swapping #edges, body.swapping #tourbar, body.swapping #agentChip {
     pointer-events: none; opacity: .55; }
 body.swapping { cursor: progress; }
+/* Dim the world being left while the next one comes down, so the wait reads as
+   a transition rather than a freeze. The fade back in is set on the canvas as
+   the new world lands, which is the moment there is something to show. */
+canvas { transition: opacity .32s ease; }
+body.swapping canvas { opacity: .35; }
 #agentChip.on { border-color: #3f7d55; color: #8fd6a6; }
 #agentChip.off { border-color: #8a3a3a; color: #ff9b9b; }
 #edgeFold { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px;
