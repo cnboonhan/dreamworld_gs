@@ -1741,6 +1741,12 @@ async function main() {
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here
         window.__paths = a.doc;
+        // Tell the server where the camera has landed. Corridors can be walked
+        // by hand from the panel, and until now the server never heard about it
+        // — so it went on believing you were at the waypoint it last moved you
+        // to, and its next command named a neighbour of THAT one, which the
+        // world you are actually in has never heard of.
+        if (window.__agentPost) window.__agentPost("/viewer/at", {scene: a.scene});
         // Hand the direction to the panel, which sets it after building its axes
         // — setting it here is undone by the standHome() at the end of it.
         if (window.__openPanel) window.__openPanel(a.doc, dir);
@@ -1770,6 +1776,9 @@ async function main() {
     const agentBase = agentParam === "off" ? null
         : (agentParam || `http://${location.hostname}:8086`);
     if (agentBase) {
+        // Exposed, so code outside this block — the handover, which runs in
+        // another closure entirely — can report to the server too.
+        window.__agentPost = (path, body) => post(path, body);
         const post = (path, body) =>
             fetch(new URL(path, agentBase).href, {
                 method: "POST", mode: "cors",
@@ -1890,8 +1899,9 @@ async function main() {
             },
         };
 
-        let busy = Promise.resolve();
+        let busy = Promise.resolve(), busyDepth = 0;
         const run = (cmd) => {
+            busyDepth++;
             // Chain, do not race: each command starts only once the last has
             // finished, so `go_to` down three corridors arrives three times.
             busy = busy.then(async () => {
@@ -1900,8 +1910,30 @@ async function main() {
                                : {ok: false, error: `no such op: ${cmd.op}`};
                 say(res.ok ? "" : `agent: ${res.error}`);
                 await post("/viewer/done", {id: cmd.id, ...res});
+                busyDepth--;
             });
         };
+
+        // Both halves can move on their own — the panel walks a corridor here,
+        // a reset or an agent moves the model there — so each tells the other
+        // and each checks. Without the check a divergence lasts until someone
+        // notices a command refused for naming a waypoint that is not adjacent,
+        // which is a confusing way to learn you are in the wrong world.
+        let disagreed = 0;
+        setInterval(async () => {
+            if (!window.__paths || tour.playing || busyDepth) return;
+            let s;
+            try {
+                s = await (await fetch(new URL("/state", agentBase).href,
+                                       {cache: "no-store"})).json();
+            } catch (err) { return; }
+            if (!s || !s.scene || s.scene === here()) { disagreed = 0; return; }
+            // Twice running, so a swap in flight is not mistaken for a drift.
+            if (++disagreed < 2) return;
+            disagreed = 0;
+            say(`following the model to ${s.scene}`);
+            await ops.stand({scene: s.scene});
+        }, 3000);
 
         const connect = () => {
             const es = new EventSource(new URL("/viewer/events", agentBase).href);

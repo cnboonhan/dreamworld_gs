@@ -2070,6 +2070,51 @@ def r_viewer_done():
     return jsonify(ok=True)
 
 
+@app.route("/viewer/at", methods=["POST", "OPTIONS"])
+def r_viewer_at():
+    """The viewer says where it has arrived; the model follows it.
+
+    A corridor can be walked by hand from the viewer's own panel, with nothing
+    sent through the tool surface. The server used to hear nothing, so it went on
+    believing the robot stood where it last put it — and the next command named a
+    neighbour of that waypoint, which the world the camera is actually in has
+    never heard of. That is the "X is not a lane out of Y" refusal: not a bad
+    command, two halves in different places.
+
+    The robot is moved to match, because it is the model that is behind, not the
+    viewer.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    scene = str((request.get_json(force=True, silent=True) or {}).get("scene", ""))
+    level, _, name = scene.partition(".")
+    if not name:
+        return jsonify(ok=False, error="need a scene"), 400
+    if level and level != ST["level"] and level in ST["levels"]:
+        switch_level(level, land_on=name)
+        return jsonify(ok=True, at=lab(ST["cur"]), level=ST["level"])
+    try:
+        v = find_vertex(ST["verts"], name)
+    except SystemExit as e:
+        return jsonify(ok=False, error=str(e)), 400
+    if v == ST["cur"]:
+        return jsonify(ok=True, at=lab(v), level=ST["level"], note="already there")
+    with ST["lock"]:
+        ST["prev"], ST["cur"], ST["face"] = ST["cur"], v, None
+    # Placed, not driven: drive_path walks pairs of waypoints and does nothing
+    # with one, and a camera that jumped there by hand did not walk a corridor
+    # either — so the robot should not pretend to.
+    nb = next((n for n, _ in ST["adj"].get(v, [])), None)
+    yaw = _az(v, nb) if nb is not None else 0.0
+    bridge("/reset", {"level": ST["level"], "x": ST["verts"][v][1],
+                      "y": ST["verts"][v][2], "yaw": yaw})
+    with ST["lock"]:
+        ST["yaw"] = yaw
+    push_state()
+    log(f"viewer walked to {lab(v)} — following")
+    return jsonify(ok=True, at=lab(v), level=ST["level"])
+
+
 @app.route("/viewer/hello", methods=["POST", "OPTIONS"])
 def r_viewer_hello():
     if request.method == "OPTIONS":
