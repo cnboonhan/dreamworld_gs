@@ -83,6 +83,13 @@ def main() -> None:
     rec = scene.parent / ".aligned" / f"{scene.name}.json"
     if rec.is_file():
         saved = json.loads(rec.read_text())
+    # The waypoint's OWN position needs no marking — the panorama was shot
+    # standing at it, so the frame's centre is where it is, and asking someone
+    # to mark the place they are already standing is asking them to confirm the
+    # one thing this world is certain of. An explicit mark still wins, for the
+    # case where the generated centre is off.
+    placed = {waypoint: [round(float(v), 5) for v in centre],
+              **saved.get("placed", {})}
     out, lanes_out = [], []
     for a, b, metres in lanes:
         other = b if a == waypoint else (a if b == waypoint else None)
@@ -90,30 +97,30 @@ def main() -> None:
             continue
         d = named[other] - here
         bearing = math.atan2(d[1], d[0])
+        # the map's bearing through the panorama alignment: the only direction
+        # there is for a corridor nobody has marked yet
         direction = unit(M @ [math.cos(bearing), math.sin(bearing), 0.0])
-        # Two marked positions beat any fit: the walk is the line between
-        # them, needing neither scale nor bearing. The waypoint's OWN position
-        # needs no marking though — the panorama was shot standing at it, so the
-        # frame's centre is where it is, and asking someone to mark the place
-        # they are already standing is asking them to confirm the one thing this
-        # world is certain of. An explicit mark still wins, for the case where
-        # the generated centre is off.
-        placed = {waypoint: [round(float(v), 5) for v in centre],
-                  **saved.get("placed", {})}
-        # the lane's direction in this world's coordinates, so the viewer can
-        # face down a corridor that has not been marked yet
+        marked = waypoint in placed and other in placed
+        if marked:
+            # Two marked positions beat any fit — for the lane as much as the
+            # walk. The viewer aims a departure, faces a neighbour and turns an
+            # arrival from lane.dir, but rides the walk between the marks; a
+            # lane that disagrees with its own walk aims one way and travels
+            # another. On L11.v9->v7 the bearing (aligned when this world was
+            # mislabelled v6) sat 148 degrees off the marks, and every leg
+            # touching that edge landed facing backwards.
+            start = np.asarray(placed[waypoint], dtype=np.float64)
+            end = np.asarray(placed[other], dtype=np.float64)
+            direction = unit(end - start)
         lanes_out.append({"to": other, "metres": round(float(metres), 3),
                           "bearing": round(bearing, 5),
                           "dir": [round(float(v), 5) for v in direction]})
         # No walk until both ends are marked. A default one would be drawn from
         # a scale that was wrong by 2x and direction-dependent by 4.5x, and a
         # wrong walk is harder to notice than a missing one.
-        if waypoint not in placed or other not in placed:
+        if not marked:
             continue
-        start = np.asarray(placed[waypoint], dtype=np.float64)
-        end = np.asarray(placed[other], dtype=np.float64)
         line = np.linspace(start, end, POINTS)
-        direction = unit(end - start)
         out.append({"to": other, "metres": round(float(metres), 3),
                     "bearing": round(bearing, 5),
                     "points": [[round(float(v), 5) for v in p] for p in line]})
@@ -127,8 +134,7 @@ def main() -> None:
            # `placed` as the viewer sees it, including the implicit self-mark,
            # so a waypoint shows as placed without anyone having placed it.
            "lanes": lanes_out,
-           "placed": {waypoint: [round(float(v), 5) for v in centre],
-                      **saved.get("placed", {})},
+           "placed": placed,
            "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
 
