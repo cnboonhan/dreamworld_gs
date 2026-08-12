@@ -1515,8 +1515,9 @@ header #mbox{flex:1;min-width:140px}
      <input id=tpwhere placeholder="teleport to — waypoint, or double-click the map">
      <input id=tplevel placeholder="level" style="flex:0 0 70px">
      <button class=go id=tpgo style="background:#6e40c9">teleport</button></div>
-    <div class=hint id=tphint>puts the robot there and the world model with it — an
-     operator move, not something the agent can do</div>
+    <div class=hint id=tphint>click a waypoint on the map to fill this,
+     double-click to go straight there. Puts the robot there and the world model
+     with it — an operator move, not something the agent can do</div>
    </div>
   </div>
  </div>
@@ -1732,8 +1733,14 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
  map.addEventListener('mouseleave',()=>{tip.style.display='none'});
  map.addEventListener('dblclick',e=>{const best=vertAt(e);      // straight there
   if(best)teleport(best.name||('v'+best.id),'')});
- map.addEventListener('click',e=>{if(!selTool)return;const best=vertAt(e);   // active tool -> fill arg
-  if(best){$('argbox').value=best.name||best.id;$('argbox').focus()}})})();
+ // Click a waypoint to name it somewhere. With a tool field open that is the
+ // tool's argument; otherwise it is the teleport box, which is the other thing
+ // on this page that takes a waypoint — and doing nothing was the third option,
+ // which is what it used to do.
+ map.addEventListener('click',e=>{const best=vertAt(e);if(!best)return;
+  const label=best.name||('v'+best.id);
+  if(selTool){$('argbox').value=label;$('argbox').focus()}
+  else{$('tpwhere').value=label;$('tpwhere').focus()}})})();
 loadTools();
 connect();
 </script></body></html>"""
