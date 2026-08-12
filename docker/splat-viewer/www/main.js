@@ -755,6 +755,8 @@ let viewMatrix = defaultViewMatrix;
 const tour = {
     points: null, t: 0, dir: 1, on: false, playing: false, seconds: 10,
     up: null, a: null, b: null, yaw: 0, pitch: 0, release: null,
+    // set when a walk ended before the next world had finished loading
+    waiting: false,
     // rad/s for an in-place turn, handed over by the interactive server so the
     // camera and the robot spin at one rate rather than two
     turnRate: 0,
@@ -1574,7 +1576,14 @@ async function main() {
         const a = arrival;
         // say why, not just no. Two silent refusals in a row cost more time
         // than the bugs behind them.
-        if (!a.records) { say(`${a.scene || "next world"}: not loaded yet`); return false; }
+        if (!a.records) {
+            // Said once, not once a frame: the arrival retry calls this until
+            // the world lands, and a message repainted sixty times a second is
+            // a message nobody can read.
+            const note = `${a.scene || "next world"}: loading`;
+            if (a.said !== note) { say(note); a.said = note; }
+            return false;
+        }
         if (!a.doc) { say(`${a.scene}: no paths.json`); return false; }
         // marked is best — that mark and this world's mark for itself are the
         // same physical place. Unmarked, the world's origin is where its
@@ -1599,7 +1608,16 @@ async function main() {
         const dir = came ? came.dir.map((v) => -v)
                          : (lanes[0] && lanes[0].dir) || null;
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
-        if (ahead) tourInit({points: [stand, ahead], up: a.doc.up}, false);
+        if (ahead) {
+            tourInit({points: [stand, ahead], up: a.doc.up}, false);
+            // tourInit(follow=false) KEEPS the camera's yaw and only redefines
+            // the axes it is measured against, so the direction above changed
+            // what the old yaw meant rather than where the camera looks. Zeroing
+            // it is what actually faces down the axis — yaw 0 IS tour.a, which
+            // is the way you were walking.
+            tour.yaw = 0;
+            tour.pitch = 0;
+        }
         tour.t = 0; tour.playing = false;
         history.replaceState(null, "",
             `?url=files/${a.project}/splats/${a.scene}/world.ply&from=${window.__cameFrom || ""}`);
@@ -1609,6 +1627,7 @@ async function main() {
         window.__paths = a.doc;
         if (window.__openPanel) window.__openPanel(a.doc);
         arrival.records = null;
+        arrival.said = null;
         return true;
     };
 
@@ -2210,14 +2229,25 @@ async function main() {
                     if (play) play.textContent = "play";
                     // arrived: if the next world is ready, step into it
                     if (tour.t >= 1) {
-                        if (window.stepThrough) window.stepThrough();
-                        else console.warn("no stepThrough on arrival");
+                        // Try, and keep trying: the next world may still be
+                        // downloading when the walk ends, and stepThrough
+                        // refuses until its records are unpacked. Firing once
+                        // meant the handover simply never happened — until some
+                        // later click ran it, which is what made it look like a
+                        // transition you had to ask for twice.
+                        if (window.stepThrough) {
+                            if (!window.stepThrough()) tour.waiting = true;
+                        } else console.warn("no stepThrough on arrival");
                     }
                 }
                 document.getElementById("tourAt").value = tour.t * 1000;
             }
             tourPlace(tour.t);
         }
+        // The retry. Cheap — a property read per frame until the world lands,
+        // and it clears itself the moment the step succeeds.
+        if (tour.waiting && window.stepThrough && window.stepThrough())
+            tour.waiting = false;
         if (isJumping) {
             jumpDelta = Math.min(1, jumpDelta + 0.05);
         } else {
