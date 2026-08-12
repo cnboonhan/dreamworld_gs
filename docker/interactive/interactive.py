@@ -2158,6 +2158,25 @@ def r_cancel():
     return jsonify(ok=True, cancelled=True)
 
 
+@app.route("/viewer/pose")
+def r_viewer_pose():
+    """Where the splat camera is, asked of the viewer and answered here.
+
+    The viewer is a static page and cannot host a route of its own, so this is
+    the only way to see it from outside a browser. Everything it reports is in
+    that world's own coordinates — position, forward, yaw, whether a walk is
+    running and how far along — plus the lanes and marks it is working from.
+    """
+    res = viewer_call("pose", timeout=20)
+    if res.get("no_viewer"):
+        # Say so rather than answering ok with nothing in it. A pose endpoint
+        # that returns success when no viewer is attached is worse than an
+        # error: it reads as "the camera is nowhere".
+        return jsonify(ok=False, error="no splat viewer connected — open "
+                                       f"{ST['viewer_url']} and reload it"), 503
+    return jsonify(res)
+
+
 @app.route("/health")
 def r_health():
     return jsonify(ok=True, viewer=bool(ST.get("viewer_up")),

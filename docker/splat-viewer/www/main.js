@@ -1822,6 +1822,25 @@ async function main() {
                 window.stepThrough();
                 return await arrivedAt(scene, 180000);
             },
+            /** Where the camera is and what it looks at, in this world's own
+             *  coordinates. The one thing about the viewer that could not be
+             *  seen from outside the browser — every heading bug this week was
+             *  diagnosed by asking a person to read a console line. */
+            async pose() {
+                const inv = invert4(viewMatrix);
+                const f = cameraForward();
+                const doc = window.__paths || {};
+                return {ok: true, at: here(),
+                        position: [inv[12], inv[13], inv[14]].map((v) => +v.toFixed(4)),
+                        forward: f ? f.map((v) => +v.toFixed(4)) : null,
+                        yaw: +tour.yaw.toFixed(4), pitch: +tour.pitch.toFixed(4),
+                        walking: !!tour.playing, along: +tour.t.toFixed(3),
+                        origin: doc.origin,
+                        lanes: (doc.lanes || []).map((l) => ({
+                            to: shortOf(l.to), dir: l.dir, metres: l.metres})),
+                        marked: Object.keys(doc.placed || {}).map(shortOf)};
+            },
+
             /** Where the viewer thinks it is — the answer `where` reports. */
             async where() {
                 return {ok: true, at: here(),
