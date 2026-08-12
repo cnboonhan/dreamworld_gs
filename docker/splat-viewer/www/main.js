@@ -1877,7 +1877,7 @@ async function main() {
     // around. Sequential: a sweep that competes with the world being loaded now
     // makes the thing you are waiting for slower.
     const warmed = new Set();
-    let cached = 0, total = 0, lastWarm = null;
+    let cached = 0, total = 0, lastWarm = null, sweeping = false;
     const countCached = async () => {
         const c = await store();
         cached = c ? (await c.keys()).length : 0;
@@ -1894,7 +1894,8 @@ async function main() {
     // scenes.json carries every built world AND its lanes, so the walk order is
     // known without opening each world's paths doc first.
     const warm = async (project, doc) => {
-        if (!doc || !project) return;
+        if (!doc || !project || sweeping) return;
+        sweeping = true;                 // one sweep at a time, whoever asks
         lastWarm = {project, doc};       // so a re-download knows where to start
         const level = String(doc.waypoint || "").split(".")[0];
         let index;
@@ -1953,7 +1954,18 @@ async function main() {
                 await countCached();
             } catch (err) { /* a world that will not prefetch still loads */ }
         }
+        sweeping = false;
     };
+
+    // However a world came to be open — a link, a reload, the chooser, go-to,
+    // a step, or the agent moving the tour — it ends with paths on the window.
+    // So that is what starts the download, rather than each way in remembering
+    // to. Two of them already did and a third would have been forgotten.
+    setInterval(() => {
+        if (sweeping || !window.__paths) return;
+        const m = String(location.search).match(/files\/([^/]+)\/splats\//);
+        if (m) warm(decodeURIComponent(m[1]), window.__paths);
+    }, 5000);
     window.__warm = warm;
 
     window.prepareArrival = async (project, scene, to) => {
