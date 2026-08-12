@@ -819,7 +819,7 @@ async function edgePicker(doc, choose) {
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
         <button id="saveSpot"></button>
-        <button id="clearSpot" disabled>clear</button>`;
+        <button id="clearSpot" disabled>clear saved position</button>`;
     document.body.appendChild(box);
     const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
@@ -876,7 +876,7 @@ async function edgePicker(doc, choose) {
         // it never appeared at all until a waypoint had been marked — so the way
         // to undo a mark was invisible to anyone who had not already made one.
         clearSpot.disabled = !placed[spots[target]];
-        clearSpot.textContent = "clear";
+        clearSpot.textContent = "clear saved position";
         draw();
     };
 
@@ -900,7 +900,7 @@ async function edgePicker(doc, choose) {
             clearSpot.textContent = "could not clear \u2014 is 8085 running?";
             return;
         }
-        clearSpot.textContent = "clear";
+        clearSpot.textContent = "clear saved position";
     };
 
     // With the walk list gone, the tour simply rides whichever corridor is
