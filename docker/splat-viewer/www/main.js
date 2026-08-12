@@ -790,33 +790,27 @@ function norm3(v) {
 // The same view the alignment tool gives: the waypoint you are standing at,
 // the walls around it, and every lane leaving it. Picking a lane switches the
 // tour to that corridor's walk rather than loading another scene.
-/** The corridor you are continuing into, given the waypoint you came from.
+/** Which way to look on arriving at a waypoint from `cameFrom`.
  *
- * Used by BOTH ways a world opens — the live handover and a direct load with
- * &from= — because they were two copies of this rule and only one of them was
- * ever observed to be right. One copy cannot disagree with itself.
+ * The edge you arrived along, continued: the lane back to where you came from,
+ * reversed. You were travelling that way a moment ago and nothing about
+ * arriving changes it.
+ *
+ * This replaced a rule that picked whichever OTHER lane was closest to straight
+ * on. That is the same vector down a corridor, and wrong everywhere else: at
+ * v4, a T-junction, the two candidates sat at +91 and -86 degrees and it chose
+ * between them on a dot of -0.07 against +0.01, spinning the camera sideways on
+ * arrival. There is no reason to consult the other corridors at all — the edge
+ * you came in on is the reference, and it is the one thing that cannot be
+ * ambiguous.
+ *
+ * Used by both ways a world opens, the live handover and a direct load with
+ * &from=, so the two cannot drift apart.
  */
 function continuation(doc, cameFrom) {
     const from = String(cameFrom || "").split(".").pop();
-    const lanes = (doc && doc.lanes) || [];
-    const back = lanes.find((l) => l.to === from);
-    if (!back) return null;
-    const rest = lanes.filter((l) => l.to !== from);
-    let best = null, bestDot = 2;
-    for (const l of rest) {
-        const d = dot3(l.dir, back.dir);
-        if (d < bestDot) { bestDot = d; best = l; }
-    }
-    // Only if something actually continues. At v4 arriving from v3 the two
-    // other corridors sit at +91 and -86 degrees — a T-junction, where "most
-    // opposite" is a coin flip between two side turns and picking either spins
-    // you sideways the moment you arrive.
-    //
-    // -0.5 is about 60 degrees off straight: past that it is a turn, not a
-    // continuation, and the honest heading is the way you were travelling —
-    // which is the lane back, reversed, whether or not a corridor runs along it.
-    if (best && bestDot < -0.5) return best.dir;
-    return back.dir.map((v) => -v);
+    const back = ((doc && doc.lanes) || []).find((l) => l.to === from);
+    return back ? back.dir.map((v) => -v) : null;
 }
 
 
