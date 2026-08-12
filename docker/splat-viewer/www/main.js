@@ -927,11 +927,18 @@ async function edgePicker(doc, choose, facing) {
      * (or negate it here). One line, one place.
      */
     const faceWorld = (d) => {
-        if (!d || !tour.a || !tour.b) return;
+        if (!d) return "give me a direction, e.g. __faceWorld([1,0,0])";
+        if (!tour.a || !tour.b) return "no axes yet — open a world first";
         tour.turn = null;                       // no animation to overwrite it
         tour.yaw = Math.atan2(dot3(d, tour.b), dot3(d, tour.a));
         tour.pitch = 0;
         tourPlace(tour.t);                      // apply now, not next frame
+        // Report, so the console says what happened rather than `undefined`.
+        // A tool for answering a question has to answer it.
+        return {asked: d.map((v) => +v.toFixed(3)),
+                cameraNow: cameraForward().map((v) => +v.toFixed(3)),
+                lanes: (doc.lanes || []).map((l) =>
+                    l.to + " " + l.dir.map((v) => +v.toFixed(2)).join(","))};
     };
     window.__faceWorld = faceWorld;
 
@@ -956,6 +963,8 @@ async function edgePicker(doc, choose, facing) {
         // bar has been shown, which on a world nobody has walked yet it has not.
         tourPlace(0);
         // After the axes are built, so it cannot be re-derived away.
+        console.log("[standHome]", doc.waypoint, "face arg:",
+                    face ? face.map((v) => +v.toFixed(3)) : "(none — keeping heading)");
         if (face) faceWorld(face);
         tour.on = false;
         const play = document.getElementById("tourPlay");
