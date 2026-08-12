@@ -1921,6 +1921,10 @@ async function main() {
             // finished, so `go_to` down three corridors arrives three times.
             busy = busy.then(async () => {
                 try {
+                    if (cmd.op === "bye") {   // another tab took over
+                        window.__stoodDown = cmd.why || "another viewer took over";
+                        return;
+                    }
                     const op = ops[cmd.op];
                     const res = op
                         ? await op(cmd).catch((e) => ({ok: false, error: String(e)}))
@@ -1988,8 +1992,17 @@ async function main() {
             };
             setChip("", "agent connecting");
             es.onerror = () => {
-                setChip("off", "agent disconnected");
                 es.close();
+                if (window.__stoodDown) {
+                    // Evicted, not dropped. Reconnecting here would start the
+                    // fight over: this tab would take the stream back from the
+                    // one in front of the person, and the model would follow
+                    // whichever of them moved last.
+                    setChip("off", "another tab has the agent");
+                    say(`agent: ${window.__stoodDown} — reload to take over`);
+                    return;
+                }
+                setChip("off", "agent disconnected");
                 say("agent: disconnected, retrying");
                 setTimeout(connect, 2000);
             };

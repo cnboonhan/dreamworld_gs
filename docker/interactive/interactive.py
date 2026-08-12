@@ -2029,26 +2029,53 @@ def r_viewer_events():
     """The command channel the splat viewer opens. One viewer at a time — two
     would each walk half the corridors and neither would be where the robot is."""
     def stream(q):
+        # One viewer at a time, enforced rather than merely asserted above. A tab
+        # left open from an earlier reload keeps its stream alive, receives every
+        # command, and reports where IT stands — so the model follows whichever
+        # tab moved last. That is the desync that kept coming back: three tabs
+        # were attached, two of them forgotten. The newest is the one someone is
+        # actually looking at, so the older ones are told to stand down and are
+        # dropped from the fan-out before any command can reach them.
+        with VIEWER.lock:
+            stale = [oq for oq in VIEWER.qs if oq is not q]
+            VIEWER.qs = [oq for oq in VIEWER.qs if oq is q]
+        for oq in stale:
+            try:
+                oq.put_nowait({"op": "bye", "why": "a newer viewer tab took over"})
+            except queue.Full:
+                pass
+        if stale:
+            log(f"{len(stale)} older viewer tab(s) stood down — newest one drives",
+                "err")
         with ST["lock"]:
-            # Count them. A page that navigated away leaves its connection to be
-            # collected whenever the server next tries to write, so a flag set by
-            # any listener and cleared by any disconnect can read "attached"
-            # while nothing is listening — and every command then times out
-            # against a viewer that is not there.
-            ST["viewers"] = ST.get("viewers", 0) + 1
+            # Counted from the fan-out itself. A page that navigated away leaves
+            # its connection to be collected whenever the server next tries to
+            # write, so a flag set by any listener and cleared by any disconnect
+            # can read "attached" while nothing is listening.
+            ST["viewers"] = len(VIEWER.qs)
             ST["viewer_up"] = True
-        log(f"splat viewer connected ({ST['viewers']} attached)")
+        log("splat viewer connected")
         push_state()
         try:
             while True:
                 try:
-                    yield f"data: {json.dumps(q.get(timeout=20))}\n\n"
+                    msg = q.get(timeout=20)
                 except queue.Empty:
                     yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(msg)}\n\n"
+                if isinstance(msg, dict) and msg.get("op") == "bye":
+                    # Close it here. Dropping the queue from the fan-out is not
+                    # enough on its own: the stream would sit in this loop
+                    # sending keepalives, so the evicted tab would still look
+                    # connected to itself and never say it had stood down.
+                    return
         finally:
             VIEWER.drop(q)
             with ST["lock"]:
-                ST["viewers"] = max(0, ST.get("viewers", 1) - 1)
+                # From the fan-out, not a decrement: an evicted tab disconnecting
+                # must not zero the count while the newest viewer is still live.
+                ST["viewers"] = len(VIEWER.qs)
                 ST["viewer_up"] = ST["viewers"] > 0
             log(f"splat viewer disconnected ({ST['viewers']} left)", "err")
             push_state()
