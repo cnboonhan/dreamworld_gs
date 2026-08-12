@@ -1716,6 +1716,8 @@ async function main() {
             // anything, so nothing had ever started downloading the building
             // and the counter had nothing to count. That is why it was not
             // there: not everything cached, nothing counted.
+            if (proj && window.__preheat)
+                setTimeout(() => window.__preheat(proj[1], doc), 1200);
             if (proj && window.__warm)
                 setTimeout(() => window.__warm(proj[1], doc), 2000);
             // A world opened directly still knows where you came from — the
@@ -1975,7 +1977,28 @@ async function main() {
         return "cleared";
     };
 
-    const unpackPly = async (href, label, res0) => {
+    // One unpack at a time: the unpacker worker has a single reply slot, and
+    // two in flight would hand the first caller the second one's records. The
+    // background preheat and a live arrival both come through here.
+    let unpackTail = Promise.resolve();
+    const unpackPly = (href, label, res0, quiet) => {
+        const job = unpackTail.then(() => unpack1(href, label, res0, quiet));
+        unpackTail = job.then(() => {}, () => {});
+        return job;
+    };
+    const unpack1 = async (href, label, res0, quiet) => {
+        const tell = quiet ? () => {} : say;
+        // Parsed once, kept parsed. The rows the renderer wants are a third
+        // the size of the ply they are computed from, and reading them back
+        // skips the parse entirely — which was the whole wait once the bytes
+        // were local, and the reason a short corridor could end before the
+        // next world was ready.
+        const rowsKey = href + ".rows";
+        const hit = await stored(rowsKey);
+        if (hit) {
+            tell(`${label}: ready`);
+            return new Uint8Array(await hit.arrayBuffer());
+        }
         const res = res0 || await fetch(href);
         if (!res.ok) throw new Error(`${res.status} ${href}`);
         const total = +res.headers.get("content-length") || 0;
@@ -1987,24 +2010,30 @@ async function main() {
             if (done) break;
             parts.push(value);
             got += value.length;
-            say(total ? `${label}: ${Math.round(got / total * 100)}%`
-                      : `${label}: ${(got / 1e6).toFixed(0)} MB`);
+            tell(total ? `${label}: ${Math.round(got / total * 100)}%`
+                       : `${label}: ${(got / 1e6).toFixed(0)} MB`);
         }
         const ply = new Uint8Array(got);
         let at = 0;
         for (const q of parts) { ply.set(q, at); at += q.length; }
-        say(`${label}: unpacking`);
-        return await new Promise((resolve) => {
-            unpacking = (recs) => { say(`${label}: ready`); resolve(recs); };
+        tell(`${label}: unpacking`);
+        const recs = await new Promise((resolve) => {
+            unpacking = (r) => { tell(`${label}: ready`); resolve(r); };
             unpacker.postMessage({ply: ply.buffer}, [ply.buffer]);
         });
+        const c = await store();
+        if (c) await c.put(rowsKey, new Response(new Blob([recs])))
+            .catch(() => {});
+        return recs;
     };
 
     // While a world is coming down, clicks land on a panel describing the world
     // being left — its corridors are not this one's, and acting on them starts
     // a second swap on top of the first. So the page is sealed for the duration.
     const unpacked = new Map();          // scene -> records, most recent last
-    const KEEP = 4;                      // a junction's worth, plus where you are
+    const KEEP = 6;    // where you are, the widest junction's neighbours, and
+                       // the world just left — so the preheat is never evicted
+                       // by the very arrival it was warming up for
     const remember = (scene, recs) => {
         unpacked.set(scene, recs);
         for (const k of [...unpacked.keys()].slice(0, -KEEP)) unpacked.delete(k);
@@ -2027,7 +2056,10 @@ async function main() {
         // Without a store — an insecure origin, so no Cache API — the downloads
         // still warm the browser's own cache; only their persistence is not
         // ours to promise. Count them anyway, so the sweep is visible.
-        cached = c ? (await c.keys()).length : warmed.size;
+        // count worlds, not entries: each world stores its ply and, once
+        // unpacked somewhere, its rows — two keys, one splat
+        cached = c ? (await c.keys()).filter((r) => r.url.endsWith(".ply")).length
+                   : warmed.size;
         const el = document.getElementById("cacheNote");
         if (el) el.innerHTML = total
             ? `splats cached ${cached}/${total}` +
@@ -2094,17 +2126,28 @@ async function main() {
             const href = new URL(`files/${project}/splats/${scene}/world.ply`,
                                  location.href).href;
             try {
-                if (await stored(href)) { await countCached(); continue; }
-                // Wait out a real load rather than skipping the rest of the
-                // sweep: the sweep should finish the building either way, just
-                // never at the expense of the world being opened now.
-                while (window.__swapping) await new Promise((r) => setTimeout(r, 400));
-                const res = await fetch(href, {priority: "low"});
-                if (!res.ok) continue;
-                const c = await store();
-                if (c) await c.put(href, res.clone());
-                await res.arrayBuffer();
-                await countCached();
+                if (!(await stored(href))) {
+                    // Wait out a real load rather than skipping the rest of the
+                    // sweep: the sweep should finish the building either way,
+                    // just never at the expense of the world being opened now.
+                    while (window.__swapping)
+                        await new Promise((r) => setTimeout(r, 400));
+                    const res = await fetch(href, {priority: "low"});
+                    if (!res.ok) continue;
+                    const c = await store();
+                    if (c) await c.put(href, res.clone());
+                    await res.arrayBuffer();
+                    await countCached();
+                }
+                // The parse, paid here in the background rather than at a
+                // corridor. Once a world's rows are stored, every later load
+                // of it is a disk read, not a computation — the sweep makes
+                // the whole building instant, not merely downloaded.
+                if (HAS_STORE && !(await stored(href + ".rows"))) {
+                    while (window.__swapping || tour.playing)
+                        await new Promise((r) => setTimeout(r, 500));
+                    await unpackPly(href, scene, await stored(href), true);
+                }
             } catch (err) { /* a world that will not prefetch still loads */ }
         }
         sweeping = false;
@@ -2124,6 +2167,38 @@ async function main() {
         if (m) warm(decodeURIComponent(m[1]), window.__paths);
     }, 5000);
     window.__warm = warm;
+
+    // The bytes make a corridor cheap; the parse was what was left, and it is
+    // the wait that let a short ride reach its end before the far world was
+    // ready. So while you stand somewhere, the neighbours are unpacked ahead
+    // of time into memory — one at a time, yielding to any real move — and a
+    // ride that starts later finds its records already sitting there. First
+    // time through, this is also what converts each neighbour's rows, so it
+    // does the sweep's most useful work in the most useful order.
+    let heating = false;
+    const preheat = async (project, doc) => {
+        if (heating || !project || !doc) return;
+        heating = true;
+        try {
+            const level = String(doc.waypoint || "").split(".")[0];
+            for (const w of (doc.walks || [])) {
+                const scene = `${level}.${w.to}`;
+                if (unpacked.has(scene)) continue;
+                while (window.__swapping || tour.playing)
+                    await new Promise((r) => setTimeout(r, 500));
+                if (window.__paths !== doc) return;   // moved on: these are
+                const href = new URL(                 // no longer the neighbours
+                    `files/${project}/splats/${scene}/world.ply`,
+                    location.href).href;
+                try {
+                    const recs = await unpackPly(href, scene,
+                                                 await stored(href), true);
+                    remember(scene, recs);
+                } catch (err) { /* an unbuilt neighbour stays cold */ }
+            }
+        } finally { heating = false; }
+    };
+    window.__preheat = preheat;
 
     window.prepareArrival = async (project, scene, to) => {
         if (arrival.to === to && arrival.records) return;
@@ -2233,8 +2308,10 @@ async function main() {
         a.records = null;
         a.said = null;
         a.midway = false;
-        // Two deep: the neighbours, then theirs. Deferred, so the world just
-        // landed gets the frame it needs to draw before anything else fetches.
+        // Neighbours into memory first, then the building into the store.
+        // Deferred, so the world just landed gets the frame it needs to draw
+        // before anything else fetches.
+        setTimeout(() => window.__preheat(warmProj, warmDoc), 800);
         setTimeout(() => window.__warm(warmProj, warmDoc), 1500);
     };
 
@@ -2301,13 +2378,13 @@ async function main() {
         return true;
     };
 
-    // How far along a corridor the worlds trade places. At this fraction the
-    // world being left is well into its blur — the camera far from where its
-    // panorama was shot — and the next is nearly at its sharpest, and both
-    // are showing the same physical corridor, aligned by the same two marks.
+    // How far along a corridor the worlds trade places. The midpoint: the two
+    // worlds are equally sharp there — each panorama is half a corridor away —
+    // both are showing the same physical corridor aligned by the same two
+    // marks, and the whole second half remains for the fade to breathe in.
     // ?handover= tunes it; 1 turns the crossing off and swaps at the vertex.
     const HANDOVER = Math.min(1, Math.max(0.3,
-        +(new URLSearchParams(location.search).get("handover") || 0.7)));
+        +(new URLSearchParams(location.search).get("handover") || 0.5)));
 
     /** Fade the frame on screen out over whatever renders next.
      *
