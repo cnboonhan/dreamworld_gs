@@ -1677,11 +1677,11 @@ function setStateModel(text){const el=$('statemodel');if(!el)return;
 // wishing itself past it. Here it is a button because setting up a test from a
 // particular waypoint should not mean walking there first.
 async function teleport(where,level){if(!where)return;
- $("tpgo").disabled=true;status("teleporting…");
+ $("tpgo").disabled=true;
  try{const j=await(await P('/teleport',{waypoint:where,level:level||''})).json();
   if(j.ok){logEv('ok','teleported to '+j.message);$("tpwhere").value='';loadGraph();}
   else logEv('err','! '+j.error);}
- catch(e){logEv('err','! '+e);}finally{$("tpgo").disabled=false;status('');}}
+ catch(e){logEv('err','! '+e);}finally{$("tpgo").disabled=false;}}
 $("tpgo").onclick=()=>teleport($("tpwhere").value.trim(),$("tplevel").value.trim());
 $("tpwhere").addEventListener('keydown',e=>{if(e.key==='Enter')$("tpgo").click()});
 $("tplevel").addEventListener('keydown',e=>{if(e.key==='Enter')$("tpgo").click()});
