@@ -1665,11 +1665,14 @@ async function main() {
             // an arrival heading set here was overwritten a frame later and
             // nothing appeared to change however it was set.
             tour.turn = null;
-            tour.yaw = Math.PI + Math.PI;
+            // Half a turn about the continuation. The screen shows the opposite
+            // of the `fwd` tourPlace computes — the walk travels the right way
+            // and only the heading it lands on is reversed, which is exactly
+            // what that would do. This value was tried twice before and appeared
+            // to change nothing, because the turn above was overwriting it.
+            tour.yaw = Math.PI;
             tour.pitch = 0;
             tourPlace(0);          // take effect now, not on the next frame
-            console.log("[handover] yaw set to", tour.yaw,
-                        "| camera fwd after", cameraForward().map(v => +v.toFixed(3)));
             // Both signs have now been reported backwards, which cannot both be
             // true — so print what was actually used rather than argue about it
             // again. cameraForward() is the direction the camera ends up looking
