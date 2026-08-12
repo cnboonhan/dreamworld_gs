@@ -1244,7 +1244,13 @@ async function main() {
     // one line through a junction would pick a corridor arbitrarily and ignore
     // the rest — so the panel offers them all and you choose.
     try {
-        const res = await fetch(url.href.replace(/\.ply$/, "") + ".paths.json");
+        // Cache-busted: this file is rewritten every time a position is saved or
+        // cleared, and nginx serves it with an ETag. Without the parameter the
+        // browser answers from cache and the panel opens showing the marks as
+        // they were when you first loaded the page — the ply beside it never
+        // changes, so nothing else here needed this.
+        const res = await fetch(url.href.replace(/\.ply$/, "") +
+                                ".paths.json?t=" + Date.now());
         const doc = res.ok ? await res.json() : null;
         if (doc && Array.isArray(doc.lanes) && doc.lanes.length) {
             window.__openPanel = (d) => {
@@ -1537,7 +1543,8 @@ async function main() {
         arrival.project = project;
         try {
             const base = new URL(`files/${project}/splats/${scene}/`, location.href);
-            const paths = await fetch(new URL("world.paths.json", base).href);
+            const paths = await fetch(new URL("world.paths.json", base).href +
+                                      "?t=" + Date.now());
             arrival.doc = paths.ok ? await paths.json() : null;
             arrival.records = await unpackPly(new URL("world.ply", base).href, scene);
         } catch (err) {

@@ -212,7 +212,8 @@ reset waypoint level="":
 # Turn each panorama to face the building, before generating from it.
 align level="L11" proj=project:
     @echo "  http://localhost:8085"
-    uv run {{repo}}/scripts/align_panos.py --project {{proj}} --level {{level}}
+    uv run --with numpy --with pillow --with pyyaml --no-project \
+        {{repo}}/scripts/align_panos.py --project {{proj}} --level {{level}}
 
 # What travels is the map, the generated Gazebo world, the panoramas, and each
 # splat's deliverables — world.ply, world.usdz, world.cam.json,
