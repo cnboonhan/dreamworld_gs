@@ -1345,7 +1345,26 @@ async function main() {
                     window.prepareArrival(proj[1], `${level}.${w.to}`, w.to);
             };
             window.__paths = doc;
-            edgePicker(doc, window.__rideWalk);
+            // A world opened directly still knows where you came from — the
+            // handover puts it in the URL as &from=. So face the continuation
+            // here too, exactly as a live handover does. Without this, only a
+            // swap that happened in this page got a heading, and a reload or a
+            // link landed you facing the spawn camera, which is where the
+            // panorama happened to point.
+            const cameFrom = (new URLSearchParams(location.search).get("from")
+                              || "").split(".").pop();
+            const back = (doc.lanes || []).find((l) => l.to === cameFrom);
+            let facing = null;
+            if (back) {
+                const rest = doc.lanes.filter((l) => l.to !== cameFrom);
+                let best = null, bestDot = 2;
+                for (const l of rest) {
+                    const d = dot3(l.dir, back.dir);
+                    if (d < bestDot) { bestDot = d; best = l; }
+                }
+                facing = best ? best.dir : back.dir.map((v) => -v);
+            }
+            edgePicker(doc, window.__rideWalk, facing);
         }
     } catch (err) {
         console.error("paths.json:", err);
