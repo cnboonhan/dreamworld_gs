@@ -2061,9 +2061,14 @@ async function main() {
         // unpacked somewhere, its rows — two keys, one splat
         cached = c ? (await c.keys()).filter((r) => r.url.endsWith(".ply")).length
                    : warmed.size;
+        // and how many are held unpacked in memory — the world on screen
+        // counts, since it is the one world that never needed the preheat
+        const shown = (window.__paths || {}).waypoint;
+        const hot = Math.min(total || Infinity,
+            unpacked.size + (shown && !unpacked.has(shown) ? 1 : 0));
         const el = document.getElementById("cacheNote");
         if (el) el.innerHTML = total
-            ? `splats cached ${cached}/${total}` +
+            ? `splats cached ${cached}/${total} · preheated ${hot}/${total}` +
               (cached ? ` <button id="cacheClear">clear</button>` : "")
             : "";
         const clr = document.getElementById("cacheClear");
@@ -2210,6 +2215,7 @@ async function main() {
                     const recs = await unpackPly(href, scene,
                                                  await stored(href), true);
                     remember(scene, recs);
+                    await countCached();      // the indicator counts these too
                 } catch (err) { /* an unbuilt world stays cold */ }
             }
         } finally { heating = false; }
