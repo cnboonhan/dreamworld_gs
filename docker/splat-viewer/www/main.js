@@ -843,8 +843,7 @@ async function edgePicker(doc, choose, facing) {
     const box = document.createElement("div");
     box.id = "edges";
     box.innerHTML = `<button id="edgeFold" title="hide the panel">\u2212</button>
-        <div class="hint">neighbours</div>
-        <div id="sceneLinks"></div>
+
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
@@ -854,7 +853,8 @@ async function edgePicker(doc, choose, facing) {
     const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
     const clearSpot = box.querySelector("#clearSpot");
-    const cx = box.querySelector("#edgePlan").getContext("2d");
+    const plan = box.querySelector("#edgePlan");
+    const cx = plan.getContext("2d");
     const here = doc.at;
 
     // Where each vertex actually is, marked by flying to it. Nothing is
@@ -869,6 +869,7 @@ async function edgePicker(doc, choose, facing) {
     // thing the plan is centred on.
     let target = 0, at = 0;
 
+    const hits = [];                 // where each vertex landed, for hit-testing
     const draw = () => {
         const far = Math.max(6, Math.max(...doc.lanes.map(l => l.metres)) * 1.6);
         const P = q => [110 + (q[0] - here[0]) / far * 100,
@@ -892,8 +893,45 @@ async function edgePicker(doc, choose, facing) {
             cx.fillText(l.to, 110 + (b[0] - 110) * 0.62 + 3,
                         110 + (b[1] - 110) * 0.62 - 3);
         });
-        cx.fillStyle = target === 0 ? "#4ea1ff" : "#ffd479";
+        // The vertices, in the dashboard's palette so the two maps read the
+        // same way: filled where a world has been placed, a hollow ring where
+        // one has not — the dashboard uses the same ring for a waypoint with no
+        // splat built. These are the click targets; hits carries their screen
+        // positions so a click can be matched back to a spot.
+        hits.length = 0;
+        doc.lanes.forEach((l, j) => {
+            const b = P([here[0] + Math.cos(l.bearing) * l.metres,
+                         here[1] + Math.sin(l.bearing) * l.metres]);
+            const i = spots.indexOf(l.to);
+            hits.push({i: i < 0 ? j + 1 : i, x: b[0], y: b[1]});
+            const on = spots[target] === l.to;
+            cx.beginPath(); cx.arc(b[0], b[1], on ? 7 : 5.5, 0, 7);
+            if (placed[l.to]) { cx.fillStyle = on ? "#4ea1ff" : "#7aa2f7"; cx.fill(); }
+            else { cx.strokeStyle = on ? "#4ea1ff" : "#7aa2f7"; cx.lineWidth = 2;
+                   cx.stroke(); cx.lineWidth = 1; }
+        });
+        // You are here, in the dashboard's green.
+        hits.push({i: 0, x: 110, y: 110});
+        cx.fillStyle = target === 0 ? "#4ea1ff" : "#3fb950";
         cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
+    };
+
+    // Click a vertex to choose it. It clicks the matching row button rather
+    // than repeating what that does — selecting, riding a walk, standing home —
+    // so the two ways in cannot drift apart.
+    plan.style.cursor = "pointer";
+    plan.onclick = (e) => {
+        const r = plan.getBoundingClientRect();
+        const x = (e.clientX - r.left) * (plan.width / r.width);
+        const y = (e.clientY - r.top) * (plan.height / r.height);
+        let best = null;
+        for (const h of hits) {
+            const d = Math.hypot(h.x - x, h.y - y);
+            if (d < 16 && (!best || d < best.d)) best = {d, i: h.i};
+        }
+        if (!best) return;
+        const b = spotRow.querySelector(`button[data-i="${best.i}"]`);
+        if (b) b.click();
     };
 
     const paintSpots = () => {
@@ -2216,7 +2254,17 @@ async function main() {
                 });
             };
         };
-        connect();
+        // Off by default: the viewer opens as a viewer, not as something being
+        // driven. The chip is the way in, so its handler lives here rather than
+        // inside connect() — which never runs until someone asks for it.
+        detached = true;
+        const chip0 = document.getElementById("agentChip");
+        if (chip0) {
+            chip0.className = "off";
+            chip0.textContent = "agent off \u2014 click to connect";
+            chip0.title = `click to connect to ${agentBase}`;
+            chip0.onclick = () => { detached = false; connect(); };
+        }
     }
 
     /** Each frame: where are we, which way are we going, what should be loaded. */
