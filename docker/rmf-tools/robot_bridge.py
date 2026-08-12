@@ -334,6 +334,15 @@ def call_lift_worker(lift, floor, ride=False):
         time.sleep(0.3)
 
 
+# Which way the model itself faces at yaw 0. The R1's mesh is authored facing
+# -X, so a heading computed from the map — atan2 along the segment, which is
+# correct — rendered it driving backwards down every corridor. Applied here and
+# only here: this is the one place a world heading becomes an orientation, and
+# G["cur_yaw"] below stays in world terms, so everything that reads a heading
+# back (the dashboard marker, forward, the splat viewer's lanes) is untouched.
+MODEL_YAW = float(os.environ.get("DW_ROBOT_YAW_OFFSET", math.pi))
+
+
 def set_pose(x, y, z, yaw):
     """Teleport r1 to a pose via the bridged gz set_pose service (fire-and-forget)."""
     req = SetEntityPose.Request()
@@ -341,7 +350,8 @@ def set_pose(x, y, z, yaw):
     req.entity.type = 2  # MODEL
     p = Pose()
     p.position.x, p.position.y, p.position.z = float(x), float(y), float(z)
-    p.orientation.z, p.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+    face = yaw + MODEL_YAW
+    p.orientation.z, p.orientation.w = math.sin(face / 2), math.cos(face / 2)
     req.pose = p
     G["pose_cli"].call_async(req)
     G["cur_yaw"] = yaw
