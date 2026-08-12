@@ -1303,6 +1303,16 @@ function cameraForward() {
         cp * (cy * tour.a[j] + sy * tour.b[j]) + sp * tour.up[j]));
 }
 
+// Ease INTO the yaw already set, starting FROM the heading given. The argument
+// is where the turn begins, not where it ends — it is for keeping a heading
+// across a change of axes: set the destination (or let tourInit set it), then
+// name what the camera was visually facing, and this animates the gap.
+//
+// Read as "turn to this", it does the opposite of what it says: it faces the
+// argument and animates away from it, back to the current yaw. That misreading
+// cost a day — a spin in the face op, and every dashboard-driven leg ridden
+// facing wherever the last one ended. To turn TOWARD something, set tour.yaw
+// from the direction first, then call this with cameraForward().
 function tourTurn(worldFwd, ms) {
     if (!tour.a || !tour.b) return;
     const from = Math.atan2(dot3(worldFwd, tour.b), dot3(worldFwd, tour.a));
