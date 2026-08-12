@@ -819,7 +819,7 @@ async function edgePicker(doc, choose) {
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
         <button id="saveSpot"></button>
-        <button id="clearSpot" style="display:none">clear</button>`;
+        <button id="clearSpot" disabled>clear</button>`;
     document.body.appendChild(box);
     const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
@@ -872,10 +872,11 @@ async function edgePicker(doc, choose) {
                 placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${v}${
                 i === 0 ? " (here)" : ""}</button>`).join("");
         saveSpot.textContent = "save position";
-        // Only offered where there is something to clear: a mark in the wrong
-        // place is worse than none, because the walk drawn from it is wrong in a
-        // way that looks deliberate.
-        clearSpot.style.display = placed[spots[target]] ? "" : "none";
+        // Always shown, disabled when there is nothing to clear. Hiding it meant
+        // it never appeared at all until a waypoint had been marked — so the way
+        // to undo a mark was invisible to anyone who had not already made one.
+        clearSpot.disabled = !placed[spots[target]];
+        clearSpot.textContent = "clear";
         draw();
     };
 
