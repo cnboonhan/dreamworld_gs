@@ -1759,7 +1759,15 @@ async function main() {
     // Commands arrive over SSE and are executed one at a time, because they are
     // physical: you cannot walk two corridors at once, and a queue that
     // overlapped them would leave the robot in Gazebo somewhere the splat is not.
-    const agentBase = params.get("agent");
+    // Always on, because a viewer that is not listening looks exactly like one
+    // that is until you try to drive it — and that cost most of a debugging
+    // session. ?agent= overrides the address; ?agent=off turns it off.
+    // location.hostname rather than localhost, so a tunnelled page connects back
+    // to the host it was served from rather than to the machine it is displayed
+    // on, which has no server.
+    const agentParam = params.get("agent");
+    const agentBase = agentParam === "off" ? null
+        : (agentParam || `http://${location.hostname}:8086`);
     if (agentBase) {
         const post = (path, body) =>
             fetch(new URL(path, agentBase).href, {
@@ -1902,12 +1910,26 @@ async function main() {
             };
             // A dashboard restart should not need a viewer reload — say so once
             // and come back, rather than sitting silently disconnected.
+            const chip = document.getElementById("agentChip");
+            const setChip = (state, text) => {
+                if (!chip) return;
+                chip.className = state;
+                chip.textContent = text;
+                chip.title = state === "on"
+                    ? `driven by ${agentBase}` : `no agent at ${agentBase}`;
+            };
+            setChip("", "agent connecting");
             es.onerror = () => {
+                setChip("off", "agent disconnected");
                 es.close();
                 say("agent: disconnected, retrying");
                 setTimeout(connect, 2000);
             };
-            es.onopen = () => { say(""); post("/viewer/hello", {at: here()}); };
+            es.onopen = () => {
+                setChip("on", "agent connected");
+                say("");
+                post("/viewer/hello", {at: here()});
+            };
         };
         connect();
     }

@@ -62,12 +62,14 @@ def urls(project: str) -> None:
     # ?speed= is how fast a hand-driven walk crosses a corridor, in m/s. The
     # default matches the robot; slower is easier to mark and to watch.
     speed = os.environ.get("DW_VIEWER_SPEED", "")
+    # No &agent= row any more: the viewer connects to :8086 on the host it was
+    # served from, without being told to. One URL, and the chip in its corner
+    # says whether anything is driving it.
     view = (f"http://localhost:{VIEWER}/?url=files/{project}/splats/{scene}/world.ply"
             + (f"&speed={speed}" if speed else ""))
     rows = [
         (4200, "jobs + logs", "http://localhost:4200"),
         (VIEWER, "splat viewer", view),
-        (VIEWER, "  + agent", f"{view}&agent=http://localhost:{INTERACTIVE}"),
         (8082, "360 viewer", "http://localhost:8082"),
         (8083, "rmf sim", "http://localhost:8083"),
         (8084, "traffic ed", "http://localhost:8084"),

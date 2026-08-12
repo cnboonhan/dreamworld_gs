@@ -27,6 +27,15 @@
     font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; color: #dfe6ef;
 }
 #edges .hint { color: #8b98a8; margin-bottom: 6px; }
+/* Whether anything is driving this viewer. Amber while connecting, green when
+   attached, red when not — a viewer that is not listening looks identical to
+   one that is until you try to drive it. */
+#agentChip { position: absolute; left: 12px; top: 12px; z-index: 30;
+             font: 12px/1 ui-sans-serif, system-ui, sans-serif; padding: 5px 9px;
+             border-radius: 6px; background: rgba(14,18,24,.92);
+             border: 1px solid #6b5a2a; color: #e3b341; }
+#agentChip.on { border-color: #3f7d55; color: #8fd6a6; }
+#agentChip.off { border-color: #8a3a3a; color: #ff9b9b; }
 #edgeFold { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px;
             padding: 0; line-height: 20px; text-align: center; background: #1e2530;
             color: #8b98a8; border: 1px solid #2f3a48; border-radius: 5px;
@@ -381,6 +390,7 @@ other
 			<span id="tourNote">drag to look around &middot; WASD to leave the path</span>
 		</div>
 
+		<div id="agentChip">agent connecting</div>
 		<div id="message"></div>
 		<div class="scene" id="spinner">
 			<div class="cube-wrapper">
