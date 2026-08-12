@@ -1022,6 +1022,11 @@ async function edgePicker(doc, choose, facing) {
         // ones that were ready.
         const lane = doc.lanes[target - 1];
         const k = lane ? doc.walks.findIndex(w => w.to === lane.to) : -1;
+        // Clear the "no walk" note first: it is written when a corridor cannot
+        // be ridden and nothing else takes it down, so it outlived the situation
+        // it described and sat there through walks that were working.
+        const msgEl = document.getElementById("message");
+        if (msgEl) msgEl.textContent = "";
         if (k >= 0) {
             at = k;
             choose(doc.walks[k], doc);
@@ -1036,7 +1041,7 @@ async function edgePicker(doc, choose, facing) {
         // calling it here throws at click time and the button looks dead — which
         // is precisely the failure this message exists to prevent.
         const need = placed[me] ? lane && lane.to : me;
-        const msg = document.getElementById("message");
+        const msg = msgEl;
         if (msg) msg.textContent = lane
             ? `no walk to ${lane.to} yet — mark ${need} to make one` : "";
     };
@@ -1139,6 +1144,11 @@ async function edgePicker(doc, choose, facing) {
         applyFold();
     };
     applyFold();
+    // A fresh world starts with nothing to say. Otherwise a note about a
+    // corridor in the world you have left is still on screen in the one you
+    // arrive in, describing waypoints that are not even adjacent here.
+    const msgOnOpen = document.getElementById("message");
+    if (msgOnOpen) msgOnOpen.textContent = "";
 
     paintSpots();
     // `facing` is a world direction the caller wants this splat to open along —
