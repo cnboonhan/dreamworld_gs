@@ -340,7 +340,10 @@ def call_lift_worker(lift, floor, ride=False):
 # only here: this is the one place a world heading becomes an orientation, and
 # G["cur_yaw"] below stays in world terms, so everything that reads a heading
 # back (the dashboard marker, forward, the splat viewer's lanes) is untouched.
-MODEL_YAW = float(os.environ.get("DW_ROBOT_YAW_OFFSET", math.pi))
+# Settable while it runs: which way a mesh faces is a fact about the model, not
+# something to be derived, and finding it by rebuilding once per guess is slower
+# than turning it and looking. POST /facing {"offset": <radians>}.
+MODEL_YAW = [float(os.environ.get("DW_ROBOT_YAW_OFFSET", math.pi))]
 
 
 def set_pose(x, y, z, yaw):
@@ -350,7 +353,7 @@ def set_pose(x, y, z, yaw):
     req.entity.type = 2  # MODEL
     p = Pose()
     p.position.x, p.position.y, p.position.z = float(x), float(y), float(z)
-    face = yaw + MODEL_YAW
+    face = yaw + MODEL_YAW[0]
     p.orientation.z, p.orientation.w = math.sin(face / 2), math.cos(face / 2)
     req.pose = p
     G["pose_cli"].call_async(req)
@@ -649,6 +652,24 @@ def turn():
         return jsonify(ok=False, error="need yaw (radians)"), 400
     start_spin(yaw, G["z"])
     return jsonify(ok=True, yaw=yaw)
+
+
+@app.route("/facing", methods=["GET", "POST"])
+def facing():
+    """Read or set the model's own facing offset, in radians, and re-place the
+    robot so the change is visible without waiting for the next leg."""
+    if request.method == "POST":
+        body = request.get_json(force=True, silent=True) or {}
+        try:
+            MODEL_YAW[0] = float(body.get("offset"))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="need offset in radians"), 400
+        x, y = G.get("pos") or (None, None)
+        if x is not None:
+            set_pose(x, y, G["z"], G.get("cur_yaw") or 0.0)
+    return jsonify(ok=True, offset=MODEL_YAW[0],
+                   note="0 = mesh faces +X, pi = faces -X, "
+                        "pi/2 = faces +Y, -pi/2 = faces -Y")
 
 
 @app.route("/goto", methods=["POST"])
