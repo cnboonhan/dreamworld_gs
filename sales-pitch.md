@@ -20,10 +20,10 @@ in — entirely on your own hardware, and the AI is the replaceable part.*
 
 ## The diagram
 
-One slide, referenced twice: at 1:05 (point at the harness box — "the model
-only proposes; this box owns correctness") and at 2:25 (point at the dashed
-arrows — "the part that ages is outside the framework, and your data tunes
-its replacement").
+One slide, referenced twice: at 1:05 (trace the plan → act → verify loop —
+"the model only proposes; this loop owns correctness, and it plans around
+the physics") and at 2:30 (point at the dashed arrows — "the part that ages
+is outside the framework, and your data tunes its replacement").
 
 ```mermaid
 flowchart LR
@@ -36,29 +36,41 @@ flowchart LR
     PE -->|"generated overnight,<br/>on your hardware"| TWIN
 
     subgraph FW["THE FRAMEWORK — what compounds"]
-        TWIN["Digital twin<br/>photoreal walkthrough + robot simulation"]
-        H["Harness — the prompts and the guardrails<br/>plans missions · verifies every step against the world<br/>enforces protocols · pausable mid-mission"]
+        TWIN["Digital twin<br/>photoreal walkthrough + robot simulation<br/>doors, lifts and distances are real state"]
+        subgraph HA["THE HARNESS — agentic mission execution"]
+            PL["PLAN<br/>obstacle-aware: a closed door on the route<br/>becomes an open_door step; a floor change<br/>becomes the enforced lift protocol"]
+            ACT["ACT<br/>one tool call at a time, in order<br/>go_to · open_door · take_lift"]
+            V["VERIFY<br/>against the world: did the robot actually<br/>arrive — is the door actually open"]
+            PL --> ACT
+            ACT --> V
+            V -->|"pass: next step"| ACT
+            V -->|"fail or refused: replan"| PL
+        end
         D[("Mission data<br/>verified runs · refusals · operator corrections")]
-        H -->|"one tool surface:<br/>go_to · open_door · take_lift"| TWIN
-        TWIN -->|"verified state"| H
-        H --> D
+        ACT -->|"tool calls"| TWIN
+        TWIN -->|"physical reality pushes back:<br/>blocked, closed, wrong level"| V
+        V --> D
     end
 
-    OP(["Operator"]) -->|"one sentence"| H
-    M["AI MODEL<br/>swappable — a configuration line"] -.->|"proposes actions"| H
+    OP(["Operator<br/>one sentence in · pause anything"]) --> PL
+    M["AI MODEL<br/>swappable — a configuration line"] -.->|"proposes"| HA
     D -.->|"tunes toward operator preferences"| M
     TWIN -.->|"same tool surface, tomorrow"| RW(["Real robot fleet"])
 
     style M stroke-dasharray: 6 4,stroke-width:2px
     style FW stroke-width:2px
+    style HA stroke-width:2px
 ```
 
-How to read it, in one breath: everything inside the framework box is yours
-and durable — the captured buildings, the editable scenarios, the verified
-tool surface, the accumulating operator data. The model sits *outside*, on a
-dashed line, because it is the part the industry improves monthly and the
-part you replace in one configuration line — and your own mission data is
-what tunes each replacement toward how your operators actually work.
+How to read it, in one breath: the harness is the working heart — a
+plan → act → verify loop where the *world*, not the model, says what
+happened, and where physical constraints aren't failures but inputs the
+planner routes around. Everything inside the framework box is yours and
+durable — the captured buildings, the editable scenarios, that loop, the
+accumulating operator data. The model sits *outside*, on a dashed line,
+because it is the part the industry improves monthly and the part you
+replace in one configuration line — and your own mission data is what tunes
+each replacement toward how your operators actually work.
 
 ---
 
@@ -69,6 +81,10 @@ what tunes each replacement toward how your operators actually work.
   in a small window under it.
 - Robot standing at `lift_lobby`; splat cache warm (`splats cached 16/16 ·
   preheated 16/16` in the viewer panel — it fills itself).
+- Pick a mission whose route crosses a **closed door** — `go to the apex
+  lab` crosses `apex_lab_door` — so the plan visibly contains `open_door`
+  before the walk begins. That one subtask is the harness beat's whole
+  argument, on screen.
 - Panorama editor (:8087) in a background tab, already on the waypoint whose
   edit was baked beforehand: the edit made and **saved**, so the original
   sits in `panos/.before-edit/` and the tab can toggle the two. If the
@@ -102,36 +118,41 @@ drives all of it. The same API that drives this simulated robot is the seam
 where a real fleet plugs in. A client written today doesn't change when the
 hardware arrives.
 
-**[1:05 — point at a subtask ticking to ✓]**
+**[1:05 — point at the subtask list; the diagram's plan → act → verify
+loop is the same picture]**
 
-Here's the part that matters for trust. The AI cannot mark its own work
-done. Every subtask is verified against the world — where the viewer stands
-*and* where the robot's state says it is, within 0.8 of a metre — before the
-harness, not the model, ticks it. Out-of-order calls are rejected. Lifts can
-only be taken through an enforced eight-step protocol. That's why this runs
-safely on a small 8-billion-parameter model hosted on this box: the harness
-owns correctness, the model only proposes. Pause it — *[click pause]* — and
-it stops at the next action, auditable to the line.
+Here's the heart of it — the harness. It is genuinely agentic: from that one
+sentence it planned this mission itself, and look at the plan — there's an
+`open_door` step *before* the corridor that needs it. The planner knows the
+physics of the building: a closed door on the route becomes a door step, a
+different floor can only be reached through an enforced eight-step lift
+protocol. The agent doesn't discover obstacles by walking into them, and it
+can't improvise around a constraint — the harness rejects out-of-order
+calls. And it cannot mark its own work done: every step is verified against
+the world — where the viewer stands *and* where the robot actually is,
+within 0.8 of a metre — and a failed step stays open and gets replanned.
+That is why one small 8-billion-parameter model, hosted on this box, runs
+missions safely: the model proposes, the harness disposes. Pause it —
+*[click pause]* — it stops at the next action, auditable to the line.
+*[resume]*
 
-**[1:40 — switch to the panorama editor tab; toggle the pre-baked
+**[1:55 — switch to the panorama editor tab; toggle the pre-baked
 before/after]**
 
-The twin is also editable. This is a photograph of that corridor. Before the
+The twin is also editable. This is a photograph of that corridor; before the
 meeting we typed one instruction — "add a pallet blocking the corridor" —
-and here is the result: only those pixels changed, the building held still.
-Regenerate that one waypoint overnight and you have a variant world:
-obstacles, hazards, cleared rooms. Scenario authoring for rehearsal and
-training, without touching the real site or exposing it to anyone.
+and only those pixels changed. Regenerate that waypoint overnight and you
+have a variant world: obstacles, hazards, cleared rooms. Scenario authoring
+for rehearsal, without touching the real site or exposing it to anyone.
 
-**[2:05 — back to the dashboard log]**
+**[2:15 — back to the dashboard log]**
 
 And every run you just watched became data. Verified trajectories, refused
-calls, retries, the moments an operator paused or corrected by hand — all
-structured, all labelled by outcome. That is exactly the data you need to
-tune models toward *your* operators' preferences, and it accumulates as a
-by-product of normal use.
+calls, retries, operator pauses and corrections — structured, labelled by
+outcome. Exactly the data you need to tune models toward *your* operators'
+preferences, accumulating as a by-product of normal use.
 
-**[2:25 — close, facing them]**
+**[2:30 — close, facing them]**
 
 The models will keep improving — monthly, and not by us. That's the design
 bet: here the model is a configuration line. Swap in next year's model and
