@@ -647,6 +647,11 @@ def _door(to, mode):
     if lift and not wait_lift_door(lift, mode == "open"):
         return {"ok": False, "door": names[0],
                 "error": f"{lift}'s door did not reach {mode}"}
+    if not lift and not wait_door(names, mode == "open"):
+        st = door_states()
+        return {"ok": False, "door": names[0],
+                "error": f"{names[0]} did not reach {mode} — it is "
+                         f"{'moving' if st.get(names[0]) == DOOR_MOVING else st.get(names[0])}"}
     with ST["lock"]:
         for n in list(names) + ([lift] if lift else []):
             ST["open_doors"].add(n) if mode == "open" else ST["open_doors"].discard(n)
@@ -770,6 +775,34 @@ def wait_lift(lift, floor, timeout=120):
         if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
             return True
         time.sleep(0.4)
+    return False
+
+
+DOOR_MOVING = 1    # rmf_door_msgs DoorMode.MODE_MOVING
+
+
+def door_states():
+    return (bridge("/door_state") or {}).get("doors") or {}
+
+
+def wait_door(names, want_open, timeout=25):
+    """Block until every named door has finished moving into the wanted state.
+
+    A DoorRequest is a request: the leaf takes seconds to swing, and open_door
+    used to return the moment it was posted. go_to would then walk a robot at
+    2 m/s through a doorway still opening. Nothing caught it, because the verify
+    read a `doors` field the bridge did not publish, so its check was skipped and
+    it passed unconditionally.
+    """
+    if not ST.get("galaxea") or not names:
+        return True
+    want = DOOR_OPEN if want_open else 0
+    end = time.time() + timeout
+    while time.time() < end:
+        st = door_states()
+        if all(st.get(n, want) == want for n in names):
+            return True
+        time.sleep(0.25)
     return False
 
 
@@ -1193,13 +1226,18 @@ def _v_face(args, r):
 def _v_door(args, r):
     if not r.get("ok"):
         return False, str(r.get("error") or "no door")
-    name, want = r.get("door"), r.get("mode") == "open"
+    names, want = r.get("doors") or [r.get("door")], r.get("mode") == "open"
     if ST.get("galaxea"):
-        # The bridge owns the real door; ask it rather than trusting our own record.
-        st = (bridge("/state") or {}).get("doors") or {}
-        if name in st and bool(st[name]) != want:
-            return False, f"{name} did not reach {r.get('mode')}"
-    return True, f"{name} {r.get('mode')}"
+        # The bridge owns the real door; ask it rather than trusting our own
+        # record. This read a `doors` field /state did not have, so `name in st`
+        # was always false and the check was skipped — it passed whatever the
+        # door was doing.
+        st = door_states()
+        target = DOOR_OPEN if want else 0
+        wrong = [n for n in names if st.get(n, target) != target]
+        if wrong:
+            return False, f"{wrong[0]} is {st.get(wrong[0])}, not {r.get('mode')}"
+    return True, f"{', '.join(n for n in names if n)} {r.get('mode')}"
 
 
 @verifies("pick", "place")
@@ -1519,12 +1557,12 @@ header #mbox{flex:1;min-width:140px}
      <input id=argbox><button class=go onclick="runTool()">go</button></div>
     <div class=hint id=toolhint>click a tool — ones that need input reveal a field</div>
     <div class=bar style="margin-top:6px">
-     <input id=tpwhere placeholder="teleport to — waypoint, or double-click the map">
+     <input id=tpwhere placeholder="reset at — waypoint, or click one on the map">
      <input id=tplevel placeholder="level" style="flex:0 0 70px">
-     <button class=go id=tpgo style="background:#6e40c9">teleport</button></div>
+     <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
     <div class=hint id=tphint>click a waypoint on the map to fill this. Puts the
-     robot there and the world model with it — an operator move, not something
-     the agent can do</div>
+     robot there, shuts every door and lift, and starts again — an operator move,
+     not something the agent can do</div>
    </div>
   </div>
  </div>
@@ -1676,17 +1714,17 @@ function setStateModel(text){const el=$('statemodel');if(!el)return;
 // no path to it through the harness, so a mission cannot skip a corridor by
 // wishing itself past it. Here it is a button because setting up a test from a
 // particular waypoint should not mean walking there first.
-async function teleport(where,level){if(!where)return;
+async function resetAt(where,level){if(!where)return;
  $("tpgo").disabled=true;
- try{const j=await(await P('/teleport',{waypoint:where,level:level||''})).json();
+ try{const j=await(await P('/reset',{waypoint:where,level:level||''})).json();
   // No reload here. A teleport that changes level makes the server broadcast
   // {type:'level'}, which reloads the graph and the floorplan; one that does not
   // needs no reload at all, because the state message moves the marker. Calling
   // it here refetched a 1.8 MB floorplan and redrew the map to show the same map.
-  if(j.ok){logEv('ok','teleported to '+j.message);$("tpwhere").value='';}
+  if(j.ok){logEv('ok','reset at '+j.message);$("tpwhere").value='';}
   else logEv('err','! '+j.error);}
  catch(e){logEv('err','! '+e);}finally{$("tpgo").disabled=false;}}
-$("tpgo").onclick=()=>teleport($("tpwhere").value.trim(),$("tplevel").value.trim());
+$("tpgo").onclick=()=>resetAt($("tpwhere").value.trim(),$("tplevel").value.trim());
 $("tpwhere").addEventListener('keydown',e=>{if(e.key==='Enter')$("tpgo").click()});
 $("tplevel").addEventListener('keydown',e=>{if(e.key==='Enter')$("tpgo").click()});
 
@@ -1980,9 +2018,15 @@ def r_viewer_hello():
     return jsonify(ok=True, expect=scene_of(ST["cur"]))
 
 
-@app.route("/teleport", methods=["POST", "OPTIONS"])
-def teleport():
-    """Put the robot at a waypoint, and the world model with it.
+@app.route("/reset", methods=["POST", "OPTIONS"])
+@app.route("/teleport", methods=["POST", "OPTIONS"])   # what it was called first
+def reset():
+    """Put the robot at a waypoint, shut everything, and start again from there.
+
+    Not just a move: a run leaves doors held open behind it, and starting the next
+    one in a building someone has already walked through is how a test passes for
+    the wrong reason. Everything closes, so the plan that follows has to open what
+    it needs.
 
     An operator action, deliberately not in TOOLS: an agent that can teleport is
     not solving the problem it was asked to solve.
@@ -2025,17 +2069,25 @@ def teleport():
                              f"the bridge said: {res or 'nothing'}"), 502
     with ST["lock"]:
         ST["yaw"] = yaw
+        ST["open_doors"] = set()
+    # Shut every door and lift, and stop the bridge holding any open — otherwise
+    # its door_keeper republishes OPEN and undoes this a moment later.
+    # {} not None: bridge() sends GET when there is no body, and /close_all is
+    # POST — which came back 405 and was swallowed as "no doors closed".
+    shut = bridge("/close_all", {})
     push_state()
     _push_context()
     # Not logged. The log is what the agent reads back as `recent_log` to decide
     # what to do next, and an operator putting the robot somewhere is not
     # something it did or should reason about — it would read as an action of its
     # own that it cannot account for.
+    n = shut.get("n", 0)
     return jsonify(ok=True, at=lab(cur), level=ST["level"],
                    facing=lab(nb) if nb is not None else None,
-                   robot=bool(ST.get("galaxea")),
+                   robot=bool(ST.get("galaxea")), closed=n,
                    message=f"{lab(cur)} on {ST['level']}"
-                           + (f", facing {lab(nb)}" if nb is not None else ""))
+                           + (f", facing {lab(nb)}" if nb is not None else "")
+                           + (f" — {n} doors shut" if n else ""))
 
 
 @app.route("/statemodel")

@@ -39,7 +39,7 @@ from flask import Flask, jsonify, request
 from geometry_msgs.msg import Pose
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
-from rmf_door_msgs.msg import DoorMode, DoorRequest
+from rmf_door_msgs.msg import DoorMode, DoorRequest, DoorState
 from rmf_fleet_msgs.msg import RobotState
 from rmf_lift_msgs.msg import LiftRequest, LiftState
 from ros_gz_interfaces.srv import SetEntityPose
@@ -169,8 +169,15 @@ def open_doors(names):
 
 
 def close_doors(names):
+    # One door at a time, and one failure cannot stop the rest: the list mixes
+    # plain doors with lift shaft/cabin doors, and a lift whose state has not
+    # arrived yet raises out of _door_req — which used to abandon every door
+    # after it in the list, so whether a door shut depended on its position.
     for name in names:
-        _door_req(name, DoorMode.MODE_CLOSED)
+        try:
+            _door_req(name, DoorMode.MODE_CLOSED)
+        except Exception as e:                        # noqa: BLE001
+            print(f"[galaxea] close {name}: {e}", flush=True)
 
 
 def close_all_startup():
@@ -275,6 +282,17 @@ def _state_cb(msg: RobotState):
             "x": msg.location.x, "y": msg.location.y, "yaw": msg.location.yaw,
             "mode": int(msg.mode.mode),
         }
+
+
+def _door_cb(msg: DoorState):
+    """Remember every door's real state.
+
+    Without this the bridge could open a door and had no way to know it had
+    opened — a DoorRequest is a request, and the leaf takes seconds to swing. A
+    caller that treats the request as the result walks a robot through a door
+    that is still moving.
+    """
+    G.setdefault("door_state", {})[msg.door_name] = int(msg.current_mode.value)
 
 
 def _lift_cb(msg: LiftState):
@@ -413,7 +431,47 @@ def health():
 
 @app.route("/state")
 def state():
-    return jsonify(ok=True, state=G.get("state"))
+    # doors alongside the robot: a caller deciding whether it may walk needs both,
+    # and asking twice invites them to disagree about the moment.
+    return jsonify(ok=True, state=G.get("state"), doors=G.get("door_state", {}))
+
+
+@app.route("/door_state")
+def door_state():
+    """{door_name: mode} — 0 closed, 1 moving, 2 open (rmf_door_msgs/DoorMode)."""
+    return jsonify(ok=True, doors=G.get("door_state", {}))
+
+
+@app.route("/close_all", methods=["POST"])
+def close_all():
+    """Shut every door and lift on this level, and stop holding any open.
+
+    The door_keeper republishes OPEN for anything in held_doors, so clearing that
+    first is what makes the close stick rather than being undone a moment later.
+    """
+    # Plain doors only. A lift's shaft and cabin doors are liblift's, governed by
+    # where the cabin is rather than by a request, and pushing 21 names through
+    # one loop meant the lift entries ran first and the doors after them never
+    # reliably got theirs.
+    names = [n for n, _, _ in G.get("doors", []) if not _lift_of(n)]
+    # Empty the set in place rather than rebinding it: the /door route takes a
+    # reference with setdefault and holds it for the length of its request, so a
+    # rebind here can leave that request re-adding to the set nobody reads.
+    G.setdefault("held_doors", set()).clear()
+
+    def _shut():
+        # Re-assert, as close_all_startup does. One DoorRequest is not enough:
+        # a door already open stays open through a single CLOSED, and the shaft
+        # doors need the lift's own request repeated while the cabin settles.
+        # Doing it once left a door reporting OPEN nine seconds later.
+        for _ in range(20):
+            if G.get("held_doors"):        # an explicit open arrived — stop forcing
+                return
+            close_doors(names)
+            time.sleep(0.3)
+
+    threading.Thread(target=_shut, daemon=True).start()
+    return jsonify(ok=True, closed=names, n=len(names))
 
 
 @app.route("/door", methods=["POST"])
@@ -643,6 +701,7 @@ def main():
     G["inventory_pub"] = node.create_publisher(String, "/robot_inventory", latched)
     node.create_subscription(RobotState, "/robot_state", _state_cb, 10)
     node.create_subscription(LiftState, "/lift_states", _lift_cb, 10)
+    node.create_subscription(DoorState, "/door_states", _door_cb, 10)
     publish_items(); publish_inventory()                    # seed the latched topics
     threading.Thread(target=lambda: rclpy.spin(node), daemon=True).start()
     threading.Thread(target=door_keeper, daemon=True).start()

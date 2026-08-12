@@ -172,7 +172,7 @@ interactive: up
     echo "  open that viewer URL, then drive it:"
     echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
 
-# Put the robot at a waypoint — and the world model with it.
+# Put the robot at a waypoint, shut every door and lift, and start again.
 #
 # Both move together or neither does: resetting the bridge alone would leave the
 # dashboard describing a place the robot had left, which is the desync every
@@ -182,16 +182,20 @@ interactive: up
 # one switches the whole model over — different vertices, lanes, doors and lift
 # cabins — exactly as arriving there by lift would.
 #
-#   just teleport cafe            on the current level
-#   just teleport lift_lobby L1   and switch levels
-#   just teleport v18             a lift cabin, by index
+# Not just a move: a run leaves doors held open behind it, and starting the next
+# one in a building someone has already walked through is how a test passes for
+# the wrong reason.
 #
-# Put the robot at a waypoint, and the world model with it.
-teleport waypoint level="":
+#   just reset cafe            on the current level
+#   just reset lift_lobby L1   and switch levels
+#   just reset v18             a lift cabin, by index
+#
+# Put the robot at a waypoint, shut every door, and start again.
+reset waypoint level="":
     #!/usr/bin/env bash
     set -euo pipefail
     body="{\"waypoint\":\"{{waypoint}}\",\"level\":\"{{level}}\"}"
-    curl -sS -X POST localhost:{{iport}}/teleport \
+    curl -sS -X POST localhost:{{iport}}/reset \
         -H 'Content-Type: application/json' -d "$body" \
       | python3 -c "import json,sys; d=json.load(sys.stdin); print('  ' + (d['message'] if d.get('ok') else '! ' + str(d.get('error'))))"
 
