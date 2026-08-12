@@ -849,9 +849,9 @@ async function edgePicker(doc, choose, facing) {
         <div id="spotRow"></div>
         <select id="goTo"></select>
         <button id="goBtn">go to position</button>
-        <div id="cacheNote"></div>
         <button id="saveSpot"></button>
-        <button id="clearSpot" disabled>clear saved position</button>`;
+        <button id="clearSpot" disabled>clear saved position</button>
+        <div id="cacheNote"></div>`;
     document.body.appendChild(box);
     const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
