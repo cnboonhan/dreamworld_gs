@@ -1345,10 +1345,15 @@ async function main() {
                                 {cache: "no-store"});
         const doc = res.ok ? await res.json() : null;
         if (doc && Array.isArray(doc.lanes) && doc.lanes.length) {
-            window.__openPanel = (d) => {
+            // `facing` is forwarded, not dropped: the handover computes which
+            // corridor you are continuing into and passes it here, and this is
+            // the only route it has to standHome. Taking one argument silently
+            // discarded it, so every live handover arrived with no heading while
+            // a reload — which reads &from= itself — arrived with the right one.
+            window.__openPanel = (d, facing) => {
                 const old = document.getElementById("edges");
                 if (old) old.remove();
-                edgePicker(d, window.__rideWalk);
+                edgePicker(d, window.__rideWalk, facing);
             };
             window.__rideWalk = (w, d, pace) => {
                 // Pace from the lane's real length at the robot's own speed, so
