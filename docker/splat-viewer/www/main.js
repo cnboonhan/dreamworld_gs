@@ -1761,6 +1761,10 @@ async function main() {
 
     const gl = canvas.getContext("webgl2", {
         antialias: false,
+        // the mid-corridor crossing snapshots the last frame to fade it out
+        // over the next world; without this the buffer is cleared the moment
+        // it is composited and the snapshot comes back blank
+        preserveDrawingBuffer: true,
     });
 
     const vertexShader = gl.createShader(gl.VERTEX_SHADER);
@@ -2298,12 +2302,42 @@ async function main() {
     };
 
     // How far along a corridor the worlds trade places. At this fraction the
-    // world being left is at its blurriest — the camera is furthest from where
-    // its panorama was shot — and the next is nearly at its sharpest, and both
+    // world being left is well into its blur — the camera far from where its
+    // panorama was shot — and the next is nearly at its sharpest, and both
     // are showing the same physical corridor, aligned by the same two marks.
     // ?handover= tunes it; 1 turns the crossing off and swaps at the vertex.
     const HANDOVER = Math.min(1, Math.max(0.3,
-        +(new URLSearchParams(location.search).get("handover") || 0.8)));
+        +(new URLSearchParams(location.search).get("handover") || 0.7)));
+
+    /** Fade the frame on screen out over whatever renders next.
+     *
+     * A snapshot of the last drawn frame sits on top while the next world's
+     * buffer sorts and takes over underneath, then dissolves. At a corridor
+     * crossing the two are the same aligned view of the same corridor, so the
+     * eye reads one continuous scene instead of a cut. Inserted right after
+     * the canvas, not z-indexed, so every panel stays above it.
+     */
+    const crossFade = (ms) => {
+        const old = document.getElementById("xfade");
+        if (old) old.remove();
+        const snap = document.createElement("canvas");
+        snap.id = "xfade";
+        snap.width = canvas.width; snap.height = canvas.height;
+        try {
+            snap.getContext("2d").drawImage(canvas, 0, 0);
+        } catch (err) { return; }   // no snapshot, no fade — the cut still works
+        Object.assign(snap.style, {
+            position: "fixed", left: "0", top: "0",
+            width: "100%", height: "100%",
+            pointerEvents: "none", opacity: "1",
+            transition: `opacity ${(ms || 450) / 1000}s ease`,
+        });
+        canvas.parentNode.insertBefore(snap, canvas.nextSibling);
+        // hold until the next world's sort has had a frame or two to land,
+        // so the fade reveals the new world, not the old one still drawing
+        setTimeout(() => { snap.style.opacity = "0"; }, 220);
+        setTimeout(() => snap.remove(), (ms || 450) + 320);
+    };
 
     /** Trade worlds mid-ride and keep going.
      *
@@ -2323,6 +2357,7 @@ async function main() {
         const back = (a.doc.walks || []).find(
             (w) => w.to === String(leg.from || "").split(".").pop());
         if (!back) return false;   // far end unmarked there: swap at the vertex
+        crossFade();
         splatData = a.records;
         worker.postMessage({buffer: a.records.buffer,
                             vertexCount: Math.floor(a.records.length / rowLength)});
@@ -2338,12 +2373,13 @@ async function main() {
 
     // ---- crossing a corridor by hand ------------------------------------
     //
-    // Fly down a marked corridor with the keys and the world follows. Past
-    // halfway the far world starts unpacking; past HANDOVER the camera is
-    // re-expressed in the far world's frame — same spot on the corridor, same
-    // offset beside it, same heading relative to it — and flying continues
-    // there. The books are settled exactly as an arrival settles them, except
-    // the camera is not stood home: it is already somewhere real.
+    // Fly down a marked corridor with the keys and the world follows. A few
+    // steps in the far world starts unpacking, so it is ready long before it
+    // is needed; past HANDOVER the camera is re-expressed in the far world's
+    // frame — same spot on the corridor, same offset beside it, same heading
+    // relative to it — and flying continues there through a cross-fade. The
+    // books are settled exactly as an arrival settles them, except the camera
+    // is not stood home: it is already somewhere real.
     let crossing = false;
     setInterval(() => {
         if (crossing || tour.playing || tour.on || window.__swapping) return;
@@ -2364,7 +2400,10 @@ async function main() {
             const E = d3(B0, A0), L2 = dot3(E, E);
             if (L2 < 1e-9) continue;
             const f = dot3(d3(pos, A0), E) / L2;
-            if (f < 0.5 || f > 1.05) continue;
+            // from the corridor's start, not halfway: the tenth of a corridor
+            // keeps a junction from prefetching a lane you merely stand on,
+            // and everything past it leaves ample time to unpack
+            if (f < 0.1 || f > 1.05) continue;
             // beside the corridor, in metres: the marks give the scale
             const foot = [0, 1, 2].map((i) => A0[i] + E[i] * f);
             const lat = Math.hypot(...d3(pos, foot)) *
@@ -2404,6 +2443,7 @@ async function main() {
             const rel = [dot3(fw, eA), dot3(fw, bA), dot3(fw, uA)];
             const fw2 = norm3([0, 1, 2].map((i) =>
                 eB[i] * rel[0] + bB[i] * rel[1] + uB[i] * rel[2]));
+            crossFade();
             splatData = arrival.records;
             worker.postMessage({buffer: arrival.records.buffer,
                                 vertexCount: Math.floor(arrival.records.length /
