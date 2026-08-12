@@ -61,12 +61,10 @@ body.swapping { cursor: progress; }
    it announced a wait that the fade already covers. The new world fades in as
    it lands, which is the moment there is something to show. */
 canvas { transition: opacity .32s ease; }
-/* How much of the building is downloaded. Top centre, out of the way of the
-   agent chip and the panel, and only there once a sweep has counted. */
-#cacheNote { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-             z-index: 30; font: 12px/1 ui-sans-serif, system-ui, sans-serif;
-             padding: 5px 9px; border-radius: 6px; color: #9fb0c4;
-             background: rgba(14,18,24,.92); border: 1px solid #2f3a49; }
+/* How much of the building is downloaded. In the panel, so it folds away with
+   everything else rather than floating over the view on its own. */
+#cacheNote { margin-top: 8px; font: 11px/1.5 ui-sans-serif, system-ui, sans-serif;
+             color: #9fb0c4; }
 #cacheNote:empty { display: none; }
 #cacheNote button { margin-left: 8px; font: inherit; cursor: pointer;
                     color: #ff9b9b; background: #2a1d1d; border: 1px solid #5a3030;
@@ -366,7 +364,6 @@ body.edgesFolded #tour { display: none !important; }
 		<script>
 			if(location.host.includes('hf.space')) document.body.classList.add('nohf');
 		</script>
-		<div id="cacheNote"></div>
 		<div id="info">
 			<p>
 			<small class="nohf">

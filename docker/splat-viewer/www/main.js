@@ -849,6 +849,7 @@ async function edgePicker(doc, choose, facing) {
         <div id="spotRow"></div>
         <select id="goTo"></select>
         <button id="goBtn">go to position</button>
+        <div id="cacheNote"></div>
         <button id="saveSpot"></button>
         <button id="clearSpot" disabled>clear saved position</button>`;
     document.body.appendChild(box);
@@ -1974,7 +1975,11 @@ async function main() {
     // to. Two of them already did and a third would have been forgotten.
     setInterval(() => {
         if (sweeping || !window.__paths) return;
-        const m = String(location.search).match(/files\/([^/]+)\/splats\//);
+        // Decoded first: the url parameter is normally percent-encoded, so
+        // files%2Fproject%2Fsplats%2F... never matched and the sweep only ever
+        // started from the one call site that had the project already parsed.
+        const m = decodeURIComponent(location.search)
+            .match(/files\/([^/]+)\/splats\//);
         if (m) warm(decodeURIComponent(m[1]), window.__paths);
     }, 5000);
     window.__warm = warm;
