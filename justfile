@@ -55,8 +55,34 @@ export DW_GID := `id -g`
 _default:
     @just --list
 
-# Everything needed to run offline: model weights + both images (~500GB).
-setup: _env fetch-assets build
+# Everything needed to run offline: model weights + the images (~500GB).
+#
+# Both halves are idempotent, so running it again is how you update either. They
+# are one recipe because they answer one question — can this box run the pipeline
+# — but they stay separable, because the answer is usually yes for the weights
+# and no for the images: a code change needs `images`, and re-checking eight
+# HuggingFace repos to find that out is a slow way to learn nothing.
+#
+#   just setup           weights + images
+#   just setup images    after a code change
+#   just setup models    weights only (the list is scripts/models.txt)
+#
+# Everything needed to run offline: weights + images.
+setup what="all": _env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{what}}" in
+        all|models|images) ;;
+        *) echo "unknown: {{what}} — want all, models or images" >&2; exit 1 ;;
+    esac
+    if [ "{{what}}" != images ]; then
+        HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
+            --with safetensors --no-project \
+            {{repo}}/scripts/fetch_assets.py {{assets}}
+    fi
+    if [ "{{what}}" != models ]; then
+        docker compose build
+    fi
 
 _env:
     #!/usr/bin/env bash
@@ -79,16 +105,6 @@ _env:
         [ -d "$p" ] || continue
         mkdir -p "$p"maps "$p"worlds "$p"panos "$p"splats
     done
-
-# Download all models into assets/ (idempotent; list in scripts/models.txt).
-fetch-assets:
-    HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
-        --with safetensors --no-project \
-        {{repo}}/scripts/fetch_assets.py {{assets}}
-
-# Build the generator and viewer images.
-build:
-    docker compose build
 
 # Job server, VLM, generator and both viewers come up together and stay up;
 # `just generate` depends on this recipe, so nothing needs launching by hand.

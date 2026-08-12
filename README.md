@@ -45,6 +45,7 @@ assets/                  gitignored: model weights, job history, projects/
 
 ```bash
 just setup      # one-time: model weights + images (~500GB, needs network)
+                #            `just setup images` alone after a code change
 just up         # start everything, print the URLs
 just summary    # waypoints, splat quality, progress, and every address
 ```
@@ -456,6 +457,6 @@ R1 meshes are ~32 MB and live at `assets/projects/<p>/GalaxeaR1/`, outside git.
 - **Upstream patches** to HY-World live in `docker/splat-generator/hyworld.patch`;
   environment fixes are documented inline in `build_env.sh`.
 - **The viewer is baked into its image**, so a change to `main.js` needs
-  `just build && just up` before nginx serves it.
+  `just setup images && just up` before nginx serves it.
 
 Third-party code and model licenses: see `NOTICE.md`.

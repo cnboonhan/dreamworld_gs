@@ -1,4 +1,4 @@
-# HuggingFace repos the pipeline loads, fetched by `just fetch-assets`.
+# HuggingFace repos the pipeline loads, fetched by `just setup models`.
 # Blank lines and #-comments ignored.
 
 # world generation: HY-Pano 2.0, WorldStereo 2.0, WorldMirror 2.0

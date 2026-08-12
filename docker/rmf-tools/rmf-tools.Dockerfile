@@ -16,7 +16,7 @@
 # container needs a real X server on the host, which defeats the point; these are
 # floorplan-scale scenes and the physics runs on the CPU regardless.
 #
-# Build: just build   (or: docker compose build rmfsim)
+# Build: just setup images   (or: docker compose build rmfsim)
 FROM ghcr.io/open-rmf/rmf/rmf_demos:jazzy-rmf-latest
 
 ENV DEBIAN_FRONTEND=noninteractive
