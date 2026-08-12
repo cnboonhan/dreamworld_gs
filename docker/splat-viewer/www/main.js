@@ -1751,7 +1751,18 @@ async function main() {
         // one rule both this and a direct load use, so the two cannot drift.
         // The heading itself is applied by standHome further down, after it
         // builds its axes — set here, it is re-derived away.
-        const dir = continuation(a.doc, window.__cameFrom);
+        let dir = continuation(a.doc, window.__cameFrom);
+        // A teleport has no arriving edge to continue, so it names the corridor
+        // to face instead. Applied HERE, not after the world lands: this is the
+        // one owner of the arrival heading — it threads through the panel to
+        // standHome, which re-derives the yaw and would overwrite anything set
+        // afterwards. That last-writer-wins race is the whole heading saga.
+        const want = window.__faceOnArrival;
+        window.__faceOnArrival = null;
+        if (want) {
+            const l = (a.doc.lanes || []).find((x) => x.to === want);
+            if (l) dir = l.dir;
+        }
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) {
             tourInit({points: [stand, ahead], up: a.doc.up}, false);
@@ -2032,9 +2043,12 @@ async function main() {
             fixing = true;                       // its own guard: ops.stand takes
             try {                                // seconds and must not re-enter
                 say(`following the model to ${shortOf(truth.scene)}`);
+                // Ask before standing, so the arrival builds the view facing
+                // this corridor rather than being turned to it once it is up.
+                window.__faceOnArrival =
+                    String(truth.facing || "").split(".").pop() || null;
                 const r = await ops.stand({scene: truth.scene});
                 if (!r.ok) say(`could not follow to ${truth.scene}: ${r.error}`);
-                else await faceAsked(truth);
             } catch (err) {
                 say(`could not follow: ${err}`);
             } finally {
