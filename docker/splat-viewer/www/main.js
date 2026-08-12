@@ -1810,11 +1810,17 @@ async function main() {
         const c = await store();
         return c ? (await c.match(href).catch(() => null)) : null;
     };
-    window.__clearSplats = async () => {
+    // Clear and fetch again, as one action. Clearing alone leaves the viewer
+    // slower than before with nothing to show for it, and the reason to clear
+    // is almost always that a world was regenerated — which means the copy you
+    // want is the one that is not here yet.
+    window.__clearSplats = async (redownload = true) => {
         await caches.delete(STORE).catch(() => {});
-        unpacked.clear(); warmed.clear();
-        say("splats cleared");
-        countCached();
+        unpacked.clear();
+        warmed.clear();
+        await countCached();
+        say(redownload ? "splats cleared — downloading again" : "splats cleared");
+        if (redownload && lastWarm) warm(lastWarm.project, lastWarm.doc);
         return "cleared";
     };
 
@@ -1864,14 +1870,14 @@ async function main() {
     // around. Sequential: a sweep that competes with the world being loaded now
     // makes the thing you are waiting for slower.
     const warmed = new Set();
-    let cached = 0, total = 0;
+    let cached = 0, total = 0, lastWarm = null;
     const countCached = async () => {
         const c = await store();
         cached = c ? (await c.keys()).length : 0;
         const el = document.getElementById("cacheNote");
         if (el) el.innerHTML = total
             ? `splats cached ${cached}/${total}` +
-              (cached ? ` <a href="#" id="cacheClear">clear</a>` : "")
+              (cached ? ` <button id="cacheClear">clear + download again</button>` : "")
             : "";
         const clr = document.getElementById("cacheClear");
         if (clr) clr.onclick = (e) => { e.preventDefault(); window.__clearSplats(); };
@@ -1882,6 +1888,7 @@ async function main() {
     // known without opening each world's paths doc first.
     const warm = async (project, doc) => {
         if (!doc || !project) return;
+        lastWarm = {project, doc};       // so a re-download knows where to start
         const level = String(doc.waypoint || "").split(".")[0];
         let index;
         try {

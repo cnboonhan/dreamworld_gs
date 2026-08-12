@@ -68,7 +68,10 @@ canvas { transition: opacity .32s ease; }
              padding: 5px 9px; border-radius: 6px; color: #9fb0c4;
              background: rgba(14,18,24,.92); border: 1px solid #2f3a49; }
 #cacheNote:empty { display: none; }
-#cacheNote a { color: #ff9b9b; margin-left: 8px; }
+#cacheNote button { margin-left: 8px; font: inherit; cursor: pointer;
+                    color: #ff9b9b; background: #2a1d1d; border: 1px solid #5a3030;
+                    border-radius: 5px; padding: 2px 7px; }
+#cacheNote button:hover { background: #3a2626; }
 #agentChip.on { border-color: #3f7d55; color: #8fd6a6; }
 #agentChip.off { border-color: #8a3a3a; color: #ff9b9b; }
 #edgeFold { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px;
