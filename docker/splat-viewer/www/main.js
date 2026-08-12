@@ -1820,10 +1820,19 @@ async function main() {
                 const lane = laneTo(to);
                 if (!lane) return {ok: false, error: `${shortOf(to)} is not a lane out of ${here()}`};
                 if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
+                // The easing is drawn by the frame loop, which only runs
+                // tourPlace while tour.on — and standHome clears it when a world
+                // opens. So a turn was set up and never drawn: the arrow buttons
+                // moved the robot and left the camera where it was.
+                const was = tour.on;
+                tour.on = true;
                 tourTurn(lane.dir, (motion || {}).turn_ms);
                 // Answer when the swing has finished, not when it was started —
                 // the robot is turning for exactly as long.
                 await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));
+                // Put it back: left on, tourPlace re-pins the camera every frame
+                // and the keys stop working.
+                tour.on = was;
                 return {ok: true, at: here(), facing: shortOf(to)};
             },
             /** Jump straight to a world, for a reset or a level change. */
