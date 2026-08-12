@@ -680,11 +680,18 @@ def turn(direction):
     if not ns:
         return {"ok": False, "error": f"{lab(cur)} has no neighbours to turn to"}
     ns.sort(key=lambda v: _az(cur, v))
+    yaw = heading_now()
     if ST["face"] in ns:
-        i = ns.index(ST["face"])
-        i = (i + (1 if str(direction).lower().startswith("l") else -1)) % len(ns)
+        start = ns.index(ST["face"])
+    elif yaw is not None:
+        # Turning starts from where the robot is actually pointing, not from
+        # whichever neighbour happens to sort first — otherwise the first turn
+        # after a teleport swings somewhere unrelated to the arrow on screen.
+        start = ns.index(min(ns, key=lambda v: toward(cur, v, yaw)))
     else:
-        i = 0
+        start = 0
+    i = ((start + (1 if str(direction).lower().startswith("l") else -1)) % len(ns)
+         if (ST["face"] in ns or yaw is not None) else 0)
     return face(lab(ns[i]))
 
 
@@ -1200,13 +1207,36 @@ def write_todos(todos=None):
 
 
 # ---- natural language -------------------------------------------------------
+def heading_now():
+    """Which way the robot is pointing — the one heading everything should use.
+
+    The model's own yaw when it has one, and the robot's last reported heading
+    when it does not (after a teleport or a level change it has none). This is
+    exactly what the marker on the floor plan draws, so anything deciding "which
+    way is forward" agrees with the arrow by construction rather than by
+    coincidence.
+    """
+    y = ST.get("yaw")
+    return ST.get("yaw_live") if y is None else y
+
+
+def toward(cur, v, yaw):
+    """How far off `yaw` the corridor to v lies, in radians, 0..pi."""
+    return abs((_az(cur, v) - yaw + math.pi) % (2 * math.pi) - math.pi)
+
+
 def choose_forward():
     """The neighbour that continues the way you are already walking.
 
-    Ported from the dream's choose_forward. Facing wins if you are facing one;
-    otherwise it is the neighbour closest to straight on from the way you came in,
-    and doubling back is the last resort rather than the first — at a junction the
-    arrow key should keep going, not turn round.
+    Ported from the dream's choose_forward — facing wins if you are facing one,
+    and doubling back is the last resort rather than the first, so at a junction
+    the arrow key keeps going instead of turning round.
+
+    With one addition: the heading itself is consulted before the way you came
+    in. Neither of the ported cues survives a teleport — nothing is faced and
+    there is no previous waypoint — so this fell through to the first neighbour
+    in the list, which is how the arrow could point down one corridor while
+    forward walked into another and reported a door across it.
     """
     cur, prev = ST["cur"], ST["prev"]
     ns = [v for v, _ in ST["adj"].get(cur, [])]
@@ -1214,6 +1244,13 @@ def choose_forward():
         return cur
     if ST["face"] in ns:
         return ST["face"]
+    yaw = heading_now()
+    if yaw is not None:
+        best = min(ns, key=lambda v: toward(cur, v, yaw))
+        # Only when it is genuinely ahead. Pointing at a wall makes "forward"
+        # ambiguous, and the way you came in is the better answer then.
+        if toward(cur, best, yaw) < math.radians(75):
+            return best
     if prev is None or prev not in [v for v, _ in ST["adj"].get(cur, [])] and prev != cur:
         came = None
     else:
