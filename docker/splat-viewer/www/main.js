@@ -1812,7 +1812,9 @@ async function main() {
     // records are large typed arrays and would have to be serialised, and the
     // decode is fast next to the transfer once the transfer is local.
     const STORE = "dreamworld-splats-v1";
-    const store = () => caches.open(STORE).catch(() => null);
+    const HAS_STORE = typeof caches !== "undefined";
+    const store = () => HAS_STORE ? caches.open(STORE).catch(() => null)
+                                  : Promise.resolve(null);
     const stored = async (href) => {
         const c = await store();
         return c ? (await c.match(href).catch(() => null)) : null;
@@ -1880,7 +1882,10 @@ async function main() {
     let cached = 0, total = 0, lastWarm = null, sweeping = false;
     const countCached = async () => {
         const c = await store();
-        cached = c ? (await c.keys()).length : 0;
+        // Without a store — an insecure origin, so no Cache API — the downloads
+        // still warm the browser's own cache; only their persistence is not
+        // ours to promise. Count them anyway, so the sweep is visible.
+        cached = c ? (await c.keys()).length : warmed.size;
         const el = document.getElementById("cacheNote");
         if (el) el.innerHTML = total
             ? `splats cached ${cached}/${total}` +
@@ -1903,8 +1908,14 @@ async function main() {
             const r = await fetch(new URL(`files/${project}/splats/scenes.json`,
                                           location.href).href);
             index = r.ok ? await r.json() : null;
-        } catch (err) { return; }
-        if (!index) return;
+        } catch (err) { index = null; }
+        if (!index) {
+            // Release the guard. Returning while holding it meant one failed
+            // read of scenes.json stopped every later attempt, and the counter
+            // that would have said so never appeared either.
+            sweeping = false;
+            return;
+        }
         // scenes.json counts lanes, it does not name them, so the corridors
         // come from each world's own paths doc — a few KB, fetched as the walk
         // reaches it rather than all up front.
