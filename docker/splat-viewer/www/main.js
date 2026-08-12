@@ -771,6 +771,10 @@ const tour = {
     // yaw is measured in, so the view jumps by whatever the two frames differ
     // by — which reads as the world moving, not you turning.
     turn: null,
+    // the corridor being ridden: {to, from}, set by __rideWalk and cleared
+    // when the arrival settles. The mid-corridor handover and the minimap
+    // marker both need to know which edge tour.t is a fraction of.
+    leg: null,
 };
 const MOVE_KEYS = new Set([
     "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF",
@@ -823,7 +827,7 @@ function continuation(doc, cameFrom) {
 }
 
 
-async function edgePicker(doc, choose, facing) {
+async function edgePicker(doc, choose, facing, keepPose) {
     // The alignment tool draws these same walls correctly, so when the plan
     // comes up bare the data is fine and the fetch is not — which an empty
     // catch hid. Say which, rather than drawing an empty box in silence.
@@ -878,6 +882,59 @@ async function edgePicker(doc, choose, facing) {
     // thing the plan is centred on.
     let target = 0, at = 0;
 
+    // The camera on the plan. The marks pin this world to the building: each
+    // marked neighbour is one point known in both frames — its mark here, its
+    // bearing and metres on the map — and the waypoint itself is another. A
+    // least-squares similarity through those points turns any camera position,
+    // toured or flown by hand, into building metres. During a ride the fit is
+    // not even needed: tour.t is already a fraction of a known corridor, and
+    // that stays true through a mid-corridor handover when the camera's own
+    // coordinates change frames.
+    const toPlan = (() => {
+        const upv = norm3((doc.up && doc.up.length === 3) ? doc.up : [0, -1, 0]);
+        const w0 = placed[me] || doc.origin;
+        if (!w0) return null;
+        let e1 = null;
+        for (const l of doc.lanes) {
+            const g = [0, 1, 2].map((i) => l.dir[i] - upv[i] * dot3(l.dir, upv));
+            if (Math.hypot(...g) > 1e-6) { e1 = norm3(g); break; }
+        }
+        if (!e1) return null;
+        const e2 = cross3(upv, e1);
+        const flat = (p) => {
+            const d = [0, 1, 2].map((i) => p[i] - w0[i]);
+            return [dot3(d, e1), dot3(d, e2)];
+        };
+        const A = [flat(w0)], B = [[here[0], here[1]]];
+        for (const l of doc.lanes) {
+            if (!placed[l.to]) continue;
+            A.push(flat(placed[l.to]));
+            B.push([here[0] + Math.cos(l.bearing) * l.metres,
+                    here[1] + Math.sin(l.bearing) * l.metres]);
+        }
+        if (A.length < 2) return null;
+        const ca = A.reduce((s, p) => [s[0] + p[0] / A.length,
+                                       s[1] + p[1] / A.length], [0, 0]);
+        const cb = B.reduce((s, p) => [s[0] + p[0] / B.length,
+                                       s[1] + p[1] / B.length], [0, 0]);
+        let sc = 0, ss = 0, n2 = 0;
+        for (let i = 0; i < A.length; i++) {
+            const ax = A[i][0] - ca[0], ay = A[i][1] - ca[1];
+            const bx = B[i][0] - cb[0], by = B[i][1] - cb[1];
+            sc += ax * bx + ay * by; ss += ax * by - ay * bx;
+            n2 += ax * ax + ay * ay;
+        }
+        if (n2 < 1e-9) return null;
+        const s = Math.hypot(sc, ss) / n2;
+        const th = Math.atan2(ss, sc);
+        const c = Math.cos(th) * s, sn = Math.sin(th) * s;
+        return (p) => {
+            const f = flat(p);
+            const x = f[0] - ca[0], y = f[1] - ca[1];
+            return [cb[0] + c * x - sn * y, cb[1] + sn * x + c * y];
+        };
+    })();
+
     const hits = [];                 // where each vertex landed, for hit-testing
     const draw = () => {
         const far = Math.max(6, Math.max(...doc.lanes.map(l => l.metres)) * 1.6);
@@ -923,7 +980,45 @@ async function edgePicker(doc, choose, facing) {
         hits.push({i: 0, x: 110, y: 110});
         cx.fillStyle = target === 0 ? "#4ea1ff" : "#3fb950";
         cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
+        // The camera, as the dashboard draws the robot: a green wedge that
+        // slides as you ride and swims as you fly. Riding, the position is
+        // tour.t of the lane being ridden — exact, and immune to the frame
+        // change of a mid-corridor handover. Flying, it is the camera's own
+        // position through the marks' fit.
+        let q = null, ang = 0;
+        const lane = tour.playing && tour.leg &&
+            doc.lanes.find((l) => l.to === tour.leg.to);
+        if (lane) {
+            const t = Math.min(Math.max(tour.t, 0), 1);
+            q = P([here[0] + Math.cos(lane.bearing) * lane.metres * t,
+                   here[1] + Math.sin(lane.bearing) * lane.metres * t]);
+            ang = Math.atan2(-Math.sin(lane.bearing), Math.cos(lane.bearing));
+        } else if (toPlan && typeof viewMatrix !== "undefined") {
+            const inv = invert4(viewMatrix);
+            const at = [inv[12], inv[13], inv[14]];
+            q = P(toPlan(at));
+            const f = cameraForward();
+            if (f) {
+                const r = P(toPlan([at[0] + f[0], at[1] + f[1], at[2] + f[2]]));
+                ang = Math.atan2(r[1] - q[1], r[0] - q[0]);
+            }
+        }
+        if (q) {
+            cx.save();
+            cx.translate(q[0], q[1]); cx.rotate(ang);
+            cx.fillStyle = "#3fb950";
+            cx.strokeStyle = "#0a0d12"; cx.lineWidth = 1;
+            cx.beginPath(); cx.moveTo(8, 0); cx.lineTo(-4, 4.5);
+            cx.lineTo(-4, -4.5); cx.closePath(); cx.fill(); cx.stroke();
+            cx.restore();
+        }
     };
+    // Live: repaint while this panel is on screen, so the wedge moves with
+    // the camera. Stops itself when the next world's panel replaces this one.
+    const live = setInterval(() => {
+        if (!plan.isConnected) { clearInterval(live); return; }
+        draw();
+    }, 120);
 
     // Click a vertex to choose it. It clicks the matching row button rather
     // than repeating what that does — selecting, riding a walk, standing home —
@@ -1238,8 +1333,10 @@ async function edgePicker(doc, choose, facing) {
     paintSpots();
     // `facing` is a world direction the caller wants this splat to open along —
     // the handover passes the corridor being continued into. Without it the
-    // camera keeps whatever heading it had.
-    standHome(facing);
+    // camera keeps whatever heading it had. keepPose is the mid-corridor
+    // crossing's door in: the camera is already standing somewhere real in
+    // this world, and standing it "home" would teleport it to the vertex.
+    if (!keepPose) standHome(facing);
 }
 
 function tourInit(p, follow) {
@@ -1565,10 +1662,10 @@ async function main() {
             // the only route it has to standHome. Taking one argument silently
             // discarded it, so every live handover arrived with no heading while
             // a reload — which reads &from= itself — arrived with the right one.
-            window.__openPanel = (d, facing) => {
+            window.__openPanel = (d, facing, keepPose) => {
                 const old = document.getElementById("edges");
                 if (old) old.remove();
-                edgePicker(d, window.__rideWalk, facing);
+                edgePicker(d, window.__rideWalk, facing, keepPose);
             };
             window.__rideWalk = (w, d, pace) => {
                 // Pace from the lane's real length at the robot's own speed, so
@@ -1600,6 +1697,9 @@ async function main() {
                 const was = cameraForward();
                 tourInit({points: w.points, up: d.up}, true);
                 if (was) setHeading(null, {from: was});
+                // which corridor tour.t is now a fraction of — the handover
+                // and the minimap marker both read it
+                tour.leg = {to: w.to, from: d.waypoint};
                 showTourBar();
                 // start fetching the world this corridor ends at, so it is
                 // ready before the walk is
@@ -2058,6 +2158,82 @@ async function main() {
         }                         // the page sealed with no way to unseal it
     };
 
+    /** The books of an arrival, however the camera got there.
+     *
+     * The URL that can reproduce the session, the panel for the new world,
+     * the model told, the sweep nudged. Shared by the vertex arrival and both
+     * mid-corridor crossings, so the three ways in cannot drift apart.
+     * o.fade fades the canvas in — right for a cut at the vertex, wrong for a
+     * swap the eye should not notice. o.keepPose leaves the camera where it
+     * is instead of standing it home at the waypoint.
+     */
+    const settle = (a, dir, o) => {
+        o = o || {};
+        tour.leg = null;
+        // Keep every parameter the page was opened with, not just the two this
+        // line knows about. It wrote url and from only, so a handover silently
+        // dropped &agent= and &speed= — the live connection survived, being
+        // already open, but the URL left in the address bar could no longer
+        // reproduce the session. Reload after a transition and the viewer came
+        // back with no agent, while the server still believed one was attached
+        // from the connection that had just died: every command then timed out.
+        const keep = new URLSearchParams(location.search);
+        keep.set("url", `files/${a.project}/splats/${a.scene}/world.ply`);
+        keep.set("from", window.__cameFrom || "");
+        history.replaceState(null, "", "?" + keep.toString());
+        say("");
+        // the panel belongs to the world on screen: new waypoint, new floor
+        // plan, new neighbours, so exploring can carry on from here
+        window.__paths = a.doc;
+        window.__countCached();
+        // Fade the new world in. The swap itself is a single frame — one buffer
+        // replaced by another — and that hard cut is what reads as a jolt when
+        // walking a building. A short fade makes it a transition instead.
+        if (o.fade) {
+            const cv = document.querySelector("canvas");
+            if (cv) {
+                cv.style.transition = "none";
+                cv.style.opacity = "0";
+                requestAnimationFrame(() => {
+                    cv.style.transition = "opacity .32s ease";
+                    cv.style.opacity = "1";
+                });
+            }
+        }
+        // Tell the server where the camera has landed. Corridors can be walked
+        // by hand from the panel, and until now the server never heard about it
+        // — so it went on believing you were at the waypoint it last moved you
+        // to, and its next command named a neighbour of THAT one, which the
+        // world you are actually in has never heard of.
+        if (window.__agentPost) {
+            // Remember what was just proposed and when. Truth pushed before this
+            // move was told about it is already in flight, and following it
+            // walks straight back to where you came from — which is the corridor
+            // that would not stay walked.
+            window.__lastAt = {scene: a.scene, t: Date.now()};
+            window.__agentPost("/viewer/at", {scene: a.scene}).then((r) => {
+                // A proposal, not a report. The server can refuse — a world it
+                // has no splat for, a level it is not on — and if it does, this
+                // camera is the half that is wrong, so it goes back rather than
+                // standing somewhere the model will never name.
+                if (r && r.ok === false && window.__agentTruth) {
+                    say(`model refused ${shortOf(a.scene)}: ${r.error || ""}`);
+                    window.__agentTruth();
+                }
+            });
+        }
+        // Hand the direction to the panel, which sets it after building its axes
+        // — setting it here is undone by the standHome() at the end of it.
+        if (window.__openPanel) window.__openPanel(a.doc, dir, o.keepPose);
+        const warmDoc = a.doc, warmProj = a.project;
+        a.records = null;
+        a.said = null;
+        a.midway = false;
+        // Two deep: the neighbours, then theirs. Deferred, so the world just
+        // landed gets the frame it needs to draw before anything else fetches.
+        setTimeout(() => window.__warm(warmProj, warmDoc), 1500);
+    };
+
     window.stepThrough = () => {
         const a = arrival;
         // say why, not just no. Two silent refusals in a row cost more time
@@ -2077,9 +2253,15 @@ async function main() {
         // enough to arrive at and then correct by hand.
         const stand = (a.doc.placed || {})[a.to] || a.doc.origin;
         if (!stand) { say(`${a.scene}: no position for ${a.to}`); return false; }
-        splatData = a.records;
-        worker.postMessage({buffer: a.records.buffer,
-                            vertexCount: Math.floor(a.records.length / rowLength)});
+        // A ride that crossed over mid-corridor is already showing this world
+        // and standing at the walk's end; posting the buffer again would only
+        // ask the worker for a second sort of what is on screen.
+        const midway = a.midway;
+        if (!midway) {
+            splatData = a.records;
+            worker.postMessage({buffer: a.records.buffer,
+                                vertexCount: Math.floor(a.records.length / rowLength)});
+        }
         // Where to look on arrival: the corridor being continued into, by the
         // one rule both this and a direct load use, so the two cannot drift.
         // The heading itself is applied by standHome further down, after it
@@ -2111,67 +2293,132 @@ async function main() {
             tour.turn = null;
         }
         tour.t = 0; tour.playing = false;
-        // Keep every parameter the page was opened with, not just the two this
-        // line knows about. It wrote url and from only, so a handover silently
-        // dropped &agent= and &speed= — the live connection survived, being
-        // already open, but the URL left in the address bar could no longer
-        // reproduce the session. Reload after a transition and the viewer came
-        // back with no agent, while the server still believed one was attached
-        // from the connection that had just died: every command then timed out.
-        const keep = new URLSearchParams(location.search);
-        keep.set("url", `files/${a.project}/splats/${a.scene}/world.ply`);
-        keep.set("from", window.__cameFrom || "");
-        history.replaceState(null, "", "?" + keep.toString());
-        say("");
-        // the panel belongs to the world on screen: new waypoint, new floor
-        // plan, new neighbours, so exploring can carry on from here
-        window.__paths = a.doc;
-        window.__countCached();
-        // Fade the new world in. The swap itself is a single frame — one buffer
-        // replaced by another — and that hard cut is what reads as a jolt when
-        // walking a building. A short fade makes it a transition instead.
-        const cv = document.querySelector("canvas");
-        if (cv) {
-            cv.style.transition = "none";
-            cv.style.opacity = "0";
-            requestAnimationFrame(() => {
-                cv.style.transition = "opacity .32s ease";
-                cv.style.opacity = "1";
-            });
-        }
-        // Tell the server where the camera has landed. Corridors can be walked
-        // by hand from the panel, and until now the server never heard about it
-        // — so it went on believing you were at the waypoint it last moved you
-        // to, and its next command named a neighbour of THAT one, which the
-        // world you are actually in has never heard of.
-        if (window.__agentPost) {
-            // Remember what was just proposed and when. Truth pushed before this
-            // move was told about it is already in flight, and following it
-            // walks straight back to where you came from — which is the corridor
-            // that would not stay walked.
-            window.__lastAt = {scene: a.scene, t: Date.now()};
-            window.__agentPost("/viewer/at", {scene: a.scene}).then((r) => {
-                // A proposal, not a report. The server can refuse — a world it
-                // has no splat for, a level it is not on — and if it does, this
-                // camera is the half that is wrong, so it goes back rather than
-                // standing somewhere the model will never name.
-                if (r && r.ok === false && window.__agentTruth) {
-                    say(`model refused ${shortOf(a.scene)}: ${r.error || ""}`);
-                    window.__agentTruth();
-                }
-            });
-        }
-        // Hand the direction to the panel, which sets it after building its axes
-        // — setting it here is undone by the standHome() at the end of it.
-        if (window.__openPanel) window.__openPanel(a.doc, dir);
-        const warmDoc = a.doc, warmProj = a.project;
-        arrival.records = null;
-        arrival.said = null;
-        // Two deep: the neighbours, then theirs. Deferred, so the world just
-        // landed gets the frame it needs to draw before anything else fetches.
-        setTimeout(() => window.__warm(warmProj, warmDoc), 1500);
+        settle(a, dir, {fade: !midway});
         return true;
     };
+
+    // How far along a corridor the worlds trade places. At this fraction the
+    // world being left is at its blurriest — the camera is furthest from where
+    // its panorama was shot — and the next is nearly at its sharpest, and both
+    // are showing the same physical corridor, aligned by the same two marks.
+    // ?handover= tunes it; 1 turns the crossing off and swaps at the vertex.
+    const HANDOVER = Math.min(1, Math.max(0.3,
+        +(new URLSearchParams(location.search).get("handover") || 0.8)));
+
+    /** Trade worlds mid-ride and keep going.
+     *
+     * The ride is a fraction of a mark-to-mark line, and the next world holds
+     * the same line between its own marks — so the crossing is: post the new
+     * buffer, re-init the tour on the next world's walk back reversed, and
+     * put back t, yaw, pitch and pace exactly as they were. yaw and pitch
+     * survive the frame change untouched because in follow mode both are
+     * measured from the path, and the path is the same corridor. stepThrough
+     * still runs at the vertex and settles the books; it just skips the
+     * buffer it would repost and the fade there would be nothing to hide.
+     */
+    window.__midSwap = () => {
+        const a = arrival, leg = tour.leg;
+        if (!leg || a.midway || tour.t < HANDOVER || tour.t >= 1) return false;
+        if (a.to !== leg.to || !a.records || !a.doc) return false;
+        const back = (a.doc.walks || []).find(
+            (w) => w.to === String(leg.from || "").split(".").pop());
+        if (!back) return false;   // far end unmarked there: swap at the vertex
+        splatData = a.records;
+        worker.postMessage({buffer: a.records.buffer,
+                            vertexCount: Math.floor(a.records.length / rowLength)});
+        const keep = {yaw: tour.yaw, pitch: tour.pitch, t: tour.t,
+                      seconds: tour.seconds, turn: tour.turn, leg: tour.leg};
+        tourInit({points: back.points.slice().reverse(), up: a.doc.up}, true);
+        tour.yaw = keep.yaw; tour.pitch = keep.pitch; tour.turn = keep.turn;
+        tour.t = keep.t; tour.seconds = keep.seconds; tour.leg = keep.leg;
+        tour.playing = true;
+        a.midway = true;
+        return true;
+    };
+
+    // ---- crossing a corridor by hand ------------------------------------
+    //
+    // Fly down a marked corridor with the keys and the world follows. Past
+    // halfway the far world starts unpacking; past HANDOVER the camera is
+    // re-expressed in the far world's frame — same spot on the corridor, same
+    // offset beside it, same heading relative to it — and flying continues
+    // there. The books are settled exactly as an arrival settles them, except
+    // the camera is not stood home: it is already somewhere real.
+    let crossing = false;
+    setInterval(() => {
+        if (crossing || tour.playing || tour.on || window.__swapping) return;
+        const doc = window.__paths;
+        if (!doc || !(doc.walks || []).length) return;
+        const proj = decodeURIComponent(location.search).match(/files\/([^/]+)\//);
+        if (!proj) return;
+        const meN = String(doc.waypoint || "").split(".").pop();
+        const A0 = (doc.placed || {})[meN] || doc.origin;
+        if (!A0) return;
+        const d3 = (p, q) => [0, 1, 2].map((i) => p[i] - q[i]);
+        const inv = invert4(viewMatrix);
+        const pos = [inv[12], inv[13], inv[14]];
+        let pick = null;
+        for (const w of doc.walks) {
+            const B0 = (doc.placed || {})[w.to];
+            if (!B0) continue;
+            const E = d3(B0, A0), L2 = dot3(E, E);
+            if (L2 < 1e-9) continue;
+            const f = dot3(d3(pos, A0), E) / L2;
+            if (f < 0.5 || f > 1.05) continue;
+            // beside the corridor, in metres: the marks give the scale
+            const foot = [0, 1, 2].map((i) => A0[i] + E[i] * f);
+            const lat = Math.hypot(...d3(pos, foot)) *
+                (w.metres || 5) / Math.sqrt(L2);
+            if (lat > 2.5) continue;
+            if (!pick || f > pick.f) pick = {w, f, E};
+        }
+        if (!pick) return;
+        const scene = `${doc.waypoint.split(".")[0]}.${pick.w.to}`;
+        // prepare once per corridor, not once per tick: prepareArrival resets
+        // its own record first, so calling it again mid-download starts over
+        if (arrival.to !== pick.w.to)
+            window.prepareArrival(proj[1], scene, pick.w.to);
+        if (pick.f < HANDOVER || HANDOVER >= 1 || arrival.to !== pick.w.to ||
+            !arrival.records || !arrival.doc) return;
+        const across = arrival.doc;
+        const back = (across.walks || []).find((x) => x.to === meN);
+        const A1 = (across.placed || {})[meN];
+        const B1 = (across.placed || {})[pick.w.to] || across.origin;
+        if (!back || !A1 || !B1) return;
+        crossing = true;
+        try {
+            // a frame either side of the shared corridor: along it, beside it,
+            // and up — the one correspondence two marks and an up vector give
+            const uA = norm3(doc.up || [0, -1, 0]);
+            const uB = norm3(across.up || [0, -1, 0]);
+            const flatn = (v, u) => norm3(
+                [0, 1, 2].map((i) => v[i] - u[i] * dot3(v, u)));
+            const eA = flatn(pick.E, uA), bA = cross3(uA, eA);
+            const E1 = d3(B1, A1);
+            const eB = flatn(E1, uB), bB = cross3(uB, eB);
+            const s = Math.hypot(...E1) / Math.hypot(...pick.E);
+            const off = d3(pos, A0);
+            const pos2 = [0, 1, 2].map((i) => A1[i] + E1[i] * pick.f +
+                bB[i] * dot3(off, bA) * s + uB[i] * dot3(off, uA) * s);
+            const fw = cameraForward() || eA;
+            const rel = [dot3(fw, eA), dot3(fw, bA), dot3(fw, uA)];
+            const fw2 = norm3([0, 1, 2].map((i) =>
+                eB[i] * rel[0] + bB[i] * rel[1] + uB[i] * rel[2]));
+            splatData = arrival.records;
+            worker.postMessage({buffer: arrival.records.buffer,
+                                vertexCount: Math.floor(arrival.records.length /
+                                                        rowLength)});
+            window.__cameFrom = doc.waypoint;
+            tourInit({points: [pos2, [0, 1, 2].map((i) => pos2[i] +
+                                                   fw2[i] * 0.01)],
+                      up: across.up}, false);
+            setHeading(fw2, {now: true});
+            tour.t = 0; tour.playing = false; tour.on = false;
+            settle(arrival, null, {keepPose: true});
+        } finally {
+            crossing = false;
+        }
+    }, 400);
 
     // ---- agent control -----------------------------------------------------
     //
@@ -2989,6 +3236,9 @@ async function main() {
                     ? Math.min((now - lastFrame) / 1000, 0.1)
                     : 0;
                 tour.t += dt / tour.seconds * tour.dir;
+                // past HANDOVER with the far world ready, the ride carries
+                // straight over into it — same corridor, same fraction
+                if (window.__midSwap) window.__midSwap();
                 if (tour.t >= 1 || tour.t <= 0) {
                     // stop at the end. Walking back was for a scene that had
                     // one line through it and nothing to do at either end; a
