@@ -2028,18 +2028,31 @@ async function main() {
                 // and the backstop re-reads the truth once things are idle.
                 return;
             }
-            if (truth.scene === here()) return;
+            if (truth.scene === here()) return faceAsked(truth);
             fixing = true;                       // its own guard: ops.stand takes
             try {                                // seconds and must not re-enter
                 say(`following the model to ${shortOf(truth.scene)}`);
                 const r = await ops.stand({scene: truth.scene});
                 if (!r.ok) say(`could not follow to ${truth.scene}: ${r.error}`);
+                else await faceAsked(truth);
             } catch (err) {
                 say(`could not follow: ${err}`);
             } finally {
                 fixing = false;
             }
         }
+        // A teleport lands looking down a corridor, and says which one. The
+        // heading itself cannot cross: it is a bearing in building metres, and
+        // every splat has its own frame. The neighbour is the shared name, and
+        // the lane out of this world toward it is the same corridor — so the
+        // camera can be put on the heading the marker draws.
+        const faceAsked = async (truth) => {
+            const short = String((truth && truth.facing) || "").split(".").pop();
+            if (!short || !window.__paths) return;
+            const lane = (window.__paths.lanes || []).find((l) => l.to === short);
+            if (!lane) return;         // no corridor that way in this world
+            await ops.face({to: short});
+        };
         window.__follow = follow;
         // Re-read the truth on demand. Exported because the code that lands an
         // arrival lives outside this block and has no agentBase of its own.

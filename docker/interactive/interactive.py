@@ -517,8 +517,10 @@ def push_state():
     """
     st = state_dict()
     BUS.send({"type": "state", **st})
+    facing = None if ST.get("face") is None else lab(ST["face"])
     VIEWER.send({"op": "truth", "scene": st.get("scene"),
-                 "level": st.get("level"), "yaw": st.get("heading")})
+                 "level": st.get("level"), "yaw": st.get("heading"),
+                 "facing": facing})
 
 
 def robot_watchdog():
@@ -2390,6 +2392,12 @@ def reset():
                              f"the bridge said: {res or 'nothing'}"), 502
     with ST["lock"]:
         ST["yaw"] = yaw
+        # Name the neighbour, not just the bearing. The bearing is in building
+        # metres and means nothing to a splat — every world has its own frame,
+        # and lane directions are not comparable between them. The neighbour is
+        # the one description both halves share, so it is what lets the camera
+        # land on the same heading the marker is drawing.
+        ST["face"] = nb
         ST["open_doors"] = set()
     # Shut every door and lift, and stop the bridge holding any open — otherwise
     # its door_keeper republishes OPEN and undoes this a moment later.
