@@ -1800,8 +1800,26 @@ async function main() {
     // on localhost and slow over a tunnel, and "nothing happened when I got
     // there" is the same picture whether the fetch never started or had not
     // finished.
-    const unpackPly = async (href, label) => {
-        const res = await fetch(href);
+    // A stored copy survives a reload, so a world downloaded once stays
+    // downloaded until it is cleared on purpose. Bytes, not the unpacked form:
+    // records are large typed arrays and would have to be serialised, and the
+    // decode is fast next to the transfer once the transfer is local.
+    const STORE = "dreamworld-splats-v1";
+    const store = () => caches.open(STORE).catch(() => null);
+    const stored = async (href) => {
+        const c = await store();
+        return c ? (await c.match(href).catch(() => null)) : null;
+    };
+    window.__clearSplats = async () => {
+        await caches.delete(STORE).catch(() => {});
+        unpacked.clear(); warmed.clear();
+        say("splats cleared");
+        countCached();
+        return "cleared";
+    };
+
+    const unpackPly = async (href, label, res0) => {
+        const res = res0 || await fetch(href);
         if (!res.ok) throw new Error(`${res.status} ${href}`);
         const total = +res.headers.get("content-length") || 0;
         const reader = res.body.getReader();
@@ -1839,44 +1857,86 @@ async function main() {
         window.__swapping = !!on;
     };
 
-    // Neighbours, fetched into the browser cache while nothing is happening.
-    // A world is ~50 MB, so the wait at a corridor is the download; having it
-    // already in cache makes the next step a decode rather than a transfer.
-    // Breadth first from here: the corridors out of this waypoint are what can
-    // be walked next, then theirs. Sequential and low priority — a prefetch
-    // that competes with the world being loaded now makes things worse.
+    // Every world, breadth first from where you stand, into a store that
+    // survives a reload. The whole building is a few hundred megabytes and the
+    // wait at a corridor is the transfer, so fetching them all in walking order
+    // means the nearest are ready first and the rest arrive while you look
+    // around. Sequential: a sweep that competes with the world being loaded now
+    // makes the thing you are waiting for slower.
     const warmed = new Set();
-    const warm = async (project, doc, depth) => {
-        if (!doc || depth <= 0) return;
+    let cached = 0, total = 0;
+    const countCached = async () => {
+        const c = await store();
+        cached = c ? (await c.keys()).length : 0;
+        const el = document.getElementById("cacheNote");
+        if (el) el.innerHTML = total
+            ? `splats cached ${cached}/${total}` +
+              (cached ? ` <a href="#" id="cacheClear">clear</a>` : "")
+            : "";
+        const clr = document.getElementById("cacheClear");
+        if (clr) clr.onclick = (e) => { e.preventDefault(); window.__clearSplats(); };
+    };
+    window.__countCached = countCached;
+
+    // scenes.json carries every built world AND its lanes, so the walk order is
+    // known without opening each world's paths doc first.
+    const warm = async (project, doc) => {
+        if (!doc || !project) return;
         const level = String(doc.waypoint || "").split(".")[0];
-        for (const lane of doc.lanes || []) {
-            const scene = `${level}.${lane.to}`;
-            if (warmed.has(scene)) continue;
-            warmed.add(scene);
-            if (window.__swapping) return;         // a real load has the pipe
-            const base = new URL(`files/${project}/splats/${scene}/`,
-                                 location.href);
+        let index;
+        try {
+            const r = await fetch(new URL(`files/${project}/splats/scenes.json`,
+                                          location.href).href);
+            index = r.ok ? await r.json() : null;
+        } catch (err) { return; }
+        if (!index) return;
+        // scenes.json counts lanes, it does not name them, so the corridors
+        // come from each world's own paths doc — a few KB, fetched as the walk
+        // reaches it rather than all up front.
+        const built = new Set(index.map((x) => x.scene));
+        const lanesOf = new Map([[doc.waypoint,
+                                  (doc.lanes || []).map((l) => l.to)]]);
+        const lanesFor = async (scene) => {
+            if (lanesOf.has(scene)) return lanesOf.get(scene);
+            let out = [];
             try {
-                if (depth === 2) {
-                    // The corridors out of here: unpacked, not merely fetched.
-                    // The decode is the rest of the wait once the bytes are
-                    // local, so paying it now makes a first step into a
-                    // neighbour as quick as stepping back into a world already
-                    // visited. Only at this depth — further out is speculative
-                    // enough that the bytes are worth having and the work is
-                    // not.
-                    remember(scene, await unpackPly(
-                        new URL("world.ply", base).href, scene));
-                } else {
-                    const r = await fetch(new URL("world.ply", base).href,
-                                          {priority: "low"});
-                    if (!r.ok) continue;
-                    await r.arrayBuffer();         // drain it, so it is cached
+                const r = await fetch(new URL(
+                    `files/${project}/splats/${scene}/world.paths.json`,
+                    location.href).href);
+                if (r.ok) out = ((await r.json()).lanes || []).map((l) => l.to);
+            } catch (err) { /* a world with no doc simply leads nowhere */ }
+            lanesOf.set(scene, out);
+            return out;
+        };
+        total = index.length;
+        await countCached();
+
+        const queue = [doc.waypoint];
+        const seen = new Set(queue);
+        while (queue.length) {
+            const scene = queue.shift();
+            for (const to of await lanesFor(scene)) {
+                const next = `${level}.${to}`;
+                if (!seen.has(next) && built.has(next)) {
+                    seen.add(next); queue.push(next);
                 }
-                if (window.__swapping) return;     // a real load wants the thread
-                const d = await fetch(new URL("world.paths.json", base).href)
-                    .then((x) => x.ok ? x.json() : null).catch(() => null);
-                await warm(project, d, depth - 1);
+            }
+            if (warmed.has(scene) || scene === doc.waypoint) continue;
+            warmed.add(scene);
+            const href = new URL(`files/${project}/splats/${scene}/world.ply`,
+                                 location.href).href;
+            try {
+                if (await stored(href)) { await countCached(); continue; }
+                // Wait out a real load rather than skipping the rest of the
+                // sweep: the sweep should finish the building either way, just
+                // never at the expense of the world being opened now.
+                while (window.__swapping) await new Promise((r) => setTimeout(r, 400));
+                const res = await fetch(href, {priority: "low"});
+                if (!res.ok) continue;
+                const c = await store();
+                if (c) await c.put(href, res.clone());
+                await res.arrayBuffer();
+                await countCached();
             } catch (err) { /* a world that will not prefetch still loads */ }
         }
     };
@@ -1906,8 +1966,9 @@ async function main() {
             if (unpacked.has(scene)) {
                 arrival.records = unpacked.get(scene);
             } else {
-                arrival.records = await unpackPly(new URL("world.ply", base).href,
-                                                  scene);
+                const href = new URL("world.ply", base).href;
+                const have = await stored(href);
+                arrival.records = await unpackPly(href, scene, have || null);
                 remember(scene, arrival.records);
             }
         } catch (err) {
@@ -1986,6 +2047,7 @@ async function main() {
         // the panel belongs to the world on screen: new waypoint, new floor
         // plan, new neighbours, so exploring can carry on from here
         window.__paths = a.doc;
+        window.__countCached();
         // Fade the new world in. The swap itself is a single frame — one buffer
         // replaced by another — and that hard cut is what reads as a jolt when
         // walking a building. A short fade makes it a transition instead.
@@ -2028,7 +2090,7 @@ async function main() {
         arrival.said = null;
         // Two deep: the neighbours, then theirs. Deferred, so the world just
         // landed gets the frame it needs to draw before anything else fetches.
-        setTimeout(() => window.__warm(warmProj, warmDoc, 2), 1500);
+        setTimeout(() => window.__warm(warmProj, warmDoc), 1500);
         return true;
     };
 
