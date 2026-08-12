@@ -837,7 +837,8 @@ async function edgePicker(doc, choose, facing) {
 
     const box = document.createElement("div");
     box.id = "edges";
-    box.innerHTML = `<div class="hint">neighbours</div>
+    box.innerHTML = `<button id="edgeFold" title="hide the panel">\u2212</button>
+        <div class="hint">neighbours</div>
         <div id="sceneLinks"></div>
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
@@ -918,7 +919,25 @@ async function edgePicker(doc, choose, facing) {
             for (const k of Object.keys(placed)) delete placed[k];
             Object.assign(placed, j.placed);
             doc.walks = j.walks || [];
-            paintSpots();
+            // Fold the panel away. It covers a third of a 220-wide view and there is no
+    // other way to see what is behind it — the splat is the point, not the
+    // controls. Collapsed state is remembered, so it does not reopen on every
+    // handover once you have put it away.
+    const fold = box.querySelector("#edgeFold");
+    const applyFold = () => {
+        const shut = localStorage.getItem("edgesFolded") === "1";
+        box.classList.toggle("folded", shut);
+        fold.textContent = shut ? "\u2261" : "\u2212";
+        fold.title = shut ? "show the panel" : "hide the panel";
+    };
+    fold.onclick = () => {
+        localStorage.setItem("edgesFolded",
+            box.classList.contains("folded") ? "0" : "1");
+        applyFold();
+    };
+    applyFold();
+
+    paintSpots();
             paintWalks();
         } catch (err) {
             clearSpot.textContent = "could not clear \u2014 is 8085 running?";
@@ -1664,66 +1683,18 @@ async function main() {
         splatData = a.records;
         worker.postMessage({buffer: a.records.buffer,
                             vertexCount: Math.floor(a.records.length / rowLength)});
-        // Keep facing the way you were walking. The corridor you came down
-        // arrives here as the lane pointing BACK to where you came from, so the
-        // direction of travel is that lane reversed — exact, and in this world's
-        // own coordinates, which is the only frame either world agrees on.
-        //
-        // It used to take "any lane that is not the one you came in by", which
-        // is the same answer only at a waypoint with exactly two: at a junction
-        // it picked whichever came first and turned you down a side corridor.
-        const back = (window.__cameFrom || "").split(".").pop();
-        const lanes = a.doc.lanes || [];
         // Where to look on arrival: the corridor being continued into, by the
-        // one shared rule. The handover and a direct load both go through it,
-        // so the two cannot drift — they had, and only one was ever right.
+        // one rule both this and a direct load use, so the two cannot drift.
+        // The heading itself is applied by standHome further down, after it
+        // builds its axes — set here, it is re-derived away.
         const dir = continuation(a.doc, window.__cameFrom);
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) {
             tourInit({points: [stand, ahead], up: a.doc.up}, false);
-            // tourInit(follow=false) KEEPS the camera's yaw and only redefines
-            // the axes it is measured against, so the direction above changed
-            // what the old yaw meant rather than where the camera looks. Zeroing
-            // it is what actually faces down the axis — yaw 0 IS tour.a, which
-            // is the way you were walking.
-            // Arrive facing the way you were walking.
-            //
-            // The camera lands facing back down the corridor it came in by, so
-            // this is that heading turned half a turn. Written as pi + pi rather
-            // than 0 because that is what it means: keep what the handover
-            // produces, and reverse it. The two are the same number and only one
-            // of them says why.
             // Cancel any turn still easing from the walk that just ended: its
             // target was measured in the world you have left, and tourPlace
             // rewrites tour.yaw from it every frame until it completes.
             tour.turn = null;
-            // Carry the heading through, rather than computing one.
-            //
-            // tourInit(follow=false) reads the camera's current forward and
-            // keeps it, so crossing a vertex leaves you looking the way you were
-            // already looking — which is what "retain the orientation from the
-            // previous edge" asks for, and needs no sign convention to be right
-            // about.
-            //
-            // Setting an absolute heading here was tried with yaw 0 and yaw pi,
-            // and both were reported facing the wrong way. That cannot be true
-            // of both unless the value is not what decides it: edgePicker runs
-            // standHome() a moment later, which does its own tourInit and
-            // re-derives the yaw from the camera. So the last word belongs to
-            // that, and forcing a value here only fought it.
-            // Both signs have now been reported backwards, which cannot both be
-            // true — so print what was actually used rather than argue about it
-            // again. cameraForward() is the direction the camera ends up looking
-            // in this world's coordinates; the lane dirs say where each corridor
-            // goes. Comparing them settles it in one reading.
-            const fwd = cameraForward();
-            console.log("[handover]", a.scene,
-                        "| came from", back,
-                        "| lane back dir", came && came.dir.map(v => +v.toFixed(3)),
-                        "| faced", dir.map(v => +v.toFixed(3)),
-                        "| camera fwd", fwd && fwd.map(v => +v.toFixed(3)),
-                        "| other lanes", lanes.filter(l => l.to !== back)
-                            .map(l => l.to + " " + l.dir.map(v => +v.toFixed(2))));
         }
         tour.t = 0; tour.playing = false;
         history.replaceState(null, "",
