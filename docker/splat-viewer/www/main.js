@@ -1585,12 +1585,20 @@ async function main() {
         splatData = a.records;
         worker.postMessage({buffer: a.records.buffer,
                             vertexCount: Math.floor(a.records.length / rowLength)});
-        // keep walking the way you were: the lane out of the new waypoint that
-        // is not the one you came in by, or failing that hold the heading
+        // Keep facing the way you were walking. The corridor you came down
+        // arrives here as the lane pointing BACK to where you came from, so the
+        // direction of travel is that lane reversed — exact, and in this world's
+        // own coordinates, which is the only frame either world agrees on.
+        //
+        // It used to take "any lane that is not the one you came in by", which
+        // is the same answer only at a waypoint with exactly two: at a junction
+        // it picked whichever came first and turned you down a side corridor.
         const back = (window.__cameFrom || "").split(".").pop();
-        const on = (a.doc.lanes || []).find((l) => l.to !== back) ||
-                   (a.doc.lanes || [])[0];
-        const ahead = on ? stand.map((v, i) => v + on.dir[i] * 0.01) : null;
+        const lanes = a.doc.lanes || [];
+        const came = lanes.find((l) => l.to === back);
+        const dir = came ? came.dir.map((v) => -v)
+                         : (lanes[0] && lanes[0].dir) || null;
+        const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) tourInit({points: [stand, ahead], up: a.doc.up}, false);
         tour.t = 0; tour.playing = false;
         history.replaceState(null, "",
