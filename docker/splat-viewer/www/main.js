@@ -1702,8 +1702,47 @@ async function main() {
         });
     };
 
+    // While a world is coming down, clicks land on a panel describing the world
+    // being left — its corridors are not this one's, and acting on them starts
+    // a second swap on top of the first. So the page is sealed for the duration.
+    const sealed = (on) => {
+        document.body.classList.toggle("swapping", !!on);
+        window.__swapping = !!on;
+    };
+
+    // Neighbours, fetched into the browser cache while nothing is happening.
+    // A world is ~50 MB, so the wait at a corridor is the download; having it
+    // already in cache makes the next step a decode rather than a transfer.
+    // Breadth first from here: the corridors out of this waypoint are what can
+    // be walked next, then theirs. Sequential and low priority — a prefetch
+    // that competes with the world being loaded now makes things worse.
+    const warmed = new Set();
+    const warm = async (project, doc, depth) => {
+        if (!doc || depth <= 0) return;
+        const level = String(doc.waypoint || "").split(".")[0];
+        for (const lane of doc.lanes || []) {
+            const scene = `${level}.${lane.to}`;
+            if (warmed.has(scene)) continue;
+            warmed.add(scene);
+            if (window.__swapping) return;         // a real load has the pipe
+            const base = new URL(`files/${project}/splats/${scene}/`,
+                                 location.href);
+            try {
+                const r = await fetch(new URL("world.ply", base).href,
+                                      {priority: "low"});
+                if (!r.ok) continue;
+                await r.arrayBuffer();             // drain it, so it is cached
+                const d = await fetch(new URL("world.paths.json", base).href)
+                    .then((x) => x.ok ? x.json() : null).catch(() => null);
+                await warm(project, d, depth - 1);
+            } catch (err) { /* a world that will not prefetch still loads */ }
+        }
+    };
+    window.__warm = warm;
+
     window.prepareArrival = async (project, scene, to) => {
         if (arrival.to === to && arrival.records) return;
+        sealed(true);
         // doc too, not just records: the catch below cleared records and left
         // doc holding the PREVIOUS world's lanes, so a failed fetch handed the
         // arrival another waypoint's corridors and it faced down one of those.
@@ -1722,7 +1761,9 @@ async function main() {
         } catch (err) {
             arrival.records = null;
             say(`${scene}: ${err.message || err}`);
-        }
+        } finally {
+            sealed(false);        // in a finally: a failed fetch must not leave
+        }                         // the page sealed with no way to unseal it
     };
 
     window.stepThrough = () => {
@@ -1807,8 +1848,12 @@ async function main() {
         // Hand the direction to the panel, which sets it after building its axes
         // — setting it here is undone by the standHome() at the end of it.
         if (window.__openPanel) window.__openPanel(a.doc, dir);
+        const warmDoc = a.doc, warmProj = a.project;
         arrival.records = null;
         arrival.said = null;
+        // Two deep: the neighbours, then theirs. Deferred, so the world just
+        // landed gets the frame it needs to draw before anything else fetches.
+        setTimeout(() => window.__warm(warmProj, warmDoc, 2), 1500);
         return true;
     };
 

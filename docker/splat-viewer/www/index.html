@@ -40,6 +40,13 @@
    viewer is Kevin Kwok's, and the attribution stays in the source where it
    belongs even though the corner of a walkthrough is not the place for it. */
 #info { display: none; }
+/* Sealed while a world is switching. The panel on screen belongs to the world
+   being left, so a click on it names a corridor that does not exist where you
+   are about to be — and starts a second swap on top of the one in flight. The
+   cursor says why, and the canvas keeps drawing underneath. */
+body.swapping #edges, body.swapping #tourbar, body.swapping #agentChip {
+    pointer-events: none; opacity: .55; }
+body.swapping { cursor: progress; }
 #agentChip.on { border-color: #3f7d55; color: #8fd6a6; }
 #agentChip.off { border-color: #8a3a3a; color: #ff9b9b; }
 #edgeFold { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px;
