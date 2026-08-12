@@ -1293,7 +1293,42 @@ async function main() {
         carousel = false;
     } catch (err) {}
     // resolve ?url= relative to this server so mounted splats load same-origin
-    const url = new URL(params.get("url") || "files/splat.ply", location.href);
+    let want = params.get("url") || "files/splat.ply";
+    // Before committing to a ~50 MB download, ask where the tour actually is.
+    // A refreshed tab still carries whichever world was open when it was last
+    // saved, and following after the fact means fetching the wrong world first
+    // and the right one second. The agent is the one keeping track, so it is
+    // asked here — briefly, and only to rewrite a path we have not started yet.
+    const agentAsk = params.get("agent") === "off" ? null
+        : (params.get("agent") || `http://${location.hostname}:8086`);
+    const proj = want.match(/files\/([^/]+)\/splats\//);
+    if (agentAsk && proj) {
+        try {
+            const ctl = new AbortController();
+            const bail = setTimeout(() => ctl.abort(), 1500);   // never block boot
+            const st = await (await fetch(new URL("/state", agentAsk).href,
+                {cache: "no-store", signal: ctl.signal})).json();
+            clearTimeout(bail);
+            if (st && st.scene) {
+                const fixed = `files/${proj[1]}/splats/${st.scene}/world.ply`;
+                // Only if that world exists. Not every waypoint has one built,
+                // and sending the boot at a 404 would leave the viewer with no
+                // world at all — strictly worse than the stale one it was
+                // opened with.
+                const there = fixed === want || await fetch(
+                    new URL(fixed, location.href).href, {method: "HEAD"})
+                    .then((r) => r.ok).catch(() => false);
+                if (fixed !== want && there) {
+                    console.log(`[boot] agent says ${st.scene} — loading that`);
+                    want = fixed;
+                    const u = new URL(location.href);
+                    u.searchParams.set("url", fixed);
+                    history.replaceState({}, "", u);   // so a reload stays right
+                }
+            }
+        } catch (err) { /* no agent, or slow: the URL stands */ }
+    }
+    const url = new URL(want, location.href);
     // ?speed=<m/s> — how fast a corridor is walked when driving by hand. An
     // agent-driven walk still uses the robot's pace, because those two have to
     // land together and a viewer preference cannot be allowed to break that.
@@ -1966,9 +2001,27 @@ async function main() {
         // a fact — and otherwise follows what comes back. One owner, so a
         // disagreement has a defined resolution instead of two halves each
         // waiting for the other to move.
-        let fixing = false;
+        let fixing = false, awaiting = false;
+        // A world takes a few seconds to come down and unpack. Until it has,
+        // there is no "here" to compare against, so truth that lands during a
+        // fresh load has to wait for one rather than be dropped — which is what
+        // left a refreshed tab sitting in whatever world its URL happened to
+        // name until the next backstop poll.
+        const untilLoaded = (ms) => new Promise((done) => {
+            const t0 = Date.now();
+            const tick = () => window.__paths ? done(true)
+                : (Date.now() - t0 > ms ? done(false) : setTimeout(tick, 100));
+            tick();
+        });
         async function follow(truth) {
             if (!truth || !truth.scene) return;
+            if (!window.__paths) {
+                if (awaiting) return;            // one waiter, not one per poll
+                awaiting = true;
+                const ready = await untilLoaded(30000);
+                awaiting = false;
+                if (!ready) return;
+            }
             if (fixing || tour.playing || busyDepth || !window.__paths) {
                 // Mid-walk: let it land. Snapping out of a handover would
                 // abandon a walk that is already going where this says to go,
@@ -2044,7 +2097,13 @@ async function main() {
             es.onopen = () => {
                 setChip("on", "agent connected");
                 say("");
-                post("/viewer/hello", {at: here()});
+                // The server answers hello with where it expects this viewer to
+                // be. On a refresh the URL still names whatever world was open
+                // when the tab was last saved, so take the server's answer —
+                // it is the one that has been keeping track.
+                post("/viewer/hello", {at: here()}).then((r) => {
+                    if (r && r.expect) follow({scene: r.expect});
+                });
             };
         };
         connect();
