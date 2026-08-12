@@ -1659,20 +1659,24 @@ async function main() {
             // than 0 because that is what it means: keep what the handover
             // produces, and reverse it. The two are the same number and only one
             // of them says why.
-            // Cancel any turn still easing from the walk that just ended. Its
-            // `to` was measured in the world you have left, and tourPlace
-            // rewrites tour.yaw from it on every frame until it completes — so
-            // an arrival heading set here was overwritten a frame later and
-            // nothing appeared to change however it was set.
+            // Cancel any turn still easing from the walk that just ended: its
+            // target was measured in the world you have left, and tourPlace
+            // rewrites tour.yaw from it every frame until it completes.
             tour.turn = null;
-            // Half a turn about the continuation. The screen shows the opposite
-            // of the `fwd` tourPlace computes — the walk travels the right way
-            // and only the heading it lands on is reversed, which is exactly
-            // what that would do. This value was tried twice before and appeared
-            // to change nothing, because the turn above was overwriting it.
-            tour.yaw = Math.PI;
-            tour.pitch = 0;
-            tourPlace(0);          // take effect now, not on the next frame
+            // Carry the heading through, rather than computing one.
+            //
+            // tourInit(follow=false) reads the camera's current forward and
+            // keeps it, so crossing a vertex leaves you looking the way you were
+            // already looking — which is what "retain the orientation from the
+            // previous edge" asks for, and needs no sign convention to be right
+            // about.
+            //
+            // Setting an absolute heading here was tried with yaw 0 and yaw pi,
+            // and both were reported facing the wrong way. That cannot be true
+            // of both unless the value is not what decides it: edgePicker runs
+            // standHome() a moment later, which does its own tourInit and
+            // re-derives the yaw from the camera. So the last word belongs to
+            // that, and forcing a value here only fought it.
             // Both signs have now been reported backwards, which cannot both be
             // true — so print what was actually used rather than argue about it
             // again. cameraForward() is the direction the camera ends up looking
