@@ -843,7 +843,7 @@ async function edgePicker(doc, choose, facing) {
     const box = document.createElement("div");
     box.id = "edges";
     box.innerHTML = `<button id="edgeFold" title="hide the panel">\u2212</button>
-        <div class="hint">neighbours</div>
+        <div class="hint" id="alignHint">neighbours</div>
         <div id="sceneLinks"></div>
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
@@ -896,7 +896,23 @@ async function edgePicker(doc, choose, facing) {
         cx.beginPath(); cx.arc(110, 110, 5, 0, 7); cx.fill();
     };
 
+    // The lanes are already drawn green when marked and grey when not, but a
+    // colour does not say how many are left, and unmarked is the state you are
+    // looking for. So it is counted in words as well, and names the ones still
+    // to do — those are the corridors this world cannot yet be walked down.
+    const paintAlign = () => {
+        const el = document.getElementById("alignHint");
+        if (!el) return;
+        const todo = doc.lanes.filter((l) => !placed[l.to]).map((l) => l.to);
+        if (!doc.lanes.length) { el.textContent = "no corridors"; return; }
+        el.textContent = todo.length
+            ? `neighbours — ${todo.length} of ${doc.lanes.length} unaligned: ${todo.join(", ")}`
+            : `neighbours — all ${doc.lanes.length} aligned`;
+        el.style.color = todo.length ? "#e3b341" : "#8fd6a6";
+    };
+
     const paintSpots = () => {
+        paintAlign();
         spotRow.innerHTML = spots.map((v, i) =>
             `<button data-i="${i}" class="${i === target ? "on" : ""}${
                 placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${v}${
