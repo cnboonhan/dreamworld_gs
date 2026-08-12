@@ -790,6 +790,28 @@ function norm3(v) {
 // The same view the alignment tool gives: the waypoint you are standing at,
 // the walls around it, and every lane leaving it. Picking a lane switches the
 // tour to that corridor's walk rather than loading another scene.
+/** The corridor you are continuing into, given the waypoint you came from.
+ *
+ * Used by BOTH ways a world opens — the live handover and a direct load with
+ * &from= — because they were two copies of this rule and only one of them was
+ * ever observed to be right. One copy cannot disagree with itself.
+ */
+function continuation(doc, cameFrom) {
+    const from = String(cameFrom || "").split(".").pop();
+    const lanes = (doc && doc.lanes) || [];
+    const back = lanes.find((l) => l.to === from);
+    if (!back) return null;
+    const rest = lanes.filter((l) => l.to !== from);
+    let best = null, bestDot = 2;
+    for (const l of rest) {
+        const d = dot3(l.dir, back.dir);
+        if (d < bestDot) { bestDot = d; best = l; }
+    }
+    // a dead end has only the way back; face out of it
+    return best ? best.dir : back.dir.map((v) => -v);
+}
+
+
 async function edgePicker(doc, choose, facing) {
     // The alignment tool draws these same walls correctly, so when the plan
     // comes up bare the data is fine and the fetch is not — which an empty
@@ -1351,19 +1373,8 @@ async function main() {
             // swap that happened in this page got a heading, and a reload or a
             // link landed you facing the spawn camera, which is where the
             // panorama happened to point.
-            const cameFrom = (new URLSearchParams(location.search).get("from")
-                              || "").split(".").pop();
-            const back = (doc.lanes || []).find((l) => l.to === cameFrom);
-            let facing = null;
-            if (back) {
-                const rest = doc.lanes.filter((l) => l.to !== cameFrom);
-                let best = null, bestDot = 2;
-                for (const l of rest) {
-                    const d = dot3(l.dir, back.dir);
-                    if (d < bestDot) { bestDot = d; best = l; }
-                }
-                facing = best ? best.dir : back.dir.map((v) => -v);
-            }
+            const facing = continuation(
+                doc, new URLSearchParams(location.search).get("from"));
             edgePicker(doc, window.__rideWalk, facing);
         }
     } catch (err) {
@@ -1663,39 +1674,10 @@ async function main() {
         // it picked whichever came first and turned you down a side corridor.
         const back = (window.__cameFrom || "").split(".").pop();
         const lanes = a.doc.lanes || [];
-        // The lane back to where you came from, NOT reversed. Reasoning said to
-        // negate it — you travelled away from A, so face away from A — and that
-        // put the camera backwards on every pair tried, including ones whose
-        // frames the alignment check says agree. Three observations beat the
-        // argument: whatever the sign convention is between a lane's recorded
-        // dir and the camera basis tourPlace builds, it is not the one I
-        // reasoned my way to.
-        // Face the corridor you are continuing INTO — its own recorded dir,
-        // not a negation of the one behind you. At a two-lane waypoint that is
-        // the other lane; at a junction it is the one closest to straight on
-        // from the way you arrived, which is what "keep walking" means there.
-        //
-        // Negating the return lane should be the same vector and twice was not,
-        // so this stops deriving a direction and just uses one that is written
-        // down. The original code did the same thing and was never reported
-        // facing wrong — its only fault was picking any lane rather than the
-        // straightest, which shows only at a junction.
-        const came = lanes.find((l) => l.to === back);
-        const others = lanes.filter((l) => l.to !== back);
-        let dir = null;
-        if (others.length && came) {
-            // most opposite to the lane back = straightest continuation
-            let best = others[0], bestDot = 2;
-            for (const l of others) {
-                const d = dot3(l.dir, came.dir);
-                if (d < bestDot) { bestDot = d; best = l; }
-            }
-            dir = best.dir;
-        } else if (others.length) {
-            dir = others[0].dir;
-        } else if (came) {
-            dir = came.dir;          // dead end: the only way out is back
-        }
+        // Where to look on arrival: the corridor being continued into, by the
+        // one shared rule. The handover and a direct load both go through it,
+        // so the two cannot drift — they had, and only one was ever right.
+        const dir = continuation(a.doc, window.__cameFrom);
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) {
             tourInit({points: [stand, ahead], up: a.doc.up}, false);
