@@ -2265,6 +2265,12 @@ async function main() {
                 const proj = decodeURIComponent(location.search).match(/files\/([^/]+)\//);
                 if (!proj) return {ok: false, error: "no project in the url"};
                 window.__cameFrom = here();
+                // Where this walk began, for the arrival to continue from. Only the
+                // panel and stand set this; a walk the dashboard drove left the
+                // last one standing, so the arrival continued an edge it had not
+                // travelled — which is a heading with no relation to the corridor,
+                // and reads as backwards whenever that stale edge was the reverse.
+                window.__cameFrom = here();
                 await window.prepareArrival(proj[1], scene, shortOf(scene));
                 window.stepThrough();
                 return await arrivedAt(scene, 180000);
