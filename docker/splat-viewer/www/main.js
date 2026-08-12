@@ -2379,7 +2379,15 @@ async function main() {
             const mine = window.__lastAt;
             if (mine && truth.scene !== mine.scene && Date.now() - mine.t < 5000)
                 return;
-            if (truth.scene === here()) return faceAsked(truth);
+            // Already here: leave the camera alone. The arrival owns the
+            // heading and has just set it from the edge travelled. A truth push
+            // lands right after a leg — the server posts one for every move —
+            // and its "facing" is the first neighbour of where you now stand,
+            // which at a dead end is the corridor you arrived down. Turning to
+            // it undid the arrival and faced you back the way you came.
+            //
+            // A teleport changes scene, so it still gets its heading below.
+            if (truth.scene === here()) return;
             fixing = true;                       // its own guard: ops.stand takes
             try {                                // seconds and must not re-enter
                 say(`following the model to ${shortOf(truth.scene)}`);
