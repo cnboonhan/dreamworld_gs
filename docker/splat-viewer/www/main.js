@@ -1840,6 +1840,11 @@ async function main() {
         // to, and its next command named a neighbour of THAT one, which the
         // world you are actually in has never heard of.
         if (window.__agentPost) {
+            // Remember what was just proposed and when. Truth pushed before this
+            // move was told about it is already in flight, and following it
+            // walks straight back to where you came from — which is the corridor
+            // that would not stay walked.
+            window.__lastAt = {scene: a.scene, t: Date.now()};
             window.__agentPost("/viewer/at", {scene: a.scene}).then((r) => {
                 // A proposal, not a report. The server can refuse — a world it
                 // has no splat for, a level it is not on — and if it does, this
@@ -2094,6 +2099,12 @@ async function main() {
                 // and the backstop re-reads the truth once things are idle.
                 return;
             }
+            // Ignore truth that predates a move of our own, briefly. The
+            // server has been told; its next push will agree, and this one is
+            // describing where we were.
+            const mine = window.__lastAt;
+            if (mine && truth.scene !== mine.scene && Date.now() - mine.t < 5000)
+                return;
             if (truth.scene === here()) return faceAsked(truth);
             fixing = true;                       // its own guard: ops.stand takes
             try {                                // seconds and must not re-enter
