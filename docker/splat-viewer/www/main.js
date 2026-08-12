@@ -924,6 +924,12 @@ async function edgePicker(doc, choose, facing) {
             for (const k of Object.keys(placed)) delete placed[k];
             Object.assign(placed, j.placed);
             doc.walks = j.walks || [];
+            // The "no walk yet" note is only rewritten by the walk painter, and
+            // a save that lands a walk takes the branch that skips it — so the
+            // note stayed on screen describing a corridor that now has one.
+            // Cleared here, where the facts changed; anything still true is
+            // written again by the paints below.
+            if (msgEl) msgEl.textContent = "";
             paintSpots();
             paintWalks();
         } catch (err) {
