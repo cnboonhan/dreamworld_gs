@@ -986,8 +986,6 @@ async function edgePicker(doc, choose, facing) {
         // bar has been shown, which on a world nobody has walked yet it has not.
         tourPlace(0);
         // After the axes are built, so it cannot be re-derived away.
-        console.log("[standHome]", doc.waypoint, "face arg:",
-                    face ? face.map((v) => +v.toFixed(3)) : "(none — keeping heading)");
         if (face) faceWorld(face);
         tour.on = false;
         const play = document.getElementById("tourPlay");
