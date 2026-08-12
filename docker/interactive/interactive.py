@@ -2023,7 +2023,10 @@ def teleport():
         ST["yaw"] = yaw
     push_state()
     _push_context()
-    log(f"teleported to {lab(cur)} on {ST['level']}")
+    # Not logged. The log is what the agent reads back as `recent_log` to decide
+    # what to do next, and an operator putting the robot somewhere is not
+    # something it did or should reason about — it would read as an action of its
+    # own that it cannot account for.
     return jsonify(ok=True, at=lab(cur), level=ST["level"],
                    facing=lab(nb) if nb is not None else None,
                    robot=bool(ST.get("galaxea")),
