@@ -818,10 +818,12 @@ async function edgePicker(doc, choose) {
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
-        <button id="saveSpot"></button>`;
+        <button id="saveSpot"></button>
+        <button id="clearSpot" style="display:none">clear</button>`;
     document.body.appendChild(box);
     const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
+    const clearSpot = box.querySelector("#clearSpot");
     const cx = box.querySelector("#edgePlan").getContext("2d");
     const here = doc.at;
 
@@ -870,7 +872,34 @@ async function edgePicker(doc, choose) {
                 placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${v}${
                 i === 0 ? " (here)" : ""}</button>`).join("");
         saveSpot.textContent = "save position";
+        // Only offered where there is something to clear: a mark in the wrong
+        // place is worse than none, because the walk drawn from it is wrong in a
+        // way that looks deliberate.
+        clearSpot.style.display = placed[spots[target]] ? "" : "none";
         draw();
+    };
+
+    clearSpot.onclick = async () => {
+        const who = spots[target];
+        clearSpot.textContent = "clearing\u2026";
+        try {
+            const r = await fetch("http://localhost:8085/unplace", {
+                method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({scene: doc.waypoint, vertex: who})});
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || "refused");
+            // Replace rather than merge: a merge cannot express a removal, and
+            // the mark that just went would survive it.
+            for (const k of Object.keys(placed)) delete placed[k];
+            Object.assign(placed, j.placed);
+            doc.walks = j.walks || [];
+            paintSpots();
+            paintWalks();
+        } catch (err) {
+            clearSpot.textContent = "could not clear \u2014 is 8085 running?";
+            return;
+        }
+        clearSpot.textContent = "clear";
     };
 
     // With the walk list gone, the tour simply rides whichever corridor is

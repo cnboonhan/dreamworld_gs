@@ -353,11 +353,15 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
         try:
-            if self.path == "/place":
-                doc = self.server.place(req["scene"], req["vertex"], req["at"])
+            if self.path in ("/place", "/unplace"):
+                if self.path == "/place":
+                    doc = self.server.place(req["scene"], req["vertex"], req["at"])
+                else:
+                    doc = self.server.unplace(req["scene"], req["vertex"])
                 walks = self.server.rewalk(req["scene"])
                 return self._send(200, json.dumps(
-                    {"ok": True, "placed": doc["placed"], "walks": walks}).encode(),
+                    {"ok": True, "placed": doc.get("placed") or {},
+                     "walks": walks}).encode(),
                     "application/json")
             px = self.server.apply(req["file"], float(req["degrees"]))
             body = json.dumps({"ok": True, "pixels": px})
@@ -506,6 +510,22 @@ def main() -> None:
         rec.write_text(json.dumps(doc, indent=1))
         return doc
 
+    def unplace(scene: str, vertex: str) -> dict:
+        """Forget where a vertex was marked.
+
+        A mark placed in the wrong spot is worse than no mark: the walk to it is
+        drawn from it, so it is wrong in a way that looks deliberate. Removing
+        one takes the walks that depended on it with it — a walk needs both ends,
+        and half a walk is not a shorter walk.
+        """
+        rec = marks / f"{scene}.json"
+        if not rec.is_file():
+            return {"placed": {}}
+        doc = json.loads(rec.read_text())
+        (doc.get("placed") or {}).pop(vertex, None)
+        rec.write_text(json.dumps(doc, indent=1))
+        return doc
+
     def preview_of(name: str) -> Path:
         """The downscaled copy the browser gets, made on first ask."""
         f = src / name
@@ -552,7 +572,7 @@ def main() -> None:
         return json.loads(f.read_text())["walks"] if f.is_file() else None
 
     srv.scenes = scenes
-    srv.place, srv.rewalk = place, rewalk
+    srv.place, srv.unplace, srv.rewalk = place, unplace, rewalk
     # Built up front, not on the first request. Downscaling a thirty-megapixel
     # JPEG takes a second or two, and a browser waiting on that looks exactly
     # like a file that will not load — which it was reported as, twice.
