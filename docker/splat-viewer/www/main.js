@@ -1268,8 +1268,8 @@ async function main() {
         // browser answers from cache and the panel opens showing the marks as
         // they were when you first loaded the page — the ply beside it never
         // changes, so nothing else here needed this.
-        const res = await fetch(url.href.replace(/\.ply$/, "") +
-                                ".paths.json?t=" + Date.now());
+        const res = await fetch(url.href.replace(/\.ply$/, "") + ".paths.json",
+                                {cache: "no-store"});
         const doc = res.ok ? await res.json() : null;
         if (doc && Array.isArray(doc.lanes) && doc.lanes.length) {
             window.__openPanel = (d) => {
@@ -1558,12 +1558,19 @@ async function main() {
 
     window.prepareArrival = async (project, scene, to) => {
         if (arrival.to === to && arrival.records) return;
-        arrival.to = to; arrival.records = null; arrival.scene = scene;
-        arrival.project = project;
+        // doc too, not just records: the catch below cleared records and left
+        // doc holding the PREVIOUS world's lanes, so a failed fetch handed the
+        // arrival another waypoint's corridors and it faced down one of those.
+        arrival.to = to; arrival.records = null; arrival.doc = null;
+        arrival.scene = scene; arrival.project = project;
         try {
             const base = new URL(`files/${project}/splats/${scene}/`, location.href);
-            const paths = await fetch(new URL("world.paths.json", base).href +
-                                      "?t=" + Date.now());
+            // no-store rather than a ?t= parameter: the file is rewritten on
+            // every save, so it must not come from cache — but appending to
+            // .href built a request the browser answered 400, and the server
+            // returns 200 for the same URL from curl.
+            const paths = await fetch(new URL("world.paths.json", base).href,
+                                      {cache: "no-store"});
             arrival.doc = paths.ok ? await paths.json() : null;
             arrival.records = await unpackPly(new URL("world.ply", base).href, scene);
         } catch (err) {
@@ -1611,8 +1618,32 @@ async function main() {
         // argument: whatever the sign convention is between a lane's recorded
         // dir and the camera basis tourPlace builds, it is not the one I
         // reasoned my way to.
+        // Face the corridor you are continuing INTO — its own recorded dir,
+        // not a negation of the one behind you. At a two-lane waypoint that is
+        // the other lane; at a junction it is the one closest to straight on
+        // from the way you arrived, which is what "keep walking" means there.
+        //
+        // Negating the return lane should be the same vector and twice was not,
+        // so this stops deriving a direction and just uses one that is written
+        // down. The original code did the same thing and was never reported
+        // facing wrong — its only fault was picking any lane rather than the
+        // straightest, which shows only at a junction.
         const came = lanes.find((l) => l.to === back);
-        const dir = came ? came.dir : (lanes[0] && lanes[0].dir) || null;
+        const others = lanes.filter((l) => l.to !== back);
+        let dir = null;
+        if (others.length && came) {
+            // most opposite to the lane back = straightest continuation
+            let best = others[0], bestDot = 2;
+            for (const l of others) {
+                const d = dot3(l.dir, came.dir);
+                if (d < bestDot) { bestDot = d; best = l; }
+            }
+            dir = best.dir;
+        } else if (others.length) {
+            dir = others[0].dir;
+        } else if (came) {
+            dir = came.dir;          // dead end: the only way out is back
+        }
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) {
             tourInit({points: [stand, ahead], up: a.doc.up}, false);
@@ -1623,6 +1654,19 @@ async function main() {
             // is the way you were walking.
             tour.yaw = 0;
             tour.pitch = 0;
+            // Both signs have now been reported backwards, which cannot both be
+            // true — so print what was actually used rather than argue about it
+            // again. cameraForward() is the direction the camera ends up looking
+            // in this world's coordinates; the lane dirs say where each corridor
+            // goes. Comparing them settles it in one reading.
+            const fwd = cameraForward();
+            console.log("[handover]", a.scene,
+                        "| came from", back,
+                        "| lane back dir", came && came.dir.map(v => +v.toFixed(3)),
+                        "| faced", dir.map(v => +v.toFixed(3)),
+                        "| camera fwd", fwd && fwd.map(v => +v.toFixed(3)),
+                        "| other lanes", lanes.filter(l => l.to !== back)
+                            .map(l => l.to + " " + l.dir.map(v => +v.toFixed(2))));
         }
         tour.t = 0; tour.playing = false;
         history.replaceState(null, "",
