@@ -1746,7 +1746,18 @@ async function main() {
         // — so it went on believing you were at the waypoint it last moved you
         // to, and its next command named a neighbour of THAT one, which the
         // world you are actually in has never heard of.
-        if (window.__agentPost) window.__agentPost("/viewer/at", {scene: a.scene});
+        if (window.__agentPost) {
+            window.__agentPost("/viewer/at", {scene: a.scene}).then((r) => {
+                // A proposal, not a report. The server can refuse — a world it
+                // has no splat for, a level it is not on — and if it does, this
+                // camera is the half that is wrong, so it goes back rather than
+                // standing somewhere the model will never name.
+                if (r && r.ok === false && window.__agentTruth) {
+                    say(`model refused ${shortOf(a.scene)}: ${r.error || ""}`);
+                    window.__agentTruth();
+                }
+            });
+        }
         // Hand the direction to the panel, which sets it after building its axes
         // — setting it here is undone by the standHome() at the end of it.
         if (window.__openPanel) window.__openPanel(a.doc, dir);
@@ -1784,7 +1795,8 @@ async function main() {
                 method: "POST", mode: "cors",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(body),
-            }).catch((err) => console.error("agent:", err));
+            }).then((r) => r.json().catch(() => ({ok: r.ok})))
+              .catch((err) => { console.error("agent:", err); return {}; });
 
         const here = () => (window.__paths || {}).waypoint || "";
         const shortOf = (v) => String(v).split(".").pop();
@@ -1949,35 +1961,58 @@ async function main() {
         // The model is the authority on where you are. The viewer reports its own
         // moves to it and otherwise follows — one owner, so a disagreement has a
         // defined resolution instead of two halves each waiting for the other.
-        let disagreed = 0, fixing = false;
-        setInterval(async () => {
-            if (fixing || tour.playing || busyDepth || !window.__paths) return;
-            let s;
-            try {
-                s = await (await fetch(new URL("/state", agentBase).href,
-                                       {cache: "no-store"})).json();
-            } catch (err) { return; }
-            if (!s || !s.scene) return;
-            if (s.scene === here()) { disagreed = 0; return; }
-            // Twice running, so a swap in flight is not read as a drift.
-            if (++disagreed < 2) return;
-            disagreed = 0;
+        // The server is the one writer of where the tour is. This viewer
+        // proposes its own moves — a corridor walked by hand is a proposal, not
+        // a fact — and otherwise follows what comes back. One owner, so a
+        // disagreement has a defined resolution instead of two halves each
+        // waiting for the other to move.
+        let fixing = false;
+        async function follow(truth) {
+            if (!truth || !truth.scene) return;
+            if (fixing || tour.playing || busyDepth || !window.__paths) {
+                // Mid-walk: let it land. Snapping out of a handover would
+                // abandon a walk that is already going where this says to go,
+                // and the backstop re-reads the truth once things are idle.
+                return;
+            }
+            if (truth.scene === here()) return;
             fixing = true;                       // its own guard: ops.stand takes
             try {                                // seconds and must not re-enter
-                say(`out of step — model says ${s.scene}, following`);
-                const r = await ops.stand({scene: s.scene});
-                if (!r.ok) say(`could not follow to ${s.scene}: ${r.error}`);
+                say(`following the model to ${shortOf(truth.scene)}`);
+                const r = await ops.stand({scene: truth.scene});
+                if (!r.ok) say(`could not follow to ${truth.scene}: ${r.error}`);
             } catch (err) {
                 say(`could not follow: ${err}`);
             } finally {
                 fixing = false;
             }
-        }, 2000);
+        }
+        window.__follow = follow;
+        // Re-read the truth on demand. Exported because the code that lands an
+        // arrival lives outside this block and has no agentBase of its own.
+        window.__agentTruth = () =>
+            fetch(new URL("/state", agentBase).href, {cache: "no-store"})
+                .then((r) => r.json()).then(follow).catch(() => {});
+        // A backstop, not the mechanism: truth is pushed down the command
+        // channel the moment it changes. This catches one missed while the
+        // stream was reconnecting, and settles what was deferred during a walk.
+        setInterval(async () => {
+            if (fixing || tour.playing || busyDepth || !window.__paths) return;
+            try {
+                const s = await (await fetch(new URL("/state", agentBase).href,
+                                             {cache: "no-store"})).json();
+                if (s && s.scene) follow(s);
+            } catch (err) { /* the chip already says the agent is gone */ }
+        }, 6000);
 
         const connect = () => {
             const es = new EventSource(new URL("/viewer/events", agentBase).href);
             es.onmessage = (e) => {
-                try { run(JSON.parse(e.data)); }
+                try {
+                    const d = JSON.parse(e.data);
+                    if (d.op === "truth") return follow(d);
+                    run(d);
+                }
                 catch (err) { console.error("agent: bad command", e.data, err); }
             };
             // A dashboard restart should not need a viewer reload — say so once

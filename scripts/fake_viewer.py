@@ -66,6 +66,17 @@ def handle(base, cmd):
     elif op == "face":
         time.sleep((motion.get("turn_ms") or 0) / 1000.0)
         res["facing"] = cmd.get("to")
+    elif op == "truth":
+        # The server pushes where the tour is whenever it changes; a follower
+        # that disagrees goes there. The real viewer loads a world to do it —
+        # here it is just the name, which is enough to time the round trip.
+        if cmd.get("scene") and cmd["scene"] != STATE["scene"]:
+            print(f"     following to {cmd['scene']}", flush=True)
+            STATE["scene"] = cmd["scene"]
+        return                                  # no /viewer/done: not a command
+    elif op == "bye":
+        print(f"     stood down: {cmd.get('why', '')}", flush=True)
+        return
     elif op == "stand":
         STATE["scene"] = cmd.get("scene") or STATE["scene"]
         res["at"] = STATE["scene"]

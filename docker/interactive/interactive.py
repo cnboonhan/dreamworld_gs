@@ -290,7 +290,11 @@ def drive_robot(path):
     if not ST.get("galaxea"):
         return
     pts = [[ST["verts"][i][1], ST["verts"][i][2]] for i in path]
-    bridge("/goto", {"waypoints": pts, "level": ST["level"]})
+    ST["moving"] = True
+    try:
+        bridge("/goto", {"waypoints": pts, "level": ST["level"]})
+    finally:
+        ST["moving"] = False
 
 
 def turn_robot(yaw):
@@ -451,7 +455,63 @@ def state_dict():
 
 
 def push_state():
-    BUS.send({"type": "state", **state_dict()})
+    """Publish the truth. This server is the only writer of where the tour is;
+    the splat viewer and the robot are followers, and both hear about a change
+    the moment it happens rather than discovering it on their next poll.
+
+    The viewer used to learn this by fetching /state every two seconds and
+    needing to disagree twice before acting, so a divergence could stand for
+    four seconds. Pushing costs nothing — the command channel is already open —
+    and closes that to about as long as one HTTP hop.
+    """
+    st = state_dict()
+    BUS.send({"type": "state", **st})
+    VIEWER.send({"op": "truth", "scene": st.get("scene"),
+                 "level": st.get("level"), "yaw": st.get("heading")})
+
+
+def robot_watchdog():
+    """Hold the robot to the truth as well.
+
+    Nothing else writes the robot's position, so it cannot wander — but a nav
+    that quietly failed to arrive leaves it somewhere the model does not think
+    it is, and that reads exactly like a desync. This checks while the robot is
+    still, and only corrects a gap too large to be the arrival tolerance.
+    """
+    was = None                       # last sampled position, to tell moving from stuck
+    strikes = 0
+    while True:
+        time.sleep(5)
+        try:
+            if ST.get("moving") or not ST.get("galaxea") or ST.get("cur") is None:
+                continue
+            st = (bridge("/state") or {}).get("state") or {}
+            if st.get("x") is None:
+                continue
+            here_now = (st["x"], st["y"])
+            moving = was is not None and math.dist(here_now, was) > 0.05
+            was = here_now
+            v = ST["verts"][ST["cur"]]
+            gap = math.dist(here_now, (v[1], v[2]))
+            # /goto returns as soon as the drive is dispatched, so the flag above
+            # is down long before the robot arrives. Correcting on that alone
+            # would teleport it backwards mid-corridor. So: only when it has
+            # stopped, and only when it is still short twice running — a robot
+            # that is moving is on its way, and one that stopped once at a
+            # doorway is not yet stranded.
+            if moving or gap < 1.5:
+                strikes = 0
+                continue
+            strikes += 1
+            if strikes < 2:
+                continue
+            strikes = 0
+            log(f"robot stopped {gap:.1f} m from {lab(ST['cur'])} — putting it back",
+                "err")
+            bridge("/reset", {"level": ST["level"], "x": v[1], "y": v[2],
+                              "yaw": ST.get("yaw") or 0.0})
+        except Exception as e:                                 # noqa: BLE001
+            log(f"watchdog: {e}", "err")
 
 
 # ---- tools ------------------------------------------------------------------
@@ -2379,6 +2439,7 @@ def main():
                         f"&agent=http://localhost:{a.port}")
 
     galaxea_reset()
+    threading.Thread(target=robot_watchdog, daemon=True).start()
     print(f"[interactive] {len(verts)} waypoints on {level}, standing at {lab(ST['cur'])}",
           flush=True)
     print(f"[interactive] tools: {', '.join(sorted(TOOLS))}", flush=True)
