@@ -121,6 +121,39 @@ up: _env
 summary level="" proj=project:
     @python3 {{repo}}/scripts/summary.py {{assets}} {{proj}} {{level}}
 
+# Drive the building by tool call — the splat viewer walks it and the Galaxea R1
+# walks it in Gazebo, edge for edge.
+#
+# The tool surface is the one ported from dreamworld/docker/dream_interactive:
+# go_to, turn, face, open_door, close_door, take a lift, pick, place, plan_route,
+# where. What changed is what a call rolls out onto. The dream stitched
+# pre-rendered clips into a video pane; there is no such video here, so a walk is
+# the splat viewer riding that waypoint's marked corridor and handing over at the
+# vertex, live.
+#
+#   curl localhost:8086/tools
+#   curl -X POST localhost:8086/tool -H 'Content-Type: application/json' \
+#        -d '{"tool":"go_to","args":{"vertex":"apex_lab"}}'
+#   curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
+#        -d '{"text":"go to apex_lab"}'
+#
+# Open the printed viewer URL in a browser: the ?agent= parameter is what hands
+# the camera over, and until a viewer connects the walking tools say so rather
+# than reporting a move that never happened.
+#
+# Drive the building by tool call, in the splat viewer and in Gazebo.
+interactive: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scene=$(curl -s localhost:{{iport}}/state | python3 -c "import json,sys; print(json.load(sys.stdin)['scene'])")
+    echo
+    echo "  tools        http://localhost:{{iport}}/tools"
+    echo "  robot        http://localhost:8090/state"
+    echo "  viewer       http://localhost:8081/?url=files/{{project}}/splats/$scene/world.ply&agent=http://localhost:{{iport}}"
+    echo
+    echo "  open that viewer URL, then drive it:"
+    echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
+
 # The panorama alignment tool, on the host rather than in a container: it edits
 # assets/projects/*/panos in place and wants a browser pointed at it.
 #
@@ -193,3 +226,92 @@ projects:
 jobs:
     docker compose exec -T generator prefect flow-run ls --limit 15
 
+# Point the whole stack at another project and restart the services that care.
+#
+#   just use htx
+#
+# Writes DW_PROJECT into .env, so a bare `docker compose up` agrees with `just`.
+use PROJECT:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d {{assets}}/projects/{{PROJECT}} ]; then
+        echo "no such project: {{PROJECT}}" >&2
+        just projects >&2
+        exit 1
+    fi
+    printf 'DW_UID=%s\nDW_GID=%s\nDW_PROJECT=%s\n' \
+        "$(id -u)" "$(id -g)" "{{PROJECT}}" > {{repo}}/.env
+    echo "active project: {{PROJECT}}"
+    if docker compose ps --status running -q rmfsim >/dev/null 2>&1; then
+        docker compose up -d --force-recreate rmfsim editor
+    fi
+
+# Stop everything.
+down:
+    docker compose down
+
+# Generate the world at one waypoint, from one panorama of it.
+#
+# panos/<id>.jpg is a single 360 of a place, aligned so its centre column faces
+# the building's +X. HY-World imagines the rest: ~400 views out of the one, then
+# a splat trained on them. `just plan` lists the ids this project's map defines,
+# and `just vertices` the ones on a level.
+#
+# ^C stops following; the job keeps running (watch it at :4200).
+#
+# Generate the world at one waypoint, from its panorama.
+generate id proj=project: up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir={{assets}}/projects/{{proj}}
+    if [ ! -d "$dir" ]; then
+        echo "no such project: {{proj}}" >&2
+        just projects >&2
+        exit 1
+    fi
+    src=$(ls -d "$dir"/panos/{{id}}.* 2>/dev/null | head -1 || true)
+    if [ -z "$src" ]; then
+        echo "no panorama for '{{id}}' in {{proj}}" >&2
+        echo "have:" >&2
+        find "$dir/panos" -mindepth 1 -maxdepth 1 2>/dev/null \
+            | sed "s|$dir/panos/|  |" >&2
+        exit 1
+    fi
+    # ids contain dots (L11.cafe), so strip the extension, not to the first dot
+    id=$(basename "${src%.*}")
+    out="$dir/splats/$id"
+    if [ -f "$out/world.ply" ]; then
+        echo "{{proj}} $id: already built, skipping"
+        echo "   (delete assets/projects/{{proj}}/splats/$id to rebuild)"
+        exit 0
+    fi
+    mkdir -p "$out"
+    win=/workspace/projects/{{proj}}
+    cp "$src" "$out/_input.${src##*.}"
+    # HY-World reads panorama.png. One line, because a recipe body must be
+    # indented for `just` to parse it and that same indentation reaches
+    # `python -c` as an IndentationError — which is what this did, once.
+    docker compose exec -T generator python -c "from pathlib import Path; import PIL.Image as I; I.MAX_IMAGE_PIXELS=None; d=Path('$win/splats/$id'); s=next(p for p in d.iterdir() if p.stem=='_input'); I.open(s).convert('RGB').save(d/'panorama.png'); s.unlink()"
+    docker compose exec -T generator python submit.py \
+        generate-world/dreamworld \
+        scene="$win/splats/$id" \
+        gpus={{gpus}} steps={{steps}}
+    echo "-> assets/projects/{{proj}}/splats/$id/world.ply (+ .usdz, .cam.json, .paths.json)"
+    echo "   view: http://localhost:8081/?url=files/{{proj}}/splats/$id/world.ply"
+
+# Build the Gazebo world + nav graph from a project's building map.
+#
+# Submitted as the build-world job. The nav graph it produces
+# (worlds/<map>/nav_graphs/0.yaml) is the output that outlives the simulation:
+# named waypoints, the lanes between them, and which lanes cross a door — the
+# building's traversal semantics, and what a capture is indexed against. The
+# run publishes that as a table in the Prefect UI.
+#
+# map defaults to the project's own name, or to the only map in its maps/.
+# proj defaults to the active project (just use <name>).
+#
+# Build the Gazebo world and nav graph from a project's map.
+world map="" proj=project: up
+    docker compose exec -T generator python submit.py \
+        build-world/dreamworld project={{proj}} map="{{map}}"
+    docker compose restart rmfsim 2>/dev/null || true
