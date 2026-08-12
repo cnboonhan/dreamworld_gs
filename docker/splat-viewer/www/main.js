@@ -919,25 +919,7 @@ async function edgePicker(doc, choose, facing) {
             for (const k of Object.keys(placed)) delete placed[k];
             Object.assign(placed, j.placed);
             doc.walks = j.walks || [];
-            // Fold the panel away. It covers a third of a 220-wide view and there is no
-    // other way to see what is behind it — the splat is the point, not the
-    // controls. Collapsed state is remembered, so it does not reopen on every
-    // handover once you have put it away.
-    const fold = box.querySelector("#edgeFold");
-    const applyFold = () => {
-        const shut = localStorage.getItem("edgesFolded") === "1";
-        box.classList.toggle("folded", shut);
-        fold.textContent = shut ? "\u2261" : "\u2212";
-        fold.title = shut ? "show the panel" : "hide the panel";
-    };
-    fold.onclick = () => {
-        localStorage.setItem("edgesFolded",
-            box.classList.contains("folded") ? "0" : "1");
-        applyFold();
-    };
-    applyFold();
-
-    paintSpots();
+            paintSpots();
             paintWalks();
         } catch (err) {
             clearSpot.textContent = "could not clear \u2014 is 8085 running?";
@@ -1143,6 +1125,23 @@ async function edgePicker(doc, choose, facing) {
         doc.waypoint + "  \u00b7  " + doc.lanes.length + " corridor(s)"
         + (from ? "  \u00b7  from " + from : "")
         + (why ? "  \u00b7  no plan: " + why : "");
+    // Fold the panel away. It covers a corner of the view and there was no other
+    // way to see behind it — the splat is the point, not the controls. The state
+    // is remembered, so it does not reopen on every handover once put away.
+    const fold = box.querySelector("#edgeFold");
+    const applyFold = () => {
+        const shut = localStorage.getItem("edgesFolded") === "1";
+        box.classList.toggle("folded", shut);
+        fold.textContent = shut ? "\u2261" : "\u2212";
+        fold.title = shut ? "show the panel" : "hide the panel";
+    };
+    fold.onclick = () => {
+        localStorage.setItem("edgesFolded",
+            box.classList.contains("folded") ? "0" : "1");
+        applyFold();
+    };
+    applyFold();
+
     paintSpots();
     // `facing` is a world direction the caller wants this splat to open along —
     // the handover passes the corridor being continued into. Without it the
