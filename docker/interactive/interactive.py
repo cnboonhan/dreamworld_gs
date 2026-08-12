@@ -427,9 +427,16 @@ def state_dict():
         # Prefer the heading actually being held over the waypoint being faced:
         # after a reset there is a heading but nothing is "faced", and the marker
         # fell back to a directionless dot for want of one.
-        if ST.get("yaw") is not None:
-            ex, ey = m2px(ST["verts"][cur][1] + math.cos(ST["yaw"]),
-                          ST["verts"][cur][2] + math.sin(ST["yaw"]))
+        # After a teleport or a level change the model holds no yaw of its own;
+        # the robot's last reported one is still true, and without it the marker
+        # fell back to a directionless dot — which is what "the triangle keeps
+        # becoming a circle" was. It was never a regression, it was this branch.
+        yaw = ST.get("yaw")
+        if yaw is None:
+            yaw = ST.get("yaw_live")
+        if yaw is not None:
+            ex, ey = m2px(ST["verts"][cur][1] + math.cos(yaw),
+                          ST["verts"][cur][2] + math.sin(yaw))
             d = math.hypot(ex - px, ey - py) or 1.0
             dirv = [(ex - px) / d, (ey - py) / d]
         elif ST["face"] is not None:
@@ -484,6 +491,11 @@ def pose_pump():
             if here_now == last:
                 continue
             last = here_now
+            # The marker needs a direction to be a triangle at all, and the
+            # model's own yaw is unset after a teleport or a level change. The
+            # robot always has one, so remember it as the fallback rather than
+            # letting the marker degrade to a dot that says nothing.
+            ST["yaw_live"] = here_now[2]
             px, py = ST["m2px"](st["x"], st["y"])
             ex, ey = ST["m2px"](st["x"] + math.cos(here_now[2]),
                                 st["y"] + math.sin(here_now[2]))
@@ -1890,7 +1902,12 @@ document.addEventListener('keydown',e=>{const a=document.activeElement;
  if(a&&a.tagName==='INPUT')return;if(KEYS[e.key]){e.preventDefault();cmd(KEYS[e.key])}});
 
 let curLevel='';
-function onState(s){last=s;if(s.level)curLevel=s.level;
+function onState(s){
+ // Keep the last known direction if this update carries none. A state event
+ // without a heading says nothing about where the robot is pointing, and
+ // dropping it turned the marker back into a dot until the next pose arrived.
+ if(s.dir==null&&last&&last.dir)s.dir=last.dir;
+ last=s;if(s.level)curLevel=s.level;
  if(!$('tplevel').value)$('tplevel').value=curLevel;   // never blank on arrival
  $('pos').textContent='@ '+s.cur_label+(s.level?'  ·  '+s.level:'')
   +(s.heading!=null?'  ·  hdg '+s.heading+'°':'')
