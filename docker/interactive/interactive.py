@@ -826,13 +826,20 @@ def switch_level(to, lift=None, land_on=None):
         cabin = next((v for v, l in lifts.items() if l == lift), None)
     if cabin is None:
         return False
-    png, fw, fh, m2px = build_floorplan(ST.get("building", ""), level)
     with ST["lock"]:
         ST.update({"level": level, "verts": verts, "adj": adj,
                    "doors": doors_of(ST["nav"], level), "lift_of": lifts,
                    "open_doors": set(), "cur": cabin, "prev": None, "face": None,
-                   "yaw": None,
-                   "fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
+                   "yaw": None})
+    # AFTER the vertices are swapped: the affine is fitted from the waypoints the
+    # drawing and the nav graph both name, and it reads ST["verts"] for them. Run
+    # before, it fits the new level's drawing against the old level's waypoints,
+    # finds one name in common, gives up, and every vertex is then drawn in raw
+    # metres on a canvas sized in pixels — the whole graph in one corner. The
+    # dream's own comment says to do it here, and I had moved it.
+    png, fw, fh, m2px = build_floorplan(ST.get("building", ""), level)
+    with ST["lock"]:
+        ST.update({"fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
     log(f"now on {level} at {lab(cabin)}")
     BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
     push_state()
@@ -1515,9 +1522,9 @@ header #mbox{flex:1;min-width:140px}
      <input id=tpwhere placeholder="teleport to — waypoint, or double-click the map">
      <input id=tplevel placeholder="level" style="flex:0 0 70px">
      <button class=go id=tpgo style="background:#6e40c9">teleport</button></div>
-    <div class=hint id=tphint>click a waypoint on the map to fill this,
-     double-click to go straight there. Puts the robot there and the world model
-     with it — an operator move, not something the agent can do</div>
+    <div class=hint id=tphint>click a waypoint on the map to fill this. Puts the
+     robot there and the world model with it — an operator move, not something
+     the agent can do</div>
    </div>
   </div>
  </div>
@@ -1732,8 +1739,7 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
    map.style.cursor=selTool?'crosshair':'pointer'}
   else{tip.style.display='none';map.style.cursor='default'}});
  map.addEventListener('mouseleave',()=>{tip.style.display='none'});
- map.addEventListener('dblclick',e=>{const best=vertAt(e);      // straight there
-  if(best)teleport(best.name||('v'+best.id),curLevel)});
+
  // Click a waypoint to name it somewhere. With a tool field open that is the
  // tool's argument; otherwise it is the teleport box, which is the other thing
  // on this page that takes a waypoint — and doing nothing was the third option,
