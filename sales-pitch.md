@@ -2,7 +2,14 @@
 
 For a government adopter. Spoken length ≈ 3:00 with the demo running
 throughout — the demo is not an interlude, it is the evidence track under the
-words. Numbers cited are measured on this deployment; the deep reference is
+words.
+
+**The live demo is one thing:** a harness rollout of a single typed mission,
+watched simultaneously on the dashboard (subtasks verifying), the splat
+viewer (the photoreal walk) and Gazebo (the robot walking the same edges).
+The panorama edit shown at 1:40 is **pre-baked** — edited and saved before
+the meeting; a 40-step diffusion edit does not belong inside a three-minute
+window. Numbers cited are measured on this deployment; the deep reference is
 [architecture.md](architecture.md).
 
 **The one-liner:** *One person photographs a facility in an afternoon; by
@@ -18,9 +25,14 @@ in — entirely on your own hardware, and the AI is the replaceable part.*
   in a small window under it.
 - Robot standing at `lift_lobby`; splat cache warm (`splats cached 16/16 ·
   preheated 16/16` in the viewer panel — it fills itself).
-- Panorama editor (:8087) in a background tab, already on a waypoint with a
-  before/after edit prepared.
-- Mission box empty. One typed sentence is the whole demo input.
+- Panorama editor (:8087) in a background tab, already on the waypoint whose
+  edit was baked beforehand: the edit made and **saved**, so the original
+  sits in `panos/.before-edit/` and the tab can toggle the two. If the
+  edited waypoint's world was also regenerated overnight, keep its splat one
+  click away — walking into the variant world is the strongest ten seconds
+  available, but it is optional.
+- Mission box empty. One typed sentence is the whole live input; everything
+  else on screen is the harness rolling it out.
 
 ---
 
@@ -57,13 +69,15 @@ safely on a small 8-billion-parameter model hosted on this box: the harness
 owns correctness, the model only proposes. Pause it — *[click pause]* — and
 it stops at the next action, auditable to the line.
 
-**[1:40 — switch to the panorama editor tab, show before/after]**
+**[1:40 — switch to the panorama editor tab; toggle the pre-baked
+before/after]**
 
-The twin is also editable. This is a photograph of that corridor; I've typed
-"add a pallet blocking the corridor" — and only those pixels changed, the
-building held still. Regenerate that one waypoint and you have a variant
-world: obstacles, hazards, cleared rooms. Scenario authoring for rehearsal
-and training, without touching the real site or exposing it to anyone.
+The twin is also editable. This is a photograph of that corridor. Before the
+meeting we typed one instruction — "add a pallet blocking the corridor" —
+and here is the result: only those pixels changed, the building held still.
+Regenerate that one waypoint overnight and you have a variant world:
+obstacles, hazards, cleared rooms. Scenario authoring for rehearsal and
+training, without touching the real site or exposing it to anyone.
 
 **[2:05 — back to the dashboard log]**
 
