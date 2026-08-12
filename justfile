@@ -172,6 +172,21 @@ interactive: up
     echo "  open that viewer URL, then drive it:"
     echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
 
+# Are the splat camera and the Gazebo robot walking the corridor together?
+#
+# They are in different coordinate systems, so their positions cannot be
+# compared — but how far along the shared edge each one is can be, and that is
+# the number that has to match. Issues the walk and samples both several times a
+# second, reporting the worst gap as a fraction of the corridor and in metres.
+#
+# Needs a splat viewer connected with ?agent= (just urls prints the link).
+#
+#   just sync lift_lobby lift_lobby_north
+#
+# Check the camera and the robot walk a corridor in step.
+sync from to level="":
+    @python3 {{repo}}/scripts/check_sync.py {{from}} {{to}} {{level}}
+
 # Put the robot at a waypoint, shut every door and lift, and start again.
 #
 # Both move together or neither does: resetting the bridge alone would leave the
