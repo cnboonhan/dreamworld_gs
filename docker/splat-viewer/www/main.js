@@ -2031,9 +2031,10 @@ async function main() {
     // being left — its corridors are not this one's, and acting on them starts
     // a second swap on top of the first. So the page is sealed for the duration.
     const unpacked = new Map();          // scene -> records, most recent last
-    const KEEP = 6;    // where you are, the widest junction's neighbours, and
-                       // the world just left — so the preheat is never evicted
-                       // by the very arrival it was warming up for
+    const KEEP = 32;   // the whole building: a floor is sixteen worlds at some
+                       // thirty megabytes of records each, and holding them
+                       // all is what makes every crossing instant — RAM is
+                       // the cheapest latency there is
     const remember = (scene, recs) => {
         unpacked.set(scene, recs);
         for (const k of [...unpacked.keys()].slice(0, -KEEP)) unpacked.delete(k);
@@ -2063,10 +2064,14 @@ async function main() {
         const el = document.getElementById("cacheNote");
         if (el) el.innerHTML = total
             ? `splats cached ${cached}/${total}` +
-              (cached ? ` <button id="cacheClear">clear + download again</button>` : "")
+              (cached ? ` <button id="cacheClear">clear</button>` : "")
             : "";
         const clr = document.getElementById("cacheClear");
-        if (clr) clr.onclick = (e) => { e.preventDefault(); window.__clearSplats(); };
+        // Clear only. The five-second watcher restarts the sweep on its own,
+        // so the store refills anyway — but from the button the user asked
+        // for a clear, not a download.
+        if (clr) clr.onclick = (e) => { e.preventDefault();
+                                        window.__clearSplats(false); };
     };
     window.__countCached = countCached;
 
@@ -2170,33 +2175,45 @@ async function main() {
 
     // The bytes make a corridor cheap; the parse was what was left, and it is
     // the wait that let a short ride reach its end before the far world was
-    // ready. So while you stand somewhere, the neighbours are unpacked ahead
-    // of time into memory — one at a time, yielding to any real move — and a
-    // ride that starts later finds its records already sitting there. First
-    // time through, this is also what converts each neighbour's rows, so it
-    // does the sweep's most useful work in the most useful order.
+    // ready. So the whole building is unpacked ahead of time into memory —
+    // the neighbours of where you stand first, then every other world, one at
+    // a time, yielding to any real move — and a ride finds its records
+    // already sitting there. First time through, this is also what converts
+    // each world's rows, so it does the sweep's most useful work in the most
+    // useful order.
     let heating = false;
     const preheat = async (project, doc) => {
         if (heating || !project || !doc) return;
         heating = true;
+        let moved = null;
         try {
             const level = String(doc.waypoint || "").split(".")[0];
-            for (const w of (doc.walks || [])) {
-                const scene = `${level}.${w.to}`;
-                if (unpacked.has(scene)) continue;
+            const want = (doc.walks || []).map((w) => `${level}.${w.to}`);
+            try {
+                const r = await fetch(new URL(
+                    `files/${project}/splats/scenes.json`, location.href).href);
+                if (r.ok) for (const x of await r.json()) want.push(x.scene);
+            } catch (err) { /* neighbours alone still warm */ }
+            for (const scene of want) {
+                if (unpacked.has(scene) || scene === doc.waypoint) continue;
                 while (window.__swapping || tour.playing)
                     await new Promise((r) => setTimeout(r, 500));
-                if (window.__paths !== doc) return;   // moved on: these are
-                const href = new URL(                 // no longer the neighbours
+                if (window.__paths !== doc) {
+                    // moved: the new place's neighbours outrank this order
+                    moved = window.__paths;
+                    break;
+                }
+                const href = new URL(
                     `files/${project}/splats/${scene}/world.ply`,
                     location.href).href;
                 try {
                     const recs = await unpackPly(href, scene,
                                                  await stored(href), true);
                     remember(scene, recs);
-                } catch (err) { /* an unbuilt neighbour stays cold */ }
+                } catch (err) { /* an unbuilt world stays cold */ }
             }
         } finally { heating = false; }
+        if (moved) preheat(project, moved);
     };
     window.__preheat = preheat;
 
