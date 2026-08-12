@@ -430,6 +430,13 @@ lobby — resolving the exit lobby on the *target* level by name, so it still re
 after the ride switches the graph. Calling `select_lift` or `call_lift` outside such
 a template is hard-rejected, so a level change cannot be improvised a step at a time.
 
+**Teleport is the operator's, not the agent's.** `just teleport <waypoint> [level]`
+puts the robot somewhere directly, and the world model with it — both move or
+neither does, since resetting the bridge alone would leave the dashboard
+describing a place the robot had left. The dashboard has the same control, and
+double-clicking a waypoint on its minimap goes there. It is deliberately absent
+from `/tools`, so a mission cannot skip a corridor by wishing itself past it.
+
 **The mission agent** (`POST /agent`) is the deepagents graph over these same tools,
 with `/pause`, `/resume` and `/cancel`. The harness owns subtask status, as it did in
 the dream: `write_todos` rejects anything that is not exactly one tool call, a call

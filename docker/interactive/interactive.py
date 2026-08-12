@@ -803,19 +803,27 @@ def _ride_lift(lift, floor):
     return switch_level(floor, lift)
 
 
-def switch_level(to, lift):
-    """Move the whole world model onto another level, after a lift has carried the
-    robot there.
+def switch_level(to, lift=None, land_on=None):
+    """Move the whole world model onto another level.
 
     Everything keyed to a level has to be rebuilt, not adjusted: the vertices are a
     different list with a different numbering, and so are the lanes, the doors and
-    the lift cabins. `cur` becomes this lift's cabin vertex on the new level, which
-    is where the robot physically is. Doors opened on the old level are forgotten
-    because they are not these doors.
+    the lift cabins. Doors opened on the old level are forgotten because they are
+    not these doors.
+
+    Where it lands is either this lift's cabin — after a ride, that is where the
+    robot physically is — or a named waypoint, when an operator has put it
+    somewhere directly.
     """
     level, verts, adj, _ = load_nav(ST["nav"], to)
     lifts = lift_of(ST["nav"], level)
-    cabin = next((v for v, l in lifts.items() if l == lift), None)
+    if land_on is not None:
+        try:
+            cabin = find_vertex(verts, land_on)
+        except SystemExit:
+            return False
+    else:
+        cabin = next((v for v, l in lifts.items() if l == lift), None)
     if cabin is None:
         return False
     png, fw, fh, m2px = build_floorplan(ST.get("building", ""), level)
@@ -825,7 +833,7 @@ def switch_level(to, lift):
                    "open_doors": set(), "cur": cabin, "prev": None, "face": None,
                    "yaw": None,
                    "fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
-    log(f"lift arrived — now on {level}")
+    log(f"now on {level} at {lab(cabin)}")
     BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
     push_state()
     _push_context()
@@ -1503,6 +1511,12 @@ header #mbox{flex:1;min-width:140px}
     <div class=bar id=toolarg style="display:none">
      <input id=argbox><button class=go onclick="runTool()">go</button></div>
     <div class=hint id=toolhint>click a tool — ones that need input reveal a field</div>
+    <div class=bar style="margin-top:6px">
+     <input id=tpwhere placeholder="teleport to — waypoint, or double-click the map">
+     <input id=tplevel placeholder="level" style="flex:0 0 70px">
+     <button class=go id=tpgo style="background:#6e40c9">teleport</button></div>
+    <div class=hint id=tphint>puts the robot there and the world model with it — an
+     operator move, not something the agent can do</div>
    </div>
   </div>
  </div>
@@ -1650,6 +1664,20 @@ function setStateModel(text){const el=$('statemodel');if(!el)return;
   if(l[0]==='▶')return '<span class=prog>'+e+'</span>';   // ▶ in_progress
   if(l[0]==='○')return '<span class=pend>'+e+'</span>';   // ○ pending
   return e;}).join('\n')}
+// Teleport is the operator's, not the agent's: it is not in /tools and there is
+// no path to it through the harness, so a mission cannot skip a corridor by
+// wishing itself past it. Here it is a button because setting up a test from a
+// particular waypoint should not mean walking there first.
+async function teleport(where,level){if(!where)return;
+ $("tpgo").disabled=true;status("teleporting…");
+ try{const j=await(await P('/teleport',{waypoint:where,level:level||''})).json();
+  if(j.ok){logEv('ok','teleported to '+j.message);$("tpwhere").value='';loadGraph();}
+  else logEv('err','! '+j.error);}
+ catch(e){logEv('err','! '+e);}finally{$("tpgo").disabled=false;status('');}}
+$("tpgo").onclick=()=>teleport($("tpwhere").value.trim(),$("tplevel").value.trim());
+$("tpwhere").addEventListener('keydown',e=>{if(e.key==='Enter')$("tpgo").click()});
+$("tplevel").addEventListener('keydown',e=>{if(e.key==='Enter')$("tpgo").click()});
+
 const KEYS={ArrowUp:'forward',ArrowLeft:'turn left',ArrowRight:'turn right'};
 document.addEventListener('keydown',e=>{const a=document.activeElement;
  if(a&&a.tagName==='INPUT')return;if(KEYS[e.key]){e.preventDefault();cmd(KEYS[e.key])}});
@@ -1702,6 +1730,8 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
    map.style.cursor=selTool?'crosshair':'pointer'}
   else{tip.style.display='none';map.style.cursor='default'}});
  map.addEventListener('mouseleave',()=>{tip.style.display='none'});
+ map.addEventListener('dblclick',e=>{const best=vertAt(e);      // straight there
+  if(best)teleport(best.name||('v'+best.id),'')});
  map.addEventListener('click',e=>{if(!selTool)return;const best=vertAt(e);   // active tool -> fill arg
   if(best){$('argbox').value=best.name||best.id;$('argbox').focus()}})})();
 loadTools();
@@ -1927,6 +1957,61 @@ def r_viewer_hello():
     body = request.get_json(force=True, silent=True) or {}
     log(f"viewer standing at {body.get('at') or '?'}")
     return jsonify(ok=True, expect=scene_of(ST["cur"]))
+
+
+@app.route("/teleport", methods=["POST", "OPTIONS"])
+def teleport():
+    """Put the robot at a waypoint, and the world model with it.
+
+    An operator action, deliberately not in TOOLS: an agent that can teleport is
+    not solving the problem it was asked to solve.
+
+    Both halves move together or the call fails. Resetting the bridge alone would
+    leave the dashboard describing a place the robot had left — the failure this
+    whole surface exists to avoid, and one it shipped with once already.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    b = request.get_json(force=True, silent=True) or {}
+    where = str(b.get("waypoint") or b.get("to") or "").strip()
+    level = str(b.get("level") or ST["level"]).strip()
+    if not where:
+        return jsonify(ok=False, error="need a waypoint"), 400
+    if level not in ST["levels"]:
+        return jsonify(ok=False, error=f"no level {level}; have {ST['levels']}"), 400
+
+    if level != ST["level"]:
+        if not switch_level(level, land_on=where):
+            return jsonify(ok=False, error=f"no waypoint {where!r} on {level}"), 400
+    else:
+        try:
+            v = find_vertex(ST["verts"], where)
+        except SystemExit as e:
+            return jsonify(ok=False, error=str(e)), 400
+        with ST["lock"]:
+            ST.update({"cur": v, "prev": None, "face": None, "yaw": None,
+                       "open_doors": set()})
+    cur = ST["cur"]
+    # Face the first neighbour, so it lands looking down a corridor rather than at
+    # whatever bearing it happened to be holding on another floor.
+    nb = next((v for v, _ in ST["adj"].get(cur, [])), None)
+    yaw = _az(cur, nb) if nb is not None else 0.0
+    res = bridge("/reset", {"level": ST["level"], "x": ST["verts"][cur][1],
+                            "y": ST["verts"][cur][2], "yaw": yaw})
+    if ST.get("galaxea") and not res.get("ok"):
+        return jsonify(ok=False, at=lab(cur), level=ST["level"],
+                       error="the world model moved but the robot did not — "
+                             f"the bridge said: {res or 'nothing'}"), 502
+    with ST["lock"]:
+        ST["yaw"] = yaw
+    push_state()
+    _push_context()
+    log(f"teleported to {lab(cur)} on {ST['level']}")
+    return jsonify(ok=True, at=lab(cur), level=ST["level"],
+                   facing=lab(nb) if nb is not None else None,
+                   robot=bool(ST.get("galaxea")),
+                   message=f"{lab(cur)} on {ST['level']}"
+                           + (f", facing {lab(nb)}" if nb is not None else ""))
 
 
 @app.route("/statemodel")

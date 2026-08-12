@@ -172,6 +172,29 @@ interactive: up
     echo "  open that viewer URL, then drive it:"
     echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
 
+# Put the robot at a waypoint — and the world model with it.
+#
+# Both move together or neither does: resetting the bridge alone would leave the
+# dashboard describing a place the robot had left, which is the desync every
+# other part of this is built to avoid.
+#
+# The level is optional and defaults to where the dashboard already is. Naming
+# one switches the whole model over — different vertices, lanes, doors and lift
+# cabins — exactly as arriving there by lift would.
+#
+#   just teleport cafe            on the current level
+#   just teleport lift_lobby L1   and switch levels
+#   just teleport v18             a lift cabin, by index
+#
+# Put the robot at a waypoint, and the world model with it.
+teleport waypoint level="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    body="{\"waypoint\":\"{{waypoint}}\",\"level\":\"{{level}}\"}"
+    curl -sS -X POST localhost:{{iport}}/teleport \
+        -H 'Content-Type: application/json' -d "$body" \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print('  ' + (d['message'] if d.get('ok') else '! ' + str(d.get('error'))))"
+
 # The panorama alignment tool, on the host rather than in a container: it edits
 # assets/projects/*/panos in place and wants a browser pointed at it.
 #
