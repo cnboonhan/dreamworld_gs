@@ -1679,7 +1679,11 @@ function setStateModel(text){const el=$('statemodel');if(!el)return;
 async function teleport(where,level){if(!where)return;
  $("tpgo").disabled=true;
  try{const j=await(await P('/teleport',{waypoint:where,level:level||''})).json();
-  if(j.ok){logEv('ok','teleported to '+j.message);$("tpwhere").value='';loadGraph();}
+  // No reload here. A teleport that changes level makes the server broadcast
+  // {type:'level'}, which reloads the graph and the floorplan; one that does not
+  // needs no reload at all, because the state message moves the marker. Calling
+  // it here refetched a 1.8 MB floorplan and redrew the map to show the same map.
+  if(j.ok){logEv('ok','teleported to '+j.message);$("tpwhere").value='';}
   else logEv('err','! '+j.error);}
  catch(e){logEv('err','! '+e);}finally{$("tpgo").disabled=false;}}
 $("tpgo").onclick=()=>teleport($("tpwhere").value.trim(),$("tplevel").value.trim());
