@@ -1,15 +1,21 @@
 #!/bin/bash
-# galaxea — boot a Gazebo on the project's world, spawn the Galaxea R1 into it, and
-# serve the bridge that drives it (robot_bridge.py on :8090).
+# galaxea — spawn the Galaxea R1 into the sim you can see, and serve the bridge
+# that drives it (robot_bridge.py on :8090).
 #
-# Ported from dreamworld/docker/dream_interactive/run.sh. The differences are paths
-# and one image: this repo lays a project out as assets/projects/<p>/worlds/<map>/
-# rather than <p>/outputs/generate_gz/, and rmf-tools already carries Gazebo, the
-# ros_gz bridge, building_map_server and every RMF message package the bridge
-# imports, so there is no second image to build.
+# Ported from dreamworld/docker/dream_interactive/run.sh, which booted a Gazebo of
+# its own on its own transport partition. That made sense there — the dream
+# pipeline's renders boot their own `sim_world` and must never see the robot — but
+# here it meant two Gazebos of one building, and the robot standing in the one
+# nobody was looking at.
+#
+# So this runs in the rmfsim container's network namespace and joins ITS gazebo:
+# the same partition, the same loopback, the robot in the window at :8083. What
+# rmfsim already provides — the world, /clock, building_map_server — is not
+# started again. What it does not is the set_pose service bridge, which is how the
+# robot is driven, so that is started here.
 #
 # The robot is spawned at RUNTIME (gz `create` service) rather than baked into the
-# .world, so nothing else that boots this world ever sees it.
+# .world, so anything else that boots this world still never sees it.
 #
 # Args: galaxea.sh <project> <map> — both resolved by entrypoint.sh.
 set -e
@@ -41,31 +47,30 @@ fi
 
 # /projects holds the GalaxeaR1 model dir so `model://GalaxeaR1/...` mesh URIs
 # resolve; the world's own models sit beside it.
+# The model dir has to be on the path of whoever SPAWNS it — that is this
+# process, calling gz service create.
 export GZ_SIM_RESOURCE_PATH="${proj}:${gen}:${gen}/models"
-# Isolate transport, so this sim never collides with the one the `sim` role runs on
-# the same world. robot_bridge's `gz service` calls inherit this env, so they hit
-# THIS gazebo.
-export GZ_PARTITION="${GZ_PARTITION:-galaxea}"
+# rmfsim's partition, not one of our own: we are joining its gazebo, not running
+# one. robot_bridge's `gz service` calls inherit this, so they reach it.
+export GZ_PARTITION="${GZ_PARTITION:-dreamworld_rmf}"
 
-# Server-only with offscreen rendering. The sim role already publishes a window over
-# noVNC; this one exists to be driven, and headless is what makes the lift kinematics
-# step reliably on a box with no usable GL display.
-gz sim -s -r --headless-rendering "${gen}/${WORLD}" &
-GZ_PID=$!
+# Wait for rmfsim's world rather than assuming it: this container starts beside
+# it, not after it, and a create call into nothing fails silently enough to be
+# confusing.
+echo "waiting for the ${WORLD%.world} sim to come up..."
+for _ in $(seq 1 120); do
+    gz service -s "/world/sim_world/create" --info >/dev/null 2>&1 && break
+    sleep 2
+done
 
-# Bridge sim /clock into ROS 2 (slotcar runs on sim time and publishes /robot_state)
-# and the set_pose service the bridge drives the robot with.
+# Only the piece rmfsim does not already run. It bridges /clock and runs
+# building_map_server; it does not bridge set_pose, which is how the robot is
+# driven along a nav path.
 ros2 run ros_gz_bridge parameter_bridge \
-    "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock" \
     "/world/sim_world/set_pose@ros_gz_interfaces/srv/SetEntityPose" &
 BRIDGE_PID=$!
 
-# building_map_server publishes the RMF building map; slotcar needs it to resolve the
-# robot's level_name from its x,y,z before it will publish /robot_state.
-ros2 run rmf_building_map_tools building_map_server "${BUILDING}" &
-MAP_PID=$!
-
-trap 'kill ${MAP_PID} ${BRIDGE_PID} ${GZ_PID} 2>/dev/null || true' EXIT
+trap 'kill ${BRIDGE_PID} 2>/dev/null || true' EXIT
 
 exec python3 /app/robot_bridge.py \
     --nav "${gen}/nav_graphs/0.yaml" --building "${BUILDING}" \

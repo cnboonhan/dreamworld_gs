@@ -133,6 +133,8 @@ services:
     command: ["sim", "${DW_PROJECT:-multilevel_office}"]
     ports:
       - "${DW_RMF_PORT:-8083}:8080"
+      # the galaxea bridge shares this namespace, so its port is published here
+      - "${DW_GALAXEA_PORT:-8090}:8090"
     volumes:
       - /etc/passwd:/etc/passwd:ro
       - ./assets/projects:/projects
@@ -256,14 +258,17 @@ services:
     image: dreamworld/rmf-tools:latest
     container_name: dreamworld-galaxea
     command: ["galaxea", "${DW_PROJECT:-multilevel_office}"]
-    ports:
-      - "${DW_GALAXEA_PORT:-8090}:8090"
+    # rmfsim's network namespace, so this joins the gazebo you can SEE rather
+    # than booting a second one nobody is looking at. gz transport there binds
+    # loopback (GZ_IP 127.0.0.1), which is only shared this way — and it means
+    # :8090 is published by rmfsim below, not here.
+    network_mode: "service:rmfsim"
     volumes:
       - /etc/passwd:/etc/passwd:ro
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      GZ_PARTITION: galaxea
+      GZ_PARTITION: dreamworld_rmf
       GZ_IP: 127.0.0.1
       DW_LEVEL: "${DW_LEVEL:-L11}"
       DW_START: "${DW_START:-lift_lobby}"

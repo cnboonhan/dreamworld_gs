@@ -386,8 +386,16 @@ back when the camera has actually landed, so a tool call does not return until t
 walk did. Until a viewer connects, the walking tools say so rather than reporting a
 move that never happened.
 
-**The robot half is unchanged.** `docker/rmf-tools/robot_bridge.py` is the dream
-bridge, code for code — only its docstring differs, because this repo lays a project
+**The robot is in the sim you can watch** — `:8083`, the same Gazebo the traffic
+editor's world runs in. The dream booted a second one on its own transport
+partition, which was right there (the pipeline's renders boot their own
+`sim_world` and must never see the robot) and wrong here: it meant two Gazebos of
+one building, with the robot standing in the one nobody was looking at. The
+bridge now shares rmfsim's network namespace and joins its gazebo, starting only
+the piece rmfsim does not — the `set_pose` service bridge.
+
+**The robot half is otherwise unchanged.** `docker/rmf-tools/robot_bridge.py` is
+the dream bridge, code for code — only its docstring differs, because this repo lays a project
 out as `worlds/<map>/` rather than `outputs/generate_gz/`. It spawns the Galaxea R1
 into its own Gazebo on its own transport partition, drives it by interpolating its
 pose along the nav polyline (`DRIVE_SPEED` 2.0 m/s, `TURN_RATE` 1.25 rad/s), routes
