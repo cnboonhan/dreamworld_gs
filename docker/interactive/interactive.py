@@ -541,7 +541,17 @@ def robot_watchdog():
     while True:
         time.sleep(5)
         try:
-            if MOVE.locked() or not ST.get("galaxea") or ST.get("cur") is None:
+            # MOVE covers one tool call; a mission is many, with the agent
+            # thinking in between — and the robot legitimately lags in those
+            # gaps, because /goto returns on dispatch. The watchdog once fired
+            # in exactly such a gap, thirty seconds into a mission, and
+            # teleported the robot back to its start while the route was in
+            # flight. So: hands off while any mission step is underway too.
+            busy = MOVE.locked() or any(
+                t.get("status") == "in_progress"
+                for t in ST.get("todos") or [])
+            if busy or not ST.get("galaxea") or ST.get("cur") is None:
+                strikes = 0
                 continue
             st = (bridge("/state") or {}).get("state") or {}
             if st.get("x") is None:
@@ -2307,6 +2317,16 @@ def r_viewer_at():
     level, _, name = scene.partition(".")
     if not name:
         return jsonify(ok=False, error="need a scene"), 400
+    if MOVE.locked():
+        # A move is in flight and the mover owns the state. Following here did
+        # two kinds of damage: the mission's own leg arrivals raced go_to and
+        # teleported the robot to each vertex while /goto was still driving the
+        # corridor, and a hand walk mid-mission yanked the model off a route it
+        # was halfway through. Accepted quietly, not refused — a refusal makes
+        # the viewer snap back mid-walk. Once the move lands, the next truth
+        # push settles any viewer that wandered.
+        return jsonify(ok=True, at=lab(ST["cur"]), level=ST["level"],
+                       note="a move is in flight — the mover owns the state")
     if level and level != ST["level"] and level in ST["levels"]:
         switch_level(level, land_on=name)
         return jsonify(ok=True, at=lab(ST["cur"]), level=ST["level"])

@@ -1604,16 +1604,15 @@ async function main() {
                     tour.seconds = Math.max(0.4, w.metres /
                         ((pace && pace.speed) || tour.speed));
                 if (pace && pace.turn_rate) tour.turnRate = pace.turn_rate;
-                // By hand, the camera KEEPS the heading you gave it and simply
-                // travels the corridor: swinging it to face the path would throw
-                // away the view you were lining up, which is the work the panel
-                // exists for. Under agent control the opposite is right — the
-                // robot turns to face each leg before it walks it, so the camera
-                // must too, or the two rotate differently through every corner.
+                // One ride, whoever asked for it. The walk pins the camera to
+                // the corridor (follow mode: yaw is measured from the track),
+                // and the heading you had swings into facing-forward rather
+                // than cutting. The agent's legs used to ride pinned without
+                // the swing, behind a `facing` flag — a second behaviour that
+                // existed only to differ, and it did.
                 const was = cameraForward();
                 tourInit({points: w.points, up: d.up}, true);
-                if (was && !(pace && pace.facing))
-                    setHeading(null, {from: was});
+                if (was) setHeading(null, {from: was});
                 showTourBar();
                 // start fetching the world this corridor ends at, so it is
                 // ready before the walk is
@@ -2244,12 +2243,15 @@ async function main() {
         });
 
         const ops = {
-            /** Turn to face the corridor, then ride it — the robot's own order.
+            /** A dashboard leg IS the panel's button press.
              *
-             * drive_path turns to face each leg (|arc| / TURN_RATE) and only then
-             * translates it (distance / DRIVE_SPEED). Doing the same here is what
-             * makes a corner look the same from both: the camera spends the turn
-             * turning rather than carrying its old heading down the new corridor.
+             * The panel path — pick the walk, ride it, hand over at the vertex —
+             * is the one that has always behaved; the agent used to take a
+             * parallel path of its own (aim at the lane, then ride pinned to
+             * the track) and every heading bug lived in the difference. So the
+             * agent presses the same button: same __rideWalk, same easing, same
+             * arrival. The only extra is the server's pace, so the camera and
+             * the robot spend the same time on the corridor.
              */
             async walk({to, pace, motion}) {
                 const m = motion || {};
@@ -2262,22 +2264,8 @@ async function main() {
                         : `${shortOf(to)} is not a lane out of ${here()}`};
                 }
                 const scene = `${here().split(".")[0]}.${shortOf(to)}`;
-                const lane = laneTo(to);
-                if (lane) {
-                    // The turn's duration is the server's, computed from both
-                    // endpoints in the nav graph's own frame — the same number
-                    // the robot is turning by. Deriving it here from the
-                    // camera's current heading would be a second answer to the
-                    // same question, and the two would differ at exactly the
-                    // corners where it shows.
-                    setHeading(lane.dir, {from: cameraForward(),
-                                          ms: m.turn_ms});
-                    hlog("1-aimed", `${here()}->${shortOf(to)}`,
-                         {lane: lane.dir.map((v) => +v.toFixed(3))});
-                    await new Promise((r) => setTimeout(r, m.turn_ms || 0));
-                }
                 window.__rideWalk(w, window.__paths,
-                                  {...(pace || {}), facing: true, walk_ms: m.walk_ms});
+                                  {...(pace || {}), walk_ms: m.walk_ms});
                 hlog("2-riding", `${here()}->${shortOf(to)}`,
                      {first: w.points[0].map((v) => +v.toFixed(2)),
                       last: w.points[w.points.length - 1].map((v) => +v.toFixed(2))});
