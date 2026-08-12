@@ -1905,12 +1905,20 @@ async function main() {
             // Chain, do not race: each command starts only once the last has
             // finished, so `go_to` down three corridors arrives three times.
             busy = busy.then(async () => {
-                const op = ops[cmd.op];
-                const res = op ? await op(cmd).catch((e) => ({ok: false, error: String(e)}))
-                               : {ok: false, error: `no such op: ${cmd.op}`};
-                say(res.ok ? "" : `agent: ${res.error}`);
-                await post("/viewer/done", {id: cmd.id, ...res});
-                busyDepth--;
+                try {
+                    const op = ops[cmd.op];
+                    const res = op
+                        ? await op(cmd).catch((e) => ({ok: false, error: String(e)}))
+                        : {ok: false, error: `no such op: ${cmd.op}`};
+                    say(res.ok ? "" : `agent: ${res.error}`);
+                    await post("/viewer/done", {id: cmd.id, ...res});
+                } finally {
+                    // In a finally, always. A throw anywhere above — a failed
+                    // post, most likely — left this counter raised forever, and
+                    // the reconciler below skips while it is, so one network
+                    // hiccup disabled the only thing that repairs a desync.
+                    busyDepth = Math.max(0, busyDepth - 1);
+                }
             });
         };
 
@@ -1919,21 +1927,33 @@ async function main() {
         // and each checks. Without the check a divergence lasts until someone
         // notices a command refused for naming a waypoint that is not adjacent,
         // which is a confusing way to learn you are in the wrong world.
-        let disagreed = 0;
+        // The model is the authority on where you are. The viewer reports its own
+        // moves to it and otherwise follows — one owner, so a disagreement has a
+        // defined resolution instead of two halves each waiting for the other.
+        let disagreed = 0, fixing = false;
         setInterval(async () => {
-            if (!window.__paths || tour.playing || busyDepth) return;
+            if (fixing || tour.playing || busyDepth || !window.__paths) return;
             let s;
             try {
                 s = await (await fetch(new URL("/state", agentBase).href,
                                        {cache: "no-store"})).json();
             } catch (err) { return; }
-            if (!s || !s.scene || s.scene === here()) { disagreed = 0; return; }
-            // Twice running, so a swap in flight is not mistaken for a drift.
+            if (!s || !s.scene) return;
+            if (s.scene === here()) { disagreed = 0; return; }
+            // Twice running, so a swap in flight is not read as a drift.
             if (++disagreed < 2) return;
             disagreed = 0;
-            say(`following the model to ${s.scene}`);
-            await ops.stand({scene: s.scene});
-        }, 3000);
+            fixing = true;                       // its own guard: ops.stand takes
+            try {                                // seconds and must not re-enter
+                say(`out of step — model says ${s.scene}, following`);
+                const r = await ops.stand({scene: s.scene});
+                if (!r.ok) say(`could not follow to ${s.scene}: ${r.error}`);
+            } catch (err) {
+                say(`could not follow: ${err}`);
+            } finally {
+                fixing = false;
+            }
+        }, 2000);
 
         const connect = () => {
             const es = new EventSource(new URL("/viewer/events", agentBase).href);

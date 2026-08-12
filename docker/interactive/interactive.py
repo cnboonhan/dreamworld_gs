@@ -2099,6 +2099,11 @@ def r_viewer_at():
         return jsonify(ok=False, error=str(e)), 400
     if v == ST["cur"]:
         return jsonify(ok=True, at=lab(v), level=ST["level"], note="already there")
+    if lab(v) not in built_scenes():
+        # It cannot be standing in a world that does not exist, so this is a
+        # stale or malformed report. Refusing keeps the model where it is rather
+        # than following the viewer somewhere neither of them can be.
+        return jsonify(ok=False, error=f"no splat world for {lab(v)}"), 400
     with ST["lock"]:
         ST["prev"], ST["cur"], ST["face"] = ST["cur"], v, None
     # Placed, not driven: drive_path walks pairs of waypoints and does nothing
