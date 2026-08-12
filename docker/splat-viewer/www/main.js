@@ -847,6 +847,9 @@ async function edgePicker(doc, choose, facing) {
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
+        <div id="goRow"><input id="goTo" list="sceneList" autocomplete="off"
+             placeholder="go to position"><datalist id="sceneList"></datalist>
+             <button id="goBtn">go</button></div>
         <button id="saveSpot"></button>
         <button id="clearSpot" disabled>clear saved position</button>`;
     document.body.appendChild(box);
@@ -1119,6 +1122,37 @@ async function edgePicker(doc, choose, facing) {
             saveSpot.textContent = "could not save \u2014 is 8085 running?";
         }
     };
+
+    // Anywhere, not just next door. The minimap covers the corridors out of
+    // here; this covers the rest of the building — type or pick a waypoint and
+    // load its world directly. Navigation is an explicit assignment on click:
+    // a <select> whose onchange was supposed to do it silently did nothing and
+    // said nothing, which is how the links it replaced came to exist.
+    (async () => {
+        const box2 = box.querySelector("#goTo"), btn = box.querySelector("#goBtn");
+        const list = box.querySelector("#sceneList");
+        if (!box2 || !btn || !list || !proj) return;
+        let scenes = [];
+        try {
+            const r = await fetch(new URL(`files/${proj[1]}/splats/scenes.json`,
+                                          location.href).href);
+            scenes = r.ok ? (await r.json()).map((x) => x.scene) : [];
+        } catch (err) { return; }
+        list.innerHTML = scenes.map((sc) => `<option value="${sc}">`).join("");
+        const go = () => {
+            const raw = box2.value.trim();
+            if (!raw) return;
+            // Take a bare waypoint as being on this level, so "cafe" works.
+            const want = scenes.includes(raw) ? raw
+                : scenes.find((sc) => sc.split(".").pop() === raw.split(".").pop());
+            if (!want) { box2.value = ""; box2.placeholder = "no world for that"; return; }
+            const u = new URL(location.href);
+            u.searchParams.set("url", `files/${proj[1]}/splats/${want}/world.ply`);
+            location.assign(u.href);       // a real navigation, not a state swap
+        };
+        btn.onclick = go;
+        box2.onkeydown = (e) => { if (e.key === "Enter") go(); };
+    })();
 
     // Every built world, as links from a file nginx already serves. Two
     // things this stops depending on: a <select> whose onchange listed the

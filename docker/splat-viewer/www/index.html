@@ -40,6 +40,12 @@
    viewer is Kevin Kwok's, and the attribution stays in the source where it
    belongs even though the corner of a walkthrough is not the place for it. */
 #info { display: none; }
+/* go to position: an input and a button, sized to the panel */
+#goRow { display: flex; gap: 4px; margin-top: 6px; }
+#goTo { flex: 1; min-width: 0; background: #0e1218; color: #cfd8e3;
+        border: 1px solid #2f3a49; border-radius: 5px; padding: 4px 6px;
+        font: 12px ui-sans-serif, system-ui, sans-serif; }
+#goBtn { flex: 0 0 auto; }
 /* Sealed while a world is switching. The panel on screen belongs to the world
    being left, so a click on it names a corridor that does not exist where you
    are about to be — and starts a second swap on top of the one in flight. The
