@@ -334,16 +334,19 @@ def call_lift_worker(lift, floor, ride=False):
         time.sleep(0.3)
 
 
-# Which way the model itself faces at yaw 0. The R1's mesh is authored facing
-# -X, so a heading computed from the map — atan2 along the segment, which is
-# correct — rendered it driving backwards down every corridor. Applied here and
-# only here: this is the one place a world heading becomes an orientation, and
-# G["cur_yaw"] below stays in world terms, so everything that reads a heading
-# back (the dashboard marker, forward, the splat viewer's lanes) is untouched.
+# Which way the model itself faces at yaw 0. Zero: the R1's mesh is authored
+# facing +X, so a heading computed from the map — atan2 along the segment —
+# needs no correction, and the backwards view that sent me looking here was the
+# splat viewer's, not Gazebo's.
+#
+# Kept as a knob rather than deleted, because "which way is this mesh authored"
+# is a fact about a model and the next one may differ. Applied in set_pose and
+# only there: G["cur_yaw"] stays in world terms, so nothing that reads a heading
+# back is affected by whatever this is set to.
 # Settable while it runs: which way a mesh faces is a fact about the model, not
 # something to be derived, and finding it by rebuilding once per guess is slower
 # than turning it and looking. POST /facing {"offset": <radians>}.
-MODEL_YAW = [float(os.environ.get("DW_ROBOT_YAW_OFFSET", math.pi))]
+MODEL_YAW = [float(os.environ.get("DW_ROBOT_YAW_OFFSET", 0.0))]
 
 
 def set_pose(x, y, z, yaw):
