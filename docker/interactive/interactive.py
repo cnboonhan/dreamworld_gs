@@ -420,7 +420,15 @@ def state_dict():
     if m2px:
         px, py = m2px(ST["verts"][cur][1], ST["verts"][cur][2])
         px, py = round(px, 1), round(py, 1)
-        if ST["face"] is not None:
+        # Prefer the heading actually being held over the waypoint being faced:
+        # after a reset there is a heading but nothing is "faced", and the marker
+        # fell back to a directionless dot for want of one.
+        if ST.get("yaw") is not None:
+            ex, ey = m2px(ST["verts"][cur][1] + math.cos(ST["yaw"]),
+                          ST["verts"][cur][2] + math.sin(ST["yaw"]))
+            d = math.hypot(ex - px, ey - py) or 1.0
+            dirv = [(ex - px) / d, (ey - py) / d]
+        elif ST["face"] is not None:
             fx, fy = m2px(ST["verts"][ST["face"]][1], ST["verts"][ST["face"]][2])
             d = math.hypot(fx - px, fy - py) or 1.0
             dirv = [(fx - px) / d, (fy - py) / d]
@@ -610,6 +618,9 @@ def door_target(cur):
 
 
 def _door(to, mode):
+    # Which door an edge crosses is worked out from where the robot is, so
+    # this has to be asked of a robot that has finished moving.
+    wait_still()
     cur = ST["cur"]
     tgt = ST["face"]
     if str(to).strip():
@@ -661,6 +672,7 @@ def _door(to, mode):
 
 @tool("Which lift to take, chosen before facing it.", [("lift", "lift name, e.g. lift1")])
 def select_lift(lift=""):
+    wait_still()
     cur = ST["cur"]
     cabins = {v: ST["lift_of"][v] for v, _ in ST["adj"].get(cur, []) if v in ST["lift_of"]}
     if not cabins:
@@ -681,6 +693,7 @@ def select_lift(lift=""):
       "level (e.g. L1 or L11) — never a lift name.",
       [("level", "target level, e.g. L1 or L11")])
 def call_lift(level=""):
+    wait_still()
     lift = ST.get("selected_lift")
     if not lift:
         cabins = [ST["lift_of"][v] for v, _ in ST["adj"].get(ST["cur"], [])
@@ -758,6 +771,38 @@ def take_lift(to_level=""):
     _push_context()
     return {"ok": True, "template": template, "lift": lift_name, "next": template[0],
             "note": "execute these subtasks strictly in order (each verified)."}
+
+
+def wait_still(timeout=30, quiet=0.6):
+    """Block until the robot has stopped moving.
+
+    An interaction is with something in front of you, and where "in front" is
+    depends on having finished turning to face it. A drive or a spin runs in a
+    thread on the bridge and the HTTP call that started it returned long ago, so
+    a door opened mid-turn is opened from wherever the robot happened to be
+    passing — sometimes the wrong door entirely, since which door an edge crosses
+    is decided from the position.
+
+    There is no "am I moving" on the bridge, so this watches its reported pose
+    and waits for it to hold still. `quiet` is how long it must not change:
+    long enough to outlast the ~1.5 Hz state publishing, short enough not to be
+    felt between steps of a plan.
+    """
+    if not ST.get("galaxea"):
+        return True
+    end = time.time() + timeout
+    last, since = None, time.time()
+    while time.time() < end:
+        st = robot_state()
+        now = (round(st.get("x", 0), 3), round(st.get("y", 0), 3),
+               round(st.get("yaw", 0), 3))
+        if now != last:
+            last, since = now, time.time()
+        elif time.time() - since >= quiet:
+            return True
+        time.sleep(0.15)
+    log("robot is still moving after 30s", "err")
+    return False
 
 
 def wait_lift(lift, floor, timeout=120):
@@ -882,6 +927,7 @@ def switch_level(to, lift=None, land_on=None):
 
 @tool("Pick an item up at this waypoint.", [("item", "item name")])
 def pick(item=""):
+    wait_still()
     res = bridge("/pick", {"item": str(item), "vertex": lab(ST["cur"])})
     with ST["lock"]:
         ST["inventory"].append(str(item))
@@ -891,6 +937,7 @@ def pick(item=""):
 
 @tool("Put an item down at this waypoint.", [("item", "item name")])
 def place(item=""):
+    wait_still()
     if str(item) not in ST["inventory"]:
         return {"ok": False, "error": f"not carrying {item}"}
     res = bridge("/place", {"item": str(item), "vertex": lab(ST["cur"])})

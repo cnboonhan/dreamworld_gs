@@ -1140,6 +1140,7 @@ async function edgePicker(doc, choose, facing) {
     const applyFold = () => {
         const shut = localStorage.getItem("edgesFolded") === "1";
         box.classList.toggle("folded", shut);
+        document.body.classList.toggle("edgesFolded", shut);
         fold.textContent = shut ? "\u2261" : "\u2212";
         fold.title = shut ? "show the panel" : "hide the panel";
     };

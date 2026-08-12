@@ -45,6 +45,10 @@
    back — a panel you can hide and not restore is a panel you have lost. */
 #edges.folded { width: 34px; height: 34px; padding: 6px; overflow: hidden; }
 #edges.folded > *:not(#edgeFold) { display: none; }
+/* Folding puts the controls away, and the tour bar along the bottom is one of
+   them — leaving it behind halves the point of getting the panel out of the
+   view. body carries the class so a rule can reach outside #edges. */
+body.edgesFolded #tour { display: none !important; }
 #edgePlan { display: block; background: #0a0d12; border: 1px solid #232c38;
             border-radius: 6px; }
 #spotRow { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
