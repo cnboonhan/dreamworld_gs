@@ -92,8 +92,14 @@ def main() -> None:
         bearing = math.atan2(d[1], d[0])
         direction = unit(M @ [math.cos(bearing), math.sin(bearing), 0.0])
         # Two marked positions beat any fit: the walk is the line between
-        # them, needing neither scale nor bearing.
-        placed = saved.get("placed", {})
+        # them, needing neither scale nor bearing. The waypoint's OWN position
+        # needs no marking though — the panorama was shot standing at it, so the
+        # frame's centre is where it is, and asking someone to mark the place
+        # they are already standing is asking them to confirm the one thing this
+        # world is certain of. An explicit mark still wins, for the case where
+        # the generated centre is off.
+        placed = {waypoint: [round(float(v), 5) for v in centre],
+                  **saved.get("placed", {})}
         # the lane's direction in this world's coordinates, so the viewer can
         # face down a corridor that has not been marked yet
         lanes_out.append({"to": other, "metres": round(float(metres), 3),
@@ -118,7 +124,12 @@ def main() -> None:
            # world nobody has marked yet still has to be arrived at somewhere,
            # and this is the one point it knows about itself.
            "origin": [round(float(v), 5) for v in centre],
-           "lanes": lanes_out, "placed": saved.get("placed", {}), "walks": out}
+           # `placed` as the viewer sees it, including the implicit self-mark,
+           # so a waypoint shows as placed without anyone having placed it.
+           "lanes": lanes_out,
+           "placed": {waypoint: [round(float(v), 5) for v in centre],
+                      **saved.get("placed", {})},
+           "walks": out}
     (scene / "world.paths.json").write_text(json.dumps(doc))
 
     # the viewer's world list, served by nginx like everything else, so the
