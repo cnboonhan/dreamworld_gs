@@ -454,6 +454,45 @@ def state_dict():
             "built": built_scenes()}
 
 
+# Anything that puts the tour somewhere new. Serialized against each other so
+# no two are ever in flight at once.
+MOVERS = {"go_to", "face", "turn", "take_lift"}
+MOVE = threading.Lock()
+
+
+def pose_pump():
+    """Stream where the robot actually is, between waypoints.
+
+    The model's position is only redefined at waypoints, so the dashboard marker
+    sat on the vertex a walk had left and jumped to the next one on arrival —
+    which reads as the dashboard lagging, and makes it impossible to see that a
+    walk is under way at all. RMF publishes the robot pose at about 1.5 Hz; this
+    forwards it as its own small event so the marker moves along the corridor
+    without redrawing the whole page.
+    """
+    last = None
+    while True:
+        time.sleep(0.25)
+        try:
+            if not ST.get("galaxea") or not ST.get("m2px"):
+                continue
+            st = (bridge("/state", timeout=3) or {}).get("state") or {}
+            if st.get("x") is None:
+                continue
+            here_now = (round(st["x"], 2), round(st["y"], 2),
+                        round(st.get("yaw") or 0.0, 2))
+            if here_now == last:
+                continue
+            last = here_now
+            px, py = ST["m2px"](st["x"], st["y"])
+            ex, ey = ST["m2px"](st["x"] + math.cos(here_now[2]),
+                                st["y"] + math.sin(here_now[2]))
+            BUS.send({"type": "pose", "px": px, "py": py,
+                      "dir": [ex - px, ey - py], "moving": MOVE.locked()})
+        except Exception:                                      # noqa: BLE001
+            pass                      # the bridge going quiet is already reported
+
+
 def push_state():
     """Publish the truth. This server is the only writer of where the tour is;
     the splat viewer and the robot are followers, and both hear about a change
@@ -483,7 +522,7 @@ def robot_watchdog():
     while True:
         time.sleep(5)
         try:
-            if ST.get("moving") or not ST.get("galaxea") or ST.get("cur") is None:
+            if MOVE.locked() or not ST.get("galaxea") or ST.get("cur") is None:
                 continue
             st = (bridge("/state") or {}).get("state") or {}
             if st.get("x") is None:
@@ -1570,6 +1609,10 @@ header h1{font-size:15px;font-weight:600;color:#58a6ff}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 #stat{font-size:12px;color:#8b949e}
 #pos{font-size:12px;color:#e3b341;margin-left:auto}
+/* A move in flight is worth seeing: it is the window in which the position on
+   screen is a corridor rather than a waypoint. */
+#pos.moving{color:#7aa2f7}
+#pos.moving::after{content:' · walking';opacity:.7}
 main{display:flex;flex:1;overflow:hidden;gap:1px;background:#30363d}
 .panel{background:#0d1117;display:flex;flex-direction:column;overflow:hidden}
 #stack{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;background:#30363d}
@@ -1857,6 +1900,15 @@ function onState(s){last=s;if(s.level)curLevel=s.level;
 // The rollout is the splat viewer, in its own window rather than a pane here: it
 // is a live WebGL scene, not a stream to embed. The link carries ?agent=, which is
 // what hands its camera to this server.
+// The model redefines position only at waypoints, so between them the marker
+// used to sit on the vertex the walk had left. These carry the robot's actual
+// pose, and are drawn straight onto the map without touching anything else on
+// the page — a walk is then visibly under way instead of looking like a stall.
+function onPose(d){if(!last)return;
+ last.px=d.px;last.py=d.py;last.dir=d.dir;
+ $('pos').classList.toggle('moving',!!d.moving);
+ drawMap(last)}
+
 function viewerLink(s){const a=$('vlink');if(!a||!s.scene)return;
  a.href=`${VIEWER}/?url=files/${PROJECT}/splats/${s.scene}/world.ply`
        +`&agent=${encodeURIComponent(location.origin)}`;
@@ -1870,6 +1922,7 @@ function connect(){const es=new EventSource('/events');
   else if(d.type==='mission')setMission(d.text);
   else if(d.type==='todos')setTodos(d.todos);
   else if(d.type==='statemodel')setStateModel(d.text);   // world model: mission+subtasks+RMF state
+  else if(d.type==='pose')onPose(d);         // live robot position between waypoints
   else if(d.type==='level')loadGraph();      // lift ride -> reload map/graph for new level
   else if(d.type==='log')logEv(d.level||'ok',d.text)};
  es.onerror=()=>{$('dot').classList.add('off');$('stat').textContent='reconnecting…';
@@ -2014,7 +2067,23 @@ def r_tool():
                        tools=sorted(TOOLS)), 400
     log(f"{name}({', '.join(f'{k}={v!r}' for k, v in args.items())})")
     blocked = _mission_gate(name)
-    res = blocked if blocked is not None else _post_tool(name, args, t["fn"](**args))
+    if blocked is not None:
+        res = blocked
+    elif name in MOVERS:
+        # One move at a time. Two overlapping moves are the surest way to
+        # desync: the second reads a position the first is halfway through
+        # leaving, then commands a corridor out of a waypoint nobody is at.
+        # Queue rather than refuse — a caller that asked to move wants the move,
+        # and every mover here already blocks until it lands, so waiting behind
+        # one is the same promise it was already making.
+        waited = time.time()
+        with MOVE:
+            held = time.time() - waited
+            if held > 0.5:
+                log(f"{name} waited {held:.1f}s for the previous move", "err")
+            res = _post_tool(name, args, t["fn"](**args))
+    else:
+        res = _post_tool(name, args, t["fn"](**args))
     msg = as_message(name, res)
     log(("" if res.get("ok") else "! ") + msg, "ok" if res.get("ok") else "err")
     return jsonify({**res, "message": msg})
@@ -2440,6 +2509,7 @@ def main():
 
     galaxea_reset()
     threading.Thread(target=robot_watchdog, daemon=True).start()
+    threading.Thread(target=pose_pump, daemon=True).start()
     print(f"[interactive] {len(verts)} waypoints on {level}, standing at {lab(ST['cur'])}",
           flush=True)
     print(f"[interactive] tools: {', '.join(sorted(TOOLS))}", flush=True)
