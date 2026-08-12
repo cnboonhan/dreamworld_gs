@@ -1604,9 +1604,15 @@ async function main() {
         // it picked whichever came first and turned you down a side corridor.
         const back = (window.__cameFrom || "").split(".").pop();
         const lanes = a.doc.lanes || [];
+        // The lane back to where you came from, NOT reversed. Reasoning said to
+        // negate it — you travelled away from A, so face away from A — and that
+        // put the camera backwards on every pair tried, including ones whose
+        // frames the alignment check says agree. Three observations beat the
+        // argument: whatever the sign convention is between a lane's recorded
+        // dir and the camera basis tourPlace builds, it is not the one I
+        // reasoned my way to.
         const came = lanes.find((l) => l.to === back);
-        const dir = came ? came.dir.map((v) => -v)
-                         : (lanes[0] && lanes[0].dir) || null;
+        const dir = came ? came.dir : (lanes[0] && lanes[0].dir) || null;
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) {
             tourInit({points: [stand, ahead], up: a.doc.up}, false);
