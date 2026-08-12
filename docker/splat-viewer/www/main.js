@@ -929,6 +929,12 @@ async function edgePicker(doc, choose) {
         if (was) tourTurn(was);
         tour.t = 0;
         tour.playing = false;
+        // Place the camera, then let go of it. Standing somewhere is not a tour:
+        // leaving tour.on set re-pins the camera to this point every frame, so
+        // WASD did nothing at all — and tour.release only exists once the tour
+        // bar has been shown, which on a world nobody has walked yet it has not.
+        tourPlace(0);
+        tour.on = false;
         const play = document.getElementById("tourPlay");
         if (play) play.textContent = "play";
         return true;
