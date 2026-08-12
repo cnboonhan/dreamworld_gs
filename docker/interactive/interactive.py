@@ -1784,7 +1784,7 @@ header #mbox{flex:1;min-width:140px}
  </div>
  <div id=drag title="drag to resize"></div>
  <div class="panel" id=right>
-  <div class=ph><b>agent</b> — mission &amp; subtasks (RMF-tracked)</div>
+  <div class=ph><b>agent</b> — mission &amp; subtasks</div>
   <div class=pb id=agentwrap><pre id=statemodel>no mission — type a goal above and hit “run mission”</pre></div>
   <div id=logdrag title="drag to resize log"></div>
   <div class=ph style="border-top:1px solid #30363d"><b>log</b></div>
@@ -1901,6 +1901,7 @@ async function runAgent(){const t=$('mbox').value.trim();if(!t)return;$('mbox').
   if(!j.ok)logEv('err','agent: '+(j.error||'unavailable'))}catch(e){logEv('err','! '+e)}
  finally{agentRunning=false;agentPaused=false;updateRunBtn()}}
 function cancelMission(){agentRunning=false;agentPaused=false;updateRunBtn();  // stop the agent + clear
+ $('mbox').value='';setMission('');setTodos([]);  // inputs and panes empty now, not at the next broadcast
  P('/cancel',{}).catch(()=>{})}   // server wipes mission+subtasks and broadcasts the cleared state
 $('mbox').addEventListener('keydown',e=>{if(e.key==='Enter')onRunBtn()});
 // Tool buttons. HIDE: not shown. NOINPUT: run on click even though they take an optional
@@ -1925,7 +1926,7 @@ async function runTool(){if(!selTool)return;const nm=selTool,v=$('argbox').value
  $('argbox').value='';hideArg();
  try{await P('/invoke',{text:(nm+' '+v).trim()})}catch(e){logEv('err','! '+e)}}
 $('argbox').addEventListener('keydown',e=>{if(e.key==='Enter')runTool()});
-function setTodos(td){const el=$('todos');if(!el)return;el.innerHTML=(td&&td.length)?td.map(t=>`<div class=todo>○ ${esc(typeof t==='string'?t:(t.content||''))}</div>`).join(''):''}
+function setTodos(td){const el=$('todos');if(!el)return;el.innerHTML=(td&&td.length)?td.map(t=>`<div class=todo>○ ${esc(typeof t==='string'?t:(t.content||t.step||''))}</div>`).join(''):''}
 function setStateModel(text){const el=$('statemodel');if(!el)return;
  el.innerHTML=(text||'').split('\n').map(l=>{const e=esc(l);
   if(l.startsWith('## '))return '<span class=h>'+e+'</span>';
@@ -1966,7 +1967,7 @@ function onState(s){
  $('pos').textContent='@ '+s.cur_label+(s.level?'  ·  '+s.level:'')
   +(s.heading!=null?'  ·  hdg '+s.heading+'°':'')
   +(s.door_open?'  ·  door→'+s.door_open+' open':'');
- setMission(s.mission);viewerLink(s);drawMap(s)}
+ setMission(s.mission);setTodos(s.todos);viewerLink(s);drawMap(s)}
 
 // The rollout is the splat viewer, in its own window rather than a pane here: it
 // is a live WebGL scene, not a stream to embed. The link carries ?agent=, which is
@@ -2508,6 +2509,13 @@ def r_cancel():
         return ("", 204)
     _CANCEL.set()
     _RUN.set()      # unblock a paused agent so it can see the cancel and stop
+    # The button says clear, so the state clears: mission and subtasks to
+    # empty, broadcast, so every dashboard shows the same nothing. The comment
+    # in the dashboard's JS promised this for a while before it was true.
+    with ST["lock"]:
+        ST["mission"] = ""
+        ST["todos"] = []
+    push_state()
     log("✖ mission cancelled", "err")
     return jsonify(ok=True, cancelled=True)
 

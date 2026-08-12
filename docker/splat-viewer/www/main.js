@@ -1181,6 +1181,10 @@ async function edgePicker(doc, choose, facing, keepPose) {
         if (msgEl) msgEl.textContent = "";
         if (k >= 0) {
             at = k;
+            // Taking the controls by hand: the agent lets go first, so the
+            // dashboard cannot drive the camera out from under the corridor
+            // that was just chosen.
+            if (window.__handsOff) window.__handsOff();
             choose(doc.walks[k], doc);
             tour.playing = true;
             if (play) play.textContent = "pause";
@@ -2871,16 +2875,26 @@ async function main() {
             setChip("", "agent connecting");
             // The chip is the switch as well as the light: click to stop taking
             // orders, click again to take them.
+            const handsOff = (why) => {
+                if (detached) return;
+                detached = true;
+                es.close();
+                setChip("off", "agent off — click to connect");
+                say(why || "agent: disconnected by hand");
+            };
+            // Walking by hand takes the controls: the panel calls this before
+            // riding, so the dashboard cannot drive the camera out from under
+            // the corridor you just chose. Proposals still flow — the model
+            // hears where the hand walk lands — only the obeying stops.
+            window.__handsOff = () =>
+                handsOff("agent off — walking by hand; the chip reconnects");
             if (chip) chip.onclick = () => {
                 if (detached) {
                     detached = false;
                     say("agent: reconnecting");
                     connect();
                 } else {
-                    detached = true;
-                    es.close();
-                    setChip("off", "agent off — click to connect");
-                    say("agent: disconnected by hand");
+                    handsOff();
                 }
             };
             es.onerror = () => {
@@ -2912,17 +2926,11 @@ async function main() {
                 });
             };
         };
-        // Off by default: the viewer opens as a viewer, not as something being
-        // driven. The chip is the way in, so its handler lives here rather than
-        // inside connect() — which never runs until someone asks for it.
-        detached = true;
-        const chip0 = document.getElementById("agentChip");
-        if (chip0) {
-            chip0.className = "off";
-            chip0.textContent = "agent off \u2014 click to connect";
-            chip0.title = `click to connect to ${agentBase}`;
-            chip0.onclick = () => { detached = false; connect(); };
-        }
+        // On by default: a viewer opened with ?agent= is there to be driven,
+        // and connecting up front is what makes a refresh land where the
+        // dashboard says. Taking the controls by hand — a walkthrough
+        // button, or the chip — is what lets go.
+        connect();
     }
 
     /** Each frame: where are we, which way are we going, what should be loaded. */
