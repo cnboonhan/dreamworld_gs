@@ -847,9 +847,8 @@ async function edgePicker(doc, choose, facing) {
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
-        <div id="goRow"><input id="goTo" list="sceneList" autocomplete="off"
-             placeholder="go to position"><datalist id="sceneList"></datalist>
-             <button id="goBtn">go</button></div>
+        <select id="goTo"></select>
+        <button id="goBtn">go to position</button>
         <button id="saveSpot"></button>
         <button id="clearSpot" disabled>clear saved position</button>`;
     document.body.appendChild(box);
@@ -933,6 +932,11 @@ async function edgePicker(doc, choose, facing) {
             if (d < 16 && (!best || d < best.d)) best = {d, i: h.i};
         }
         if (!best) return;
+        // Fill the go field too, so a vertex clicked on the map is already the
+        // one loaded if you then press go — the map picks, the button commits.
+        const sel = box.querySelector("#goTo");
+        const scene = `${doc.waypoint.split(".")[0]}.${spots[best.i]}`;
+        if (sel && [...sel.options].some((o) => o.value === scene)) sel.value = scene;
         const b = spotRow.querySelector(`button[data-i="${best.i}"]`);
         if (b) b.click();
     };
@@ -1130,28 +1134,24 @@ async function edgePicker(doc, choose, facing) {
     // said nothing, which is how the links it replaced came to exist.
     (async () => {
         const box2 = box.querySelector("#goTo"), btn = box.querySelector("#goBtn");
-        const list = box.querySelector("#sceneList");
-        if (!box2 || !btn || !list || !proj) return;
+        if (!box2 || !btn || !proj) return;
         let scenes = [];
         try {
             const r = await fetch(new URL(`files/${proj[1]}/splats/scenes.json`,
                                           location.href).href);
             scenes = r.ok ? (await r.json()).map((x) => x.scene) : [];
         } catch (err) { return; }
-        list.innerHTML = scenes.map((sc) => `<option value="${sc}">`).join("");
+        box2.innerHTML = scenes.map((sc) =>
+            `<option value="${sc}"${sc === doc.waypoint ? " selected" : ""}>${sc}</option>`
+        ).join("");
         const go = () => {
-            const raw = box2.value.trim();
-            if (!raw) return;
-            // Take a bare waypoint as being on this level, so "cafe" works.
-            const want = scenes.includes(raw) ? raw
-                : scenes.find((sc) => sc.split(".").pop() === raw.split(".").pop());
-            if (!want) { box2.value = ""; box2.placeholder = "no world for that"; return; }
+            const want = box2.value;
+            if (!want || want === doc.waypoint) return;
             const u = new URL(location.href);
             u.searchParams.set("url", `files/${proj[1]}/splats/${want}/world.ply`);
             location.assign(u.href);       // a real navigation, not a state swap
         };
         btn.onclick = go;
-        box2.onkeydown = (e) => { if (e.key === "Enter") go(); };
     })();
 
     // Every built world, as links from a file nginx already serves. Two
