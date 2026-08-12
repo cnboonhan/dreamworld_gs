@@ -30,24 +30,30 @@ flowchart LR
     subgraph CAP["YOUR FACILITY — captured once"]
         RF["Real facility"] -->|"one 360 photo per waypoint,<br/>one afternoon"| P["Panoramas"]
         P -->|"typed edit:<br/>'add a pallet blocking the corridor'"| PE["Edited panoramas<br/>= new scenarios"]
+        RF -->|"floorplan,<br/>annotated once"| SM
     end
 
     P --> TWIN
     PE -->|"generated overnight,<br/>on your hardware"| TWIN
 
-    subgraph FW["THE FRAMEWORK — what compounds"]
-        TWIN["Digital twin<br/>photoreal walkthrough + robot simulation<br/>doors, lifts and distances are real state"]
-        subgraph HA["THE HARNESS — agentic mission execution"]
+    subgraph FW["THE FRAMEWORK — what endures"]
+        SM["SEMANTIC MAP<br/>named places · corridors · doors · lifts<br/>one vocabulary every part speaks"]
+        subgraph HA["HARNESS — agentic mission execution"]
             PL["PLAN<br/>obstacle-aware: a closed door on the route<br/>becomes an open_door step; a floor change<br/>becomes the enforced lift protocol"]
-            ACT["ACT<br/>one tool call at a time, in order<br/>go_to · open_door · take_lift"]
+            ACT["ACT<br/>one tool call at a time, in order"]
             V["VERIFY<br/>against the world: did the robot actually<br/>arrive — is the door actually open"]
             PL --> ACT
             ACT --> V
             V -->|"pass: next step"| ACT
             V -->|"fail or refused: replan"| PL
         end
+        TS["EXTENSIBLE TOOL SURFACE<br/>go_to · open_door · take_lift · pick …<br/>a new capability = one new tool,<br/>gated and verified like the rest"]
+        TWIN["PHOTOREALISTIC, EDITABLE WORLDS<br/>walkthrough + robot simulation<br/>doors, lifts, distances are real state"]
         D[("Mission data<br/>verified runs · refusals · operator corrections")]
-        ACT -->|"tool calls"| TWIN
+        SM --> PL
+        SM --- TWIN
+        ACT --> TS
+        TS --> TWIN
         TWIN -->|"physical reality pushes back:<br/>blocked, closed, wrong level"| V
         V --> D
     end
@@ -55,19 +61,24 @@ flowchart LR
     OP(["Operator<br/>one sentence in · pause anything"]) --> PL
     M["AI MODEL<br/>swappable — a configuration line"] -.->|"proposes"| HA
     D -.->|"tunes toward operator preferences"| M
-    TWIN -.->|"same tool surface, tomorrow"| RW(["Real robot fleet"])
+    TS -.->|"same tools, tomorrow"| RW(["Real robot fleet"])
 
     style M stroke-dasharray: 6 4,stroke-width:2px
     style FW stroke-width:2px
     style HA stroke-width:2px
 ```
 
-How to read it, in one breath: the harness is the working heart — a
-plan → act → verify loop where the *world*, not the model, says what
-happened, and where physical constraints aren't failures but inputs the
-planner routes around. Everything inside the framework box is yours and
-durable — the captured buildings, the editable scenarios, that loop, the
-accumulating operator data. The model sits *outside*, on a dashed line,
+How to read it, in one breath: the framework box is the four things that
+endure. The **semantic map** — named places, corridors, doors, lifts — is
+the vocabulary everything else speaks: missions are phrased in it, plans
+route over it, worlds are addressed by it. The **harness** is the working
+heart: a plan → act → verify loop where the *world*, not the model, says
+what happened, and physical constraints are inputs the planner routes
+around, not failures. The **tool surface** is how the loop touches
+anything — extensible, one new function per new capability, gated and
+verified like the rest, and the same surface a real fleet implements
+tomorrow. The **worlds** are photorealistic, and editable by typed
+instruction into any scenario. The model sits *outside*, on a dashed line,
 because it is the part the industry improves monthly and the part you
 replace in one configuration line — and your own mission data is what tunes
 each replacement toward how your operators actually work.
@@ -113,9 +124,12 @@ I've given it one sentence. Watch three things move together: the agent
 plans the route and writes its subtasks; the photoreal view walks the actual
 corridors — that's not video, it's a generated 3D world you could grab with
 the mouse; and the robot in the simulator walks the same route, edge for
-edge. One nav graph, one tool surface — `go_to`, `open_door`, `take_lift` —
-drives all of it. The same API that drives this simulated robot is the seam
-where a real fleet plugs in. A client written today doesn't change when the
+edge. What keeps them together is a **semantic map** — named places,
+corridors, doors, lifts — one vocabulary the mission, the plan, the worlds
+and the robot all speak. On top of it sits one tool surface: `go_to`,
+`open_door`, `take_lift`. It's extensible — a new capability is one new
+tool, gated and verified like the rest — and it's the seam where a real
+fleet plugs in tomorrow. A client written today doesn't change when the
 hardware arrives.
 
 **[1:05 — point at the subtask list; the diagram's plan → act → verify
@@ -152,14 +166,17 @@ calls, retries, operator pauses and corrections — structured, labelled by
 outcome. Exactly the data you need to tune models toward *your* operators'
 preferences, accumulating as a by-product of normal use.
 
-**[2:30 — close, facing them]**
+**[2:30 — close, facing them, the diagram back on screen]**
 
 The models will keep improving — monthly, and not by us. That's the design
-bet: here the model is a configuration line. Swap in next year's model and
-everything you own keeps working — the capture pipeline, the twins of your
-buildings, the verified tool surface, the safety harness, the accumulated
-operator data. The value that compounds is the framework and your data;
-the part that ages is the part you can replace in one line. One afternoon of
+bet: here the model is one configuration line. What endures is everything
+you just watched — these four things. The **harness**, which plans around
+physics and lets the world say what happened. The **tool surface**, where a
+new capability is one new tool and any model can call it. The **semantic
+map**, the vocabulary of places and doors and lifts that every mission
+speaks. And **photoreal worlds of your own facilities**, editable by typed
+instruction into any scenario. Drop next year's model in and all four keep
+working — tuned, by then, on your own operators' data. One afternoon of
 capture per floor, one night of GPU, and it's yours — on your premises,
 under your control.
 
@@ -179,6 +196,11 @@ under your control.
 - **"Can it drive our actual robots?"** — The robot side already speaks
   RMF's vocabulary (waypoints, doors, lifts); the bridge is one HTTP surface
   a fleet adapter shim can implement.
+- **"Can we add our own capabilities?"** — A new capability is one new tool
+  function: registered with a decorator, it inherits the same gates
+  (ordering, pause, cancel) and gets its own verifier — and every model,
+  current or future, can call it immediately. `pick`/`place` are exactly
+  such additions.
 - **"Why not wait for the industry to ship this?"** — Waiting buys a better
   model, and this framework will run it the day it ships. It won't buy your
   buildings captured, your operators' data accumulated, or a harness your
