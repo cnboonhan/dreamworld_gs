@@ -12,11 +12,13 @@ the meeting; a 40-step diffusion edit does not belong inside a three-minute
 window. Numbers cited are measured on this deployment; the deep reference is
 [architecture.md](architecture.md).
 
-**The one-liner:** *One person photographs a facility in an afternoon; by
-morning it is a walkable digital twin an AI agent can be trusted to operate
-in — entirely on your own hardware. The AI is the replaceable part. What you
-keep is the framework: the harness, the tool surface, the semantic map, and
-photoreal worlds of your own buildings you can edit into any scenario.*
+**The one-liner:** *A complete working reference for the framework that
+endures — semantic map, harness, tool surface, editable photoreal worlds —
+with every integration seam demonstrated live, on-premises. Its value is the
+decisions it lets you make with evidence instead of a requirements document:
+which parts to outsource (the models — replaceable by design), which to
+co-source (fleet integration, one defined surface), and which to build and
+own in-house (the harness, the tools, the maps, the mission data).*
 
 ---
 
@@ -225,6 +227,15 @@ under your control.
   reading as an estimate. Moving to the field replaces the reporter —
   localization and sensors instead of the simulator — not the discipline,
   which has been rehearsed on every mission run in sim.
+- **"What decision does this actually help us make?"** — Sourcing. Each
+  pillar is an integration seam with a working interface behind it, so the
+  lines can be drawn on evidence: the **models** are procurable and
+  replaceable — outsource them, re-compete them as the industry moves; the
+  **fleet integration** is one defined HTTP surface — co-source it with a
+  robot vendor; the **harness, tool surface, semantic maps and mission
+  data** are small, auditable, and the parts worth owning — in-house.
+  Capture and scenario authoring sit with your own operators: one person,
+  one afternoon, no specialists.
 - **"Why not wait for the industry to ship this?"** — Waiting buys a better
   model, and this framework will run it the day it ships. It won't buy your
   buildings captured, your operators' data accumulated, or a harness your
