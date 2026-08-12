@@ -807,8 +807,16 @@ function continuation(doc, cameFrom) {
         const d = dot3(l.dir, back.dir);
         if (d < bestDot) { bestDot = d; best = l; }
     }
-    // a dead end has only the way back; face out of it
-    return best ? best.dir : back.dir.map((v) => -v);
+    // Only if something actually continues. At v4 arriving from v3 the two
+    // other corridors sit at +91 and -86 degrees — a T-junction, where "most
+    // opposite" is a coin flip between two side turns and picking either spins
+    // you sideways the moment you arrive.
+    //
+    // -0.5 is about 60 degrees off straight: past that it is a turn, not a
+    // continuation, and the honest heading is the way you were travelling —
+    // which is the lane back, reversed, whether or not a corridor runs along it.
+    if (best && bestDot < -0.5) return best.dir;
+    return back.dir.map((v) => -v);
 }
 
 
