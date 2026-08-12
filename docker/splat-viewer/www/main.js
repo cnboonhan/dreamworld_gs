@@ -1371,7 +1371,52 @@ async function main() {
         carousel = false;
     } catch (err) {}
     // resolve ?url= relative to this server so mounted splats load same-origin
-    let want = params.get("url") || "files/splat.ply";
+    // Nothing asked for: offer what there is, rather than failing to load a
+    // default splat that has never existed. Projects come from nginx's own
+    // directory listing, worlds from the same scenes.json the panel uses.
+    if (!params.get("url")) {
+        const pick = document.createElement("div");
+        pick.style.cssText = "position:absolute;inset:0;z-index:80;display:flex;"
+            + "align-items:center;justify-content:center;background:#0a0d12";
+        pick.innerHTML = `<div style="min-width:280px;font:13px ui-sans-serif,
+            system-ui,sans-serif;color:#cfd8e3">
+            <div style="margin-bottom:8px;opacity:.7">choose a world</div>
+            <select id="pkProj" style="width:100%;margin-bottom:6px"></select>
+            <select id="pkScene" style="width:100%;margin-bottom:8px"></select>
+            <button id="pkGo" style="width:100%;padding:6px 9px">open</button>
+            <div id="pkWhy" style="margin-top:8px;opacity:.6"></div></div>`;
+        document.body.appendChild(pick);
+        const $$ = (id) => pick.querySelector("#" + id);
+        const why = (t) => { $$("pkWhy").textContent = t; };
+        const scenes = async (proj) => {
+            $$("pkScene").innerHTML = "";
+            try {
+                const r = await fetch(`files/${proj}/splats/scenes.json`);
+                const all = r.ok ? await r.json() : [];
+                $$("pkScene").innerHTML = all.map((x) =>
+                    `<option value="${x.scene}">${x.scene}</option>`).join("");
+                why(all.length ? `${all.length} worlds built` : "no worlds built yet");
+            } catch (err) { why("could not read that project"); }
+        };
+        try {
+            const r = await fetch("files/");
+            const dirs = (await r.json()).filter((e) => e.type === "directory");
+            if (!dirs.length) { why("no projects under assets/projects"); return; }
+            $$("pkProj").innerHTML = dirs.map((d) =>
+                `<option value="${d.name}">${d.name}</option>`).join("");
+            await scenes(dirs[0].name);
+        } catch (err) { why("could not list projects"); return; }
+        $$("pkProj").onchange = () => scenes($$("pkProj").value);
+        $$("pkGo").onclick = () => {
+            const p = $$("pkProj").value, sc = $$("pkScene").value;
+            if (!p || !sc) return;
+            const u = new URL(location.href);
+            u.searchParams.set("url", `files/${p}/splats/${sc}/world.ply`);
+            location.assign(u.href);
+        };
+        return;                     // nothing to render until one is chosen
+    }
+    let want = params.get("url");
     // Before committing to a ~50 MB download, ask where the tour actually is.
     // A refreshed tab still carries whichever world was open when it was last
     // saved, and following after the fact means fetching the wrong world first
