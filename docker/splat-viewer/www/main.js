@@ -1652,7 +1652,17 @@ async function main() {
             // what the old yaw meant rather than where the camera looks. Zeroing
             // it is what actually faces down the axis — yaw 0 IS tour.a, which
             // is the way you were walking.
-            tour.yaw = 0;
+            // Half a turn. tourPlace builds the view from `fwd` and the screen
+            // shows the opposite of it — every transition came out reversed,
+            // which a per-world alignment error could not do, since it would
+            // have to get some of them right. Facing the continuation therefore
+            // means yaw = pi about it.
+            //
+            // The earlier attempts at this sign were tested while the arrival
+            // held a STALE document — the console showed it reading another
+            // waypoint's corridors — so those readings meant nothing and I
+            // flipped it twice on them.
+            tour.yaw = Math.PI;
             tour.pitch = 0;
             // Both signs have now been reported backwards, which cannot both be
             // true — so print what was actually used rather than argue about it
