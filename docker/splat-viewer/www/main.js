@@ -1659,8 +1659,17 @@ async function main() {
             // than 0 because that is what it means: keep what the handover
             // produces, and reverse it. The two are the same number and only one
             // of them says why.
+            // Cancel any turn still easing from the walk that just ended. Its
+            // `to` was measured in the world you have left, and tourPlace
+            // rewrites tour.yaw from it on every frame until it completes — so
+            // an arrival heading set here was overwritten a frame later and
+            // nothing appeared to change however it was set.
+            tour.turn = null;
             tour.yaw = Math.PI + Math.PI;
             tour.pitch = 0;
+            tourPlace(0);          // take effect now, not on the next frame
+            console.log("[handover] yaw set to", tour.yaw,
+                        "| camera fwd after", cameraForward().map(v => +v.toFixed(3)));
             // Both signs have now been reported backwards, which cannot both be
             // true — so print what was actually used rather than argue about it
             // again. cameraForward() is the direction the camera ends up looking
