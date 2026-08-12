@@ -18,6 +18,50 @@ in — entirely on your own hardware, and the AI is the replaceable part.*
 
 ---
 
+## The diagram
+
+One slide, referenced twice: at 1:05 (point at the harness box — "the model
+only proposes; this box owns correctness") and at 2:25 (point at the dashed
+arrows — "the part that ages is outside the framework, and your data tunes
+its replacement").
+
+```mermaid
+flowchart LR
+    subgraph CAP["YOUR FACILITY — captured once"]
+        RF["Real facility"] -->|"one 360 photo per waypoint,<br/>one afternoon"| P["Panoramas"]
+        P -->|"typed edit:<br/>'add a pallet blocking the corridor'"| PE["Edited panoramas<br/>= new scenarios"]
+    end
+
+    P --> TWIN
+    PE -->|"generated overnight,<br/>on your hardware"| TWIN
+
+    subgraph FW["THE FRAMEWORK — what compounds"]
+        TWIN["Digital twin<br/>photoreal walkthrough + robot simulation"]
+        H["Harness — the prompts and the guardrails<br/>plans missions · verifies every step against the world<br/>enforces protocols · pausable mid-mission"]
+        D[("Mission data<br/>verified runs · refusals · operator corrections")]
+        H -->|"one tool surface:<br/>go_to · open_door · take_lift"| TWIN
+        TWIN -->|"verified state"| H
+        H --> D
+    end
+
+    OP(["Operator"]) -->|"one sentence"| H
+    M["AI MODEL<br/>swappable — a configuration line"] -.->|"proposes actions"| H
+    D -.->|"tunes toward operator preferences"| M
+    TWIN -.->|"same tool surface, tomorrow"| RW(["Real robot fleet"])
+
+    style M stroke-dasharray: 6 4,stroke-width:2px
+    style FW stroke-width:2px
+```
+
+How to read it, in one breath: everything inside the framework box is yours
+and durable — the captured buildings, the editable scenarios, the verified
+tool surface, the accumulating operator data. The model sits *outside*, on a
+dashed line, because it is the part the industry improves monthly and the
+part you replace in one configuration line — and your own mission data is
+what tunes each replacement toward how your operators actually work.
+
+---
+
 ## Before they walk in
 
 - `just up`; dashboard (:8086) on the left screen, splat viewer (:8081, opened
