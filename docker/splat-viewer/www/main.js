@@ -809,6 +809,12 @@ function norm3(v) {
  *
  * Used by both ways a world opens, the live handover and a direct load with
  * &from=, so the two cannot drift apart.
+ *
+ * The negation below is the ONLY place the viewer reverses a lane direction.
+ * Every lane.dir points OUT of its own world's waypoint; the one legitimate
+ * reason to flip one is this — travelling the lane inward. A second negation
+ * anywhere would be a sign convention of its own, which is how every heading
+ * bug here started.
  */
 function continuation(doc, cameFrom) {
     const from = String(cameFrom || "").split(".").pop();
@@ -996,23 +1002,17 @@ async function edgePicker(doc, choose, facing) {
         if (doc.walks.length && at < doc.walks.length) choose(doc.walks[at], doc);
     };
 
-    /** Point the camera along a world direction. THE place the view angle is set.
+    /** Point the camera along a world direction, and say what happened.
      *
-     * Everything else that positions the camera — tourInit, tourTurn, a walk
-     * ending — either derives the yaw from where the camera already looks or
-     * animates it. So a heading set before any of those runs is not kept; this
-     * is called after them, and is the last word.
-     *
-     * To change which way a splat opens facing, change the direction passed in
-     * (or negate it here). One line, one place.
+     * setHeading with a console report: everything that positions the camera
+     * before this — tourInit, a walk ending — derives the yaw from where the
+     * camera already looks, so a heading set before them is not kept. This is
+     * called after them, and is the last word on how a splat opens facing.
      */
     const faceWorld = (d) => {
         if (!d) return "give me a direction, e.g. __faceWorld([1,0,0])";
         if (!tour.a || !tour.b) return "no axes yet — open a world first";
-        tour.turn = null;                       // no animation to overwrite it
-        tour.yaw = Math.atan2(dot3(d, tour.b), dot3(d, tour.a));
-        tour.pitch = 0;
-        tourPlace(tour.t);                      // apply now, not next frame
+        setHeading(d, {now: true});             // apply now, not next frame
         // Report, so the console says what happened rather than `undefined`.
         // A tool for answering a question has to answer it.
         return {asked: d.map((v) => +v.toFixed(3)),
@@ -1034,7 +1034,7 @@ async function edgePicker(doc, choose, facing) {
         const was = cameraForward();
         tourInit({points: [p, p.map((v, i) => v + d[i] * 0.01)], up: doc.up},
                  false);
-        if (was) tourTurn(was);
+        if (was) setHeading(null, {from: was});
         tour.t = 0;
         tour.playing = false;
         // Place the camera, then let go of it. Standing somewhere is not a tour:
@@ -1303,16 +1303,6 @@ function cameraForward() {
         cp * (cy * tour.a[j] + sy * tour.b[j]) + sp * tour.up[j]));
 }
 
-// Ease INTO the yaw already set, starting FROM the heading given. The argument
-// is where the turn begins, not where it ends — it is for keeping a heading
-// across a change of axes: set the destination (or let tourInit set it), then
-// name what the camera was visually facing, and this animates the gap.
-//
-// Read as "turn to this", it does the opposite of what it says: it faces the
-// argument and animates away from it, back to the current yaw. That misreading
-// cost a day — a spin in the face op, and every dashboard-driven leg ridden
-// facing wherever the last one ended. To turn TOWARD something, set tour.yaw
-// from the direction first, then call this with cameraForward().
 // A heading trace. Three stages set a heading during a leg and they have each
 // been wrong once; a single run now says which one reversed rather than needing
 // another guess. window.__hlog reads them back.
@@ -1326,22 +1316,59 @@ function hlog(stage, leg, extra) {
     return row;
 }
 
-function tourTurn(worldFwd, ms) {
-    if (!tour.a || !tour.b) return;
-    const from = Math.atan2(dot3(worldFwd, tour.b), dot3(worldFwd, tour.a));
-    let delta = tour.yaw - from;
-    while (delta > Math.PI) delta -= 2 * Math.PI;
-    while (delta < -Math.PI) delta += 2 * Math.PI;
-    if (Math.abs(delta) < 0.02) return;
-    // The robot spins at TURN_RATE rad/s, so a turn here takes |arc| / rate to
-    // land at the same moment. Without this the camera swung in a fixed 450 ms
-    // however far it had to go, and a 180 at a junction finished long before the
-    // robot had come round.
-    if (ms == null && tour.turnRate)
-        ms = Math.abs(delta) / tour.turnRate * 1000;
-    tour.turn = {from: tour.yaw - delta, to: tour.yaw, at: performance.now(),
-                 ms: ms || 450};
-    tour.yaw = tour.turn.from;
+/** THE writer of tour.yaw: point the camera along `worldDir`, this world's frame.
+ *
+ * Every heading decision comes through here — the departure aim, the ride, the
+ * arrival, a teleport's named corridor. The only other writers are mechanical:
+ * tourLook (the user's hand), tourInit (deriving a yaw for axes it just built),
+ * and the swing this schedules, which tourPlace draws out. Four sites each
+ * setting yaw with their own sign convention produced every heading bug this
+ * viewer has had; a heading set anywhere else is a bug.
+ *
+ * `from` — the forward the camera was visually showing (cameraForward(),
+ *   captured BEFORE any axes change): swing in from there instead of cutting.
+ *   The old tourTurn was this swing, and read as "turn to this" it did the
+ *   opposite — that misreading alone caused two of the bugs.
+ * `ms`   — how long the swing takes. Defaults to arc over tour.turnRate, so
+ *   the camera and the robot come round together; 450 ms without a rate.
+ * `now`  — apply with tourPlace this frame, for callers outside the frame
+ *   loop (tour.on off, nothing else will draw until the next event).
+ *
+ * With no `worldDir`, keeps the yaw already set — tourInit's, usually — and
+ * just swings in from `from`: the ride and standHome case, keeping what the
+ * eyes saw across a change of axes.
+ */
+function setHeading(worldDir, opts) {
+    const o = opts || {};
+    if (!tour.a || !tour.b) return false;
+    // Cancel any swing still easing: its endpoints were measured against axes
+    // that may just have been rebuilt, and tourPlace rewrites tour.yaw from
+    // them every frame until it lands.
+    tour.turn = null;
+    if (worldDir) {
+        tour.yaw = Math.atan2(dot3(worldDir, tour.b), dot3(worldDir, tour.a));
+        tour.pitch = 0;
+    }
+    if (o.from) {
+        const from = Math.atan2(dot3(o.from, tour.b), dot3(o.from, tour.a));
+        let delta = tour.yaw - from;
+        while (delta > Math.PI) delta -= 2 * Math.PI;
+        while (delta < -Math.PI) delta += 2 * Math.PI;
+        if (Math.abs(delta) >= 0.02) {
+            // The robot spins at TURN_RATE rad/s, so a turn here takes
+            // |arc| / rate to land at the same moment. Without this the camera
+            // swung in a fixed 450 ms however far it had to go, and a 180 at a
+            // junction finished long before the robot had come round.
+            let ms = o.ms;
+            if (ms == null && tour.turnRate)
+                ms = Math.abs(delta) / tour.turnRate * 1000;
+            tour.turn = {from: tour.yaw - delta, to: tour.yaw,
+                         at: performance.now(), ms: ms || 450};
+            tour.yaw = tour.turn.from;
+        }
+    }
+    if (o.now) tourPlace(tour.t);
+    return true;
 }
 
 function tourPlace(t) {
@@ -1585,7 +1612,8 @@ async function main() {
                 // must too, or the two rotate differently through every corner.
                 const was = cameraForward();
                 tourInit({points: w.points, up: d.up}, true);
-                if (was && !(pace && pace.facing)) tourTurn(was);
+                if (was && !(pace && pace.facing))
+                    setHeading(null, {from: was});
                 showTourBar();
                 // start fetching the world this corridor ends at, so it is
                 // ready before the walk is
@@ -2236,26 +2264,14 @@ async function main() {
                 const scene = `${here().split(".")[0]}.${shortOf(to)}`;
                 const lane = laneTo(to);
                 if (lane) {
-                    // The arc and its duration are the server's, computed from
-                    // both endpoints in the nav graph's own frame — the same two
-                    // numbers the robot is turning by. Deriving them here from
-                    // the camera's current heading would be a second answer to
-                    // the same question, and the two would differ at exactly the
+                    // The turn's duration is the server's, computed from both
+                    // endpoints in the nav graph's own frame — the same number
+                    // the robot is turning by. Deriving it here from the
+                    // camera's current heading would be a second answer to the
+                    // same question, and the two would differ at exactly the
                     // corners where it shows.
-                    // Aim, then ease from where we were. tourTurn eases FROM
-                    // its argument TO the current yaw, so passing the lane
-                    // faced the corridor and swung straight back to whatever
-                    // heading this leg started with — and the walk was ridden
-                    // facing that. Which heading it was varied, so the view
-                    // landed right, square, or reversed by turns. The panel
-                    // never called this; that was the whole difference between
-                    // walking from the dashboard and walking from the panel.
-                    const wasFwd = cameraForward();
-                    tour.turn = null;
-                    tour.yaw = Math.atan2(dot3(lane.dir, tour.b),
-                                          dot3(lane.dir, tour.a));
-                    tour.pitch = 0;
-                    if (wasFwd) tourTurn(wasFwd, m.turn_ms);
+                    setHeading(lane.dir, {from: cameraForward(),
+                                          ms: m.turn_ms});
                     hlog("1-aimed", `${here()}->${shortOf(to)}`,
                          {lane: lane.dir.map((v) => +v.toFixed(3))});
                     await new Promise((r) => setTimeout(r, m.turn_ms || 0));
@@ -2279,20 +2295,10 @@ async function main() {
                 // moved the robot and left the camera where it was.
                 const wasOn = tour.on;
                 tour.on = true;
-                // tourTurn means "ease FROM this heading to the current yaw" —
-                // it sets yaw to face its argument and animates back. Passing
-                // the lane made the camera swing to the corridor and straight
-                // back to where it started, which is the full turn that appeared
-                // to be a 360 and left the yaw exactly as it was.
-                //
-                // So: aim first, then ease from where we were.
                 const wasFwd = cameraForward();
-                tour.turn = null;
-                tour.yaw = Math.atan2(dot3(lane.dir, tour.b),
-                                      dot3(lane.dir, tour.a));
-                tour.pitch = 0;
-                if (wasFwd) tourTurn(wasFwd, (motion || {}).turn_ms);
-                else tourPlace(tour.t);
+                setHeading(lane.dir, {from: wasFwd,
+                                      ms: (motion || {}).turn_ms,
+                                      now: !wasFwd});
                 // Answer when the swing has finished, not when it was started —
                 // the robot is turning for exactly as long.
                 await new Promise((r) => setTimeout(r, (tour.turn || {}).ms || 0));
