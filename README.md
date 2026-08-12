@@ -8,6 +8,10 @@ the lanes leaving it are the ways you can walk out.
 
 Everything runs on this box, offline, behind `docker compose`.
 
+This file is the operating manual. [architecture.md](architecture.md) is the
+deep reference — every technology in the stack, the measured numbers, the
+design rules, and what deploying against a real building involves.
+
 ## Layout
 
 One project is one building, and one directory:
@@ -329,13 +333,24 @@ world has no building coordinates. So you say: stand where the corridor ends
 and mark it. Two marks make a walk — one at each end — and no walk exists until
 both are placed, which is what `just summary` counts.
 
-**Crossing.** Riding a walk to the end hands over to the world at the far end:
-its splat is fetched and unpacked while you are still walking, in a second
-worker so the one on screen keeps rendering, and swapped in when you arrive.
-The camera keeps its heading through the swap — which is the whole reason the
-panoramas were aligned — so a corridor you were walking down is still ahead of
-you in the world you land in. No loading screen, and nothing is stitched: the
-renderer only ever holds one world.
+**Crossing.** The two worlds trade places in the middle of the corridor, not
+at its end. Both hold the same physical corridor between their own marks, so
+at the halfway point — where the world being left is at its blurriest and the
+next is at its sharpest — the ride swaps buffers under a cross-fade and
+carries on: same line, same fraction, same heading. Flying by hand crosses
+the same way past the midpoint of a marked corridor. Nothing is stitched and
+there is no loading screen: the renderer only ever holds one world, and the
+fade is a snapshot of the last frame dissolving over the next.
+`?handover=` moves the trade point; `1` restores the swap at the vertex. A
+corridor marked from only one end falls back to that older swap.
+
+**Never waiting.** The whole building is fetched breadth-first from wherever
+you stand into a browser cache that survives reloads, parsed once ever (the
+parsed form is cached beside the source), and pre-unpacked into memory — so a
+crossing normally costs nothing at all. The panel's cache line shows both
+counts (`splats cached 16/16 · preheated 16/16`) and a clear button for after
+a regeneration. The minimap carries a live green wedge for the camera — exact
+while riding, projected through the marks while flying free.
 
 ## Driving it by tool call
 
@@ -380,11 +395,14 @@ curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
 **What a call rolls out onto is the difference.** The dream stitched pre-rendered
 library clips into an MJPEG pane; there is no such video here. Each waypoint is a
 splat world of its own, so a walk is the viewer riding that world's marked corridor
-and handing over at the vertex — live, at whatever framerate the box draws. Open the
-viewer with `&agent=http://localhost:8086` and it takes commands over SSE and reports
-back when the camera has actually landed, so a tool call does not return until the
-walk did. Until a viewer connects, the walking tools say so rather than reporting a
-move that never happened.
+and handing over mid-corridor — live, at whatever framerate the box draws. Open the
+viewer with `&agent=http://localhost:8086` and it connects to the dashboard by
+itself, takes commands over SSE and reports back when the camera has actually
+landed, so a tool call does not return until the walk did. Taking the controls by
+hand hands them back: clicking a walkthrough button detaches the agent first (the
+chip is the light and the switch), while the viewer keeps proposing its position so
+the model still follows a hand walk when it is idle. Until a viewer connects, the
+walking tools say so rather than reporting a move that never happened.
 
 **The robot is in the sim you can watch** — `:8083`, the same Gazebo the traffic
 editor's world runs in. The dream booted a second one on its own transport
