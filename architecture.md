@@ -296,6 +296,31 @@ Typical outputs on the sample building: 355k–387k gaussians per world;
 held-out PSNR 19–23 dB, SSIM 0.72–0.83, LPIPS 0.18–0.26 (`just summary` prints
 the table).
 
+The model inventory behind it — every weight the box holds, with its on-disk
+size as fetched by `just setup` (the list itself is `scripts/models.txt`):
+
+| model | disk | role |
+| --- | --- | --- |
+| `tencent/HY-World-2.0` | 163 GB | the core: HY-Pano 2.0 panorama synthesis + world generation |
+| `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers` | 84 GB | the 14 B image-to-video base, FSDP-sharded across the four generation GPUs |
+| `hanshanxue/WorldStereo` | 64 GB | WorldStereo 2.0 — video expansion, built on Wan2.1 |
+| `Qwen/Qwen-Image-Edit` | 54 GB | generation-side image editing inside the HY pipeline |
+| `Qwen/Qwen-Image-Edit-2509` | 54 GB | the panorama editor's model (§16) — ~45 GB VRAM in bf16 |
+| `Qwen/Qwen3-VL-8B-Instruct` | 17 GB | trajectory-planning VLM + default mission-agent model (§14) |
+| SAM 3 (`facebook/sam3` + ModelScope image/video checkpoints) | 3.3 + 9.7 GB | segmentation — the HF repo is gated, so the checkpoints come from ModelScope |
+| `tencent/HunyuanWorld-Mirror` | 4.8 GB | WorldMirror 2.0 |
+| `laion/CLIP-ViT-H-14` | 3.7 GB | vision-language embedding used by the pipeline |
+| `IDEA-Research/grounding-dino-tiny` | 1.3 GB | open-vocabulary detection for the trajectory planner |
+| `Ruicheng/moge-2-vitl-normal` | 1.3 GB | monocular geometry / normals |
+| `naver-iv/zim-anything-vitl` | 1.2 GB | matting |
+| `facebook/dinov2-base` | 0.3 GB | visual features |
+
+Roughly 460 GB of weights proper; with cache structure and residue the README's
+~550 GB planning figure holds. Only three of these ever hold a GPU at rest —
+the VLM (card 0), the editor's model (card 5, and only while the service is
+up), and whatever `generate-world` loads across cards 1–4 for the duration of
+a job. Everything else pages in per pipeline stage and releases with the job.
+
 The number that matters more than any of those: **the metrics measure
 self-consistency, not fidelity.** Every held-out view was itself generated
 from the one photograph, so a world can score well and still have invented a
@@ -656,6 +681,23 @@ the model, owns correctness. This section documents how, because the design
 is mostly prompt engineering in the broad sense: what the model is told, what
 it is shown, and what every refusal teaches it.
 
+The default model, as served:
+
+| quantity | value |
+| --- | --- |
+| model | Qwen/Qwen3-VL-8B-Instruct (8 B), 17 GB on disk |
+| server | vLLM v0.11.0, OpenAI-compatible, loopback :8000 |
+| placement | GPU 0, `--gpu-memory-utilization 0.80` |
+| context window | `--max-model-len 32768` |
+| tool calling | `--enable-auto-tool-choice --tool-call-parser=hermes` — without both, the first tool call fails with a 400 |
+| cold start | ~17 GB weight load; the compose healthcheck allows 15 minutes |
+| client settings | streaming, 120 s timeout, one retry, `recursion_limit` 300 |
+| swap | `DW_VLM_URL` / `DW_VLM_MODEL` / `DW_VLM_KEY` → any OpenAI-compatible endpoint, no rebuild |
+
+The same server doubles as the generation pipeline's trajectory planner
+(captioning and scoring candidate views), which never calls tools — the two
+flags exist purely for the agent.
+
 ### The gate pipeline
 
 Every tool handed to the agent is wrapped by one decorator, `_gate`, so a
@@ -831,17 +873,91 @@ that taught the "marks beat any fit" rule.)
 
 **The editor** (:8087 + the `qwen` model server): edits what a place looks
 like *before* its world is generated. Face a view in the 360, type a change
-("add a potted plant in the corner"), and it crops the undistorted view, edits
-the crop through **Qwen-Image-Edit-2509** (~45 GB, its own GPU), reprojects
-into the equirect and composites only the changed pixels. The instruction is
-wrapped server-side to hold viewpoint, geometry and lighting fixed. Save keeps
-the original under `panos/.before-edit/`. Propagation is `just generate <id>`
-— 20 minutes of GPU belongs on the queue, not inside a click.
+("add a potted plant in the corner"), and the edit runs a five-stage
+geometry-aware pipeline:
+
+1. **crop** — the rectilinear view you are facing is extracted from the
+   equirect (same camera basis as the WebGL viewer), so the model sees an
+   undistorted photograph of a room, never a warped band of one. Crop is
+   1024 px wide, height from the view's aspect (clamped 0.4–1.4, ×16-aligned;
+   ≈ 1024×672 by default), FOV clamped 0.5–2.3 rad (≈29°–132°).
+2. **edit** — the crop goes to **Qwen-Image-Edit-2509** (20 B parameters,
+   Apache-2.0, `QwenImageEditPlusPipeline`, bf16 full precision): 40
+   denoising steps, `true_cfg_scale` 4.0, seed defaulting to the vertex id so
+   re-runs are reproducible. The instruction is wrapped server-side — *"Edit
+   it in place … keep the walls, floor, ceiling, windows, camera viewpoint
+   and lighting exactly as shown, changing only what this instruction
+   describes"* — so the operator types the change, never a room description.
+3. **reproject** — the edited crop is sampled back onto every in-frustum
+   equirect pixel.
+4. **diff-composite** — only pixels the model actually changed survive:
+   per-pixel diff > 22/255, grown (max-filter 7) and feathered (blur 4),
+   multiplied by a coverage mask that fades toward the frustum edge (so a
+   heavily-redrawn view can't paste a hard seam). If the mask is empty the
+   edit is rejected with *"no change — try rephrasing, or zoom so the target
+   fills the view"* rather than silently saving a no-op.
+5. **stack / revert / save** — edits accumulate on a candidate with a
+   per-vertex undo history (`panos/.candidates/`); Save keeps the replaced
+   photograph under `panos/.before-edit/`, writes in the original file's own
+   extension (JPEG quality 95), leaves the alignment record alone (an edit
+   does not *turn* the panorama), and answers with the exact command that
+   propagates it: `just generate <id>`.
+
+Whole-panorama edits (no facing given) use the same wrap plus an automatic
+diff-composite, and run the model **twice** — once normally and once rolled by
+half the width, cosine-blended across a 5%-width band — so the 360 seam stays
+invisible. A brushed-mask mode composites only the painted region (feathered,
+blur 8).
+
+The model server is a deliberately separate service (FastAPI/uvicorn) that
+scales horizontally: `QWEN_URLS` is a comma-separated fleet, one server per
+GPU. It also accepts up to three attention-conditioned inputs — base,
+depth-derived geometry wireframe, style-reference collage — with references
+deliberately entering at half resolution (a quarter of the tokens), because
+full-size references dominate attention and the model reproduces them instead
+of editing (observed: restyle chains collapsing into near-copies of their
+anchor). This repo's photograph-editing path uses only the base slot; the
+other two exist for the sim-panorama restyle heritage and future use.
+
+Numbers and deployment facts:
+
+| quantity | value |
+| --- | --- |
+| model / license / precision | Qwen-Image-Edit-2509, 20 B, Apache-2.0, bf16 |
+| disk / VRAM / placement | 54 GB on disk; ~45 GB VRAM — one whole card (`DW_EDIT_GPU`, default 5), H100/H200 class |
+| server image / cold start | 6.9 GB image; first request waits on the weight load (`/health` says `loading`) |
+| working resolution | 1536×768 equirect; crops 1024×~672 |
+| source panoramas | 7680×3840 (~2.6 MB JPEG) from the 360 camera |
+| inference | 40 steps per edit; ×2 for seam-blended whole-pano edits |
+| HTTP envelope | 30-minute timeout per edit call — the design ceiling, not the typical case |
+| scaling | `QWEN_URLS=http://a:8000,http://b:8000` — a parallel fleet, one card each |
+| offline | weights from the mounted HF cache, `HF_HUB_OFFLINE=1`, no runtime network |
 
 **Q: Why edit the panorama instead of the splat?**
 The panorama is the single source everything is generated from. Editing the
 splat would be editing one derivative; the next regeneration would silently
 undo it.
+
+**Q: Does editing cost resolution?**
+Yes, and it is the main caveat: the editor works — and saves — at 1536×768,
+a 5× downsample of the 7680×3840 camera originals. The original survives
+under `.before-edit/`, but a waypoint regenerated after an edit is generated
+from the working-resolution panorama. For cosmetic edits (removing a person,
+a whiteboard) this has been acceptable; for a waypoint whose world quality
+matters most, weigh the edit against reshooting the panorama.
+
+**Q: Can the stack run without the edit model?**
+Yes — `qwen` holds ~45 GB while loaded and is idle most of the time. On a
+GPU-tight deployment, leave the service down until an editing session; only
+:8087's edit button needs it, and everything else (viewing, generation,
+missions) is unaffected.
+
+**Q: Why 40 steps and guidance 4.0?**
+The upstream defaults for the pipeline, kept because the failure mode that
+matters here is *drift* (the untouched parts of the photograph changing), and
+that is controlled by the diff-composite rather than by sampling parameters —
+regions the instruction didn't touch stay pixel-identical to the original by
+construction.
 
 ---
 
