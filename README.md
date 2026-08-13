@@ -220,13 +220,16 @@ it afterwards means generating again.
 
 ## Moving a project
 
-A tarball of one project is everything another machine needs: the map, the
-Gazebo world, the panoramas, and each splat's `world.ply`, `world.usdz`,
-`world.cam.json`, `world.paths.json` and source panorama. What HY-World
-produced on the way there — `gs_data`, `render_results`, `navmesh`,
-`gs_result` — stays behind, since it is input to a training run that has
-already happened and it is 34 of this project's 103 GB. Model weights are not
-included either; those come from `just setup` on the far side.
+A tarball of one project is everything another machine needs — the whole
+project directory travels by default: the map, the Gazebo world, the
+panoramas and their alignment records, every splat's deliverables and marks,
+the robot's meshes, the interactable items. Only the named regenerables stay
+behind — HY-World's training intermediates (`gs_data`, `render_results`,
+`navmesh`, `gs_result`: 40 of the sample project's 41 GB) and the editor's
+caches — so the bundle is the ~1.4 GB that cannot be rebuilt, and `pack`
+prints a per-drawer size table so a bloated archive announces itself before
+it is copied anywhere. Model weights are not included; those come from
+`just setup` on the far side.
 
 ```bash
 just bundle                 # the active project -> dist/
@@ -251,7 +254,7 @@ docker save dreamworld/splat-viewer dreamworld/interactive \
 
 # on the target
 docker load < dreamworld-runtime.tgz
-just unbundle <project>.tar.zst
+just unbundle <project>-<stamp>.tar.gz
 printf 'DW_PROJECT=<project>\nDW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 docker compose -f compose.minimal.yaml up -d
 ```

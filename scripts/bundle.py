@@ -3,20 +3,22 @@
     python scripts/bundle.py pack   <assets-dir> <project> [dest-dir]
     python scripts/bundle.py unpack <repo-dir> <tarball>
 
-What travels is the map, the Gazebo world, the panoramas, and each splat's
-deliverables — world.ply, world.usdz, world.cam.json, world.paths.json and the
-panorama it was generated from.
+Everything in the project directory travels, except what a finished training
+run can rebuild and caches that rebuild themselves. The exclusions are FEW and
+NAMED — gs_data, render_results, navmesh, gs_result (HY-World's intermediates:
+40 of the sample project's 41 GB), plus the editor's .previews and .candidates
+caches. Everything else goes by default, and that default is the point: this
+used to be a list of what to carry, and the list left the Galaxea R1 meshes,
+splats/scenes.json and the alignment marks behind — discovered when a robot
+spawned meshless on the receiving machine. A new drawer someone adds next
+month travels without anyone remembering to bless it here.
 
-What does not is everything HY-World produced on the way to those (gs_data,
-render_results, navmesh, gs_result), nor anything else sitting in the project
-directory. This is a LIST of what to carry rather than a set of exclusions, and
-that distinction is the whole point: excluding the intermediates by pattern still
-swept up backup copies of panos/ and splats/ and a traversals/ from a pipeline
-that no longer existed, and made a 3.4 GB archive of a 1.2 GB project. Anything
-unlisted stays behind, including next month's stray folder.
+The old fear about exclusion lists — junk swept in silently, a 3.4 GB archive
+of a 1.2 GB project — is answered by the per-drawer size report printed at
+pack time: a bloated archive announces itself before it is copied anywhere.
 
-Model weights are not included either — hundreds of GB, and `just setup` fetches
-them on the far side.
+Model weights are not included either — hundreds of GB, and `just setup`
+fetches them on the far side.
 """
 
 import subprocess
@@ -25,24 +27,18 @@ import tarfile
 import time
 from pathlib import Path
 
-# One splat's worth of deliverables. Everything else under splats/<id>/ is input
-# to a training run that has already happened.
-KEEP = ("world.ply", "world.usdz", "world.cam.json", "world.paths.json",
-        "panorama.png")
+# Directory names excluded at any depth: a training run's inputs and outputs
+# that `just generate` rebuilds, and caches their tools rebuild on demand.
+SKIP_DIRS = {"gs_data", "render_results", "navmesh", "gs_result",
+             ".previews", ".candidates"}
 
 
 def carry(root: Path, project: str) -> list[Path]:
     """Every file that travels, relative to the repo root."""
     proj = root / "assets" / "projects" / project
-    files = []
-    for drawer in ("maps", "worlds", "panos"):
-        for p in (proj / drawer).rglob("*"):
-            # .previews is a downscale cache the editor rebuilds on demand
-            if p.is_file() and ".previews" not in p.parts:
-                files.append(p)
-    for splat in sorted((proj / "splats").glob("*/")):
-        files += [splat / name for name in KEEP if (splat / name).is_file()]
-    return sorted(set(files))
+    return sorted(p for p in proj.rglob("*")
+                  if p.is_file()
+                  and not (SKIP_DIRS & set(p.relative_to(proj).parts[:-1])))
 
 
 def pack(assets: Path, project: str, dest: Path) -> int:
@@ -54,13 +50,25 @@ def pack(assets: Path, project: str, dest: Path) -> int:
     if not files:
         print(f"{project} has nothing to bundle yet", file=sys.stderr)
         return 1
+    # Say what travels, by drawer, BEFORE the slow part — an archive that is
+    # about to be ten times the project's deliverables should be caught here,
+    # not discovered on the far side of a copy.
+    proj = assets / "projects" / project
+    sizes: dict[str, int] = {}
+    for f in files:
+        top = f.relative_to(proj).parts[0]
+        sizes[top] = sizes.get(top, 0) + f.stat().st_size
+    total = sum(sizes.values())
+    print(f"bundling {project}: {len(files)} file(s), {total / 1e9:.2f} GB")
+    for k in sorted(sizes, key=lambda k: -sizes[k]):
+        print(f"  {sizes[k] / 1e6:10.1f} MB  {k}")
     dest.mkdir(parents=True, exist_ok=True)
     out = dest.resolve() / f"{project}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
     with tarfile.open(out, "w:gz") as tar:
         for f in files:
             tar.add(f, arcname=str(f.relative_to(root)))
     print(f"bundled {project} -> {out}")
-    print(f"  {len(files)} file(s), {out.stat().st_size / 1e9:.2f} GB")
+    print(f"  {out.stat().st_size / 1e9:.2f} GB on disk")
     print("  (training intermediates left behind — 'just generate' rebuilds them)")
     print(f"  restore with: just unbundle {out}")
     return 0
