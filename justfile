@@ -155,8 +155,9 @@ summary level="" proj=project:
 #   curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
 #        -d '{"text":"go to apex_lab"}'
 #
-# Open the printed viewer URL in a browser: the ?agent= parameter is what hands
-# the camera over, and until a viewer connects the walking tools say so rather
+# Open the printed viewer URL in a browser: the viewer connects to the
+# dashboard on its own host by itself (?agent=off opts out, ?agent=<url>
+# points elsewhere), and until one connects the walking tools say so rather
 # than reporting a move that never happened.
 #
 # Drive the building by tool call, in the splat viewer and in Gazebo.
@@ -167,7 +168,7 @@ interactive: up
     echo
     echo "  tools        http://localhost:{{iport}}/tools"
     echo "  robot        http://localhost:8090/state"
-    echo "  viewer       http://localhost:8081/?url=files/{{project}}/splats/$scene/world.ply&agent=http://localhost:{{iport}}"
+    echo "  viewer       http://localhost:8081/?url=files/{{project}}/splats/$scene/world.ply"
     echo
     echo "  open that viewer URL, then drive it:"
     echo "    curl -X POST localhost:{{iport}}/command -H 'Content-Type: application/json' -d '{\"text\":\"go to apex_lab\"}'"
@@ -179,7 +180,7 @@ interactive: up
 # the number that has to match. Issues the walk and samples both several times a
 # second, reporting the worst gap as a fraction of the corridor and in metres.
 #
-# Needs a splat viewer connected with ?agent= (just urls prints the link).
+# Needs a splat viewer open (just urls prints the link; it connects itself).
 #
 #   just sync lift_lobby lift_lobby_north
 #

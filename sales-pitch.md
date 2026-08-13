@@ -100,8 +100,8 @@ each replacement toward how your operators actually work.
 ## Before they walk in
 
 - `just up`; dashboard (:8086) on the left screen, splat viewer (:8081, opened
-  from the dashboard's link so `?agent=` is set) on the right, Gazebo (:8083)
-  in a small window under it.
+  from the dashboard's link — it connects back on its own) on the right,
+  Gazebo (:8083) in a small window under it.
 - Robot standing at `lift_lobby`; splat cache warm (`splats cached 16/16 ·
   preheated 16/16` in the viewer panel — it fills itself).
 - Pick a mission whose route crosses a **closed door** — `go to the apex

@@ -18,8 +18,8 @@ and reports the largest gap between them. Perfectly in step is 0. A steady
 offset means one started late; a growing one means they are running at different
 speeds, which is what the shared DRIVE_SPEED and per-edge pacing exist to stop.
 
-Needs a splat viewer connected with ?agent= — without one the walk is robot-only
-and there is nothing to compare.
+Needs a splat viewer open (it connects to the dashboard by itself) — without
+one the walk is robot-only and there is nothing to compare.
 """
 
 import json
@@ -68,8 +68,8 @@ def main() -> int:
     level = sys.argv[3] if len(sys.argv) > 3 else ""
 
     if not get(f"{INTERACTIVE}/viewer/pose").get("ok"):
-        print("no splat viewer connected — open the ?agent= URL and reload it",
-              file=sys.stderr)
+        print("no splat viewer connected — open the viewer URL (just urls) "
+              "and let it connect", file=sys.stderr)
         return 1
 
     post(f"{INTERACTIVE}/reset", {"waypoint": start, "level": level})

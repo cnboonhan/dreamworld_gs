@@ -396,7 +396,7 @@ unchanged. It comes up with the stack; `just interactive` prints where:
 The dashboard is at **http://localhost:8086** — a mission bar across the top, a
 minimap of the level, the tool palette, the live log, and the world model the agent
 reads each turn. The splat viewer opens in its own window from the link in the
-status line, already carrying the `?agent=` parameter that hands over its camera.
+status line and connects back to the dashboard by itself.
 
 The page is the dream harness's own, ported: the mission bar and run/pause/cancel
 across the top, the floorplan filling the left column with the arrow pad (`↰ ↑ ↱`,
@@ -423,9 +423,10 @@ curl -X POST localhost:8086/command -H 'Content-Type: application/json' \
 library clips into an MJPEG pane; there is no such video here. Each waypoint is a
 splat world of its own, so a walk is the viewer riding that world's marked corridor
 and handing over mid-corridor — live, at whatever framerate the box draws. Open the
-viewer with `&agent=http://localhost:8086` and it connects to the dashboard by
-itself, takes commands over SSE and reports back when the camera has actually
-landed, so a tool call does not return until the walk did. Taking the controls by
+viewer and it connects to the dashboard on its own host by itself (`?agent=off`
+opts out; `?agent=<url>` points at a dashboard elsewhere), takes commands over SSE
+and reports back when the camera has actually landed, so a tool call does not
+return until the walk did. Taking the controls by
 hand hands them back: clicking a walkthrough button detaches the agent first (the
 chip is the light and the switch), while the viewer keeps proposing its position so
 the model still follows a hand walk when it is idle. Until a viewer connects, the

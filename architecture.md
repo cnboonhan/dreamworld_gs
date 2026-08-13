@@ -145,10 +145,10 @@ image-edit model's. The justfile derives HY-World's rank count from
 see.
 
 **Q: Why is `interactive` on host networking?**
-So the browser's `localhost:8086` and the viewer's `?agent=` URL are the same
-server, and so it can reach the robot bridge on `localhost:8090` — which is
-published by *rmfsim*, because the bridge shares rmfsim's network namespace
-(§9).
+So the browser's `localhost:8086` and the dashboard the viewer connects back
+to are the same server, and so it can reach the robot bridge on
+`localhost:8090` — which is published by *rmfsim*, because the bridge shares
+rmfsim's network namespace (§9).
 
 **Q: Why do four services share one 6 GB image?**
 `rmfsim`, `editor`, `galaxea` and `worldjobs` differ only by role — same RMF,
@@ -457,12 +457,13 @@ so a camera position in world coordinates was a building position all along.
 The panel repaints at ~8 Hz and the repaint loop stops itself when the panel
 is replaced.
 
-Control handedness: a viewer opened with `?agent=` **connects to the
-dashboard automatically** (which is also what makes a refresh land where the
-dashboard says). Clicking a walkthrough button detaches first — taking the
-controls by hand is what lets the agent go — while position *proposals* keep
-flowing so the model still hears where hand-walks land. The chip is the
-light and the switch.
+Control handedness: the viewer **connects to the dashboard on its own host
+automatically** — no parameter needed; `?agent=off` opts out, `?agent=<url>`
+points at a dashboard elsewhere — which is also what makes a refresh land
+where the dashboard says. Clicking a walkthrough button detaches first —
+taking the controls by hand is what lets the agent go — while position
+*proposals* keep flowing so the model still hears where hand-walks land. The
+chip is the light and the switch.
 
 **Q: Why no framework, no bundler, no TypeScript?**
 The page is one file served by nginx and edited with a text editor; the

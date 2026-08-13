@@ -1990,8 +1990,9 @@ function onState(s){
  setMission(s.mission);setTodos(s.todos);viewerLink(s);drawMap(s)}
 
 // The rollout is the splat viewer, in its own window rather than a pane here: it
-// is a live WebGL scene, not a stream to embed. The link carries ?agent=, which is
-// what hands its camera to this server.
+// is a live WebGL scene, not a stream to embed. The viewer connects back to the
+// dashboard on its own; the link still carries ?agent= explicitly because this
+// server's port is configurable and the viewer's default assumes 8086.
 // The model redefines position only at waypoints, so between them the marker
 // used to sit on the vertex the walk had left. These carry the robot's actual
 // pose, and are drawn straight onto the map without touching anything else on
