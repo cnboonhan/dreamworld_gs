@@ -2898,6 +2898,12 @@ async function main() {
                 handsOff("agent off — walking by hand; the chip reconnects");
             if (chip) chip.onclick = () => {
                 if (detached) {
+                    // Clicking connect is asking to be where the dashboard
+                    // says. Drop the own-move guard first: it exists to
+                    // ignore stale truth racing a hand walk, and the hand
+                    // walk that detached this viewer is exactly what would
+                    // make the hello's follow look stale and get dropped.
+                    window.__lastAt = null;
                     detached = false;
                     say("agent: reconnecting");
                     connect();
