@@ -98,6 +98,10 @@ DW_PROJECT=htx just world  # or override for a single command
 ```
 
 `DW_PROJECT` lives in `.env`, so `just` and a bare `docker compose up` agree.
+Every other knob — GPU ids, ports, pacing, the agent's model and key — is a
+`DW_` variable too: [.env.example](.env.example) lists them all with their
+defaults. `.env` is gitignored and survives `just` runs, so it is the home
+for deployment settings and keys.
 
 Requirements: NVIDIA GPUs (4+, ~60GB VRAM for generation) with CUDA 12.8, the
 NVIDIA container runtime, [just](https://github.com/casey/just),

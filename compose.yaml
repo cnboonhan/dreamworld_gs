@@ -85,7 +85,8 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"]   # the generator uses the rest
+              # the generator uses the rest (DW_GPU_IDS)
+              device_ids: ["${DW_VLM_GPU:-0}"]
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/v1/models"]
@@ -200,7 +201,9 @@ services:
       - "--port"
       - "8087"
     ports:
-      - "${DW_EDITOR_PORT:-8087}:8087"
+      # its own variable: DW_EDITOR_PORT belongs to the traffic editor, and
+      # sharing it mapped both editors onto one port the moment it was set
+      - "${DW_PANOEDIT_PORT:-8087}:8087"
     volumes:
       - ./assets/projects:/projects        # writable: Save rewrites panos/<id>
     environment:
