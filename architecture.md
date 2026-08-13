@@ -189,11 +189,14 @@ per marked corridor. It is rebuilt by `edge_walks.py` without any retraining —
 data surgery (a mislabelled waypoint, a re-marked corridor) is a re-run of a
 script, not a GPU job.
 
-Sizes, for planning: the sample project is ~103 GB with all of HY-World's
-intermediates; a bundle for another machine (`just bundle`) drops the 34 GB of
-training intermediates and ships what the runtime reads. One `world.ply` is
-tens of MB (the sample floor's sixteen worlds total ≈ 700 MB); a panorama is a
-single JPEG.
+Sizes, for planning (measured): the sample project is ~41 GB, of which
+~40 GB is HY-World training intermediates. A bundle for another machine
+(`just bundle`) carries **everything except the named regenerables** — the
+splat deliverables, panoramas, alignment records, marks, robot meshes,
+`scenes.json`, interactable items — and lands at ~1.4 GB, printing a
+per-drawer size table before the slow part so a bloated archive announces
+itself at pack time. One `world.ply` is tens of MB (the sample floor's
+sixteen worlds total ≈ 700 MB); a panorama is a single JPEG.
 
 **Q: Why keep generated files next to captured ones?**
 Because the unit of ownership is the building. Handing a colleague "the HTX
@@ -597,12 +600,21 @@ The protocol, end to end:
   passes; `moving: true` (the MOVE lock's state) tells the viewer these are
   progress reports, not instructions to jump. Reconciliation is for idle.
 - **The viewer proposes, never dictates.** Hand-walks and crossings POST
-  `/viewer/at`; the server follows *when idle* (placing the robot at the
-  vertex), answers `already there`, refuses scenes that don't exist — and
-  while a move is in flight it accepts quietly and changes nothing, because
-  the mover owns the state.
+  `/viewer/at`; the server follows *when idle* — placing the robot at the
+  vertex **facing the bearing from the waypoint just left** (the first
+  adjacency neighbour it used to face is often the waypoint behind you,
+  which read as a 180° flip) — answers `already there`, refuses scenes that
+  don't exist, and while a move is in flight it accepts quietly and changes
+  nothing, because the mover owns the state.
 - **All movement serialises** through one lock (`MOVERS` = go_to, face, turn,
-  take_lift): queued, not refused, with the wait logged.
+  take_lift): queued, not refused, with the wait logged. All **three** paths
+  into a mover hold it — `/invoke` dispatch, `/command` (the arrow pad and
+  text box), and the agent's `_gate` — because any path that skipped it was
+  invisible to every mid-move guard.
+- **An operator reset outranks the follower guards.** Its truth push carries
+  `reset: true`: the viewer drops its own-move memory for it, and a reset to
+  the scene already on screen still re-stands the camera at the waypoint,
+  facing the corridor the marker draws.
 - **One viewer drives.** A new `/viewer/events` connection evicts older tabs:
   they get `{"op":"bye"}`, their stream closes, and they do not reconnect.
 - **A watchdog holds the robot to the truth** — but only when nothing else
@@ -617,12 +629,25 @@ The protocol, end to end:
   (computed once, from the graph), so any divergence is bounded by one
   corridor and corrected at every vertex.
 
-The dashboard itself: mission bar with run/pause/cancel (cancel clears the
-mission, subtasks and input to empty — server-side too), the level minimap
-(nav graph over the floorplan, affine-fitted through the waypoints both
-name), arrow pad, tool palette, live log, the agent's world model, and a
-live robot marker fed by the 4 Hz pose pump (a green triangle that keeps its
-last heading when a pose arrives without one).
+The dashboard itself: the level minimap (nav graph over the floorplan,
+affine-fitted through the waypoints both name) with a live robot marker fed
+by the 4 Hz pose pump; **the Gazebo sim embedded under it** (rmfsim's noVNC
+screen in a splitter-resizable pane between the floorplan and the controls,
+with an "open full" link); arrow pad, tool palette, live log, and the
+agent's world model.
+
+The mission bar tells the truth about the mission, not the HTTP call:
+`/agent` returns in milliseconds while the mission runs in a thread, so
+state carries `agent_busy`/`agent_paused` and every dashboard's button
+follows them — *run mission* becomes *pause mission* for as long as the
+mission actually runs, surviving a reload. **Pause gates the model as well
+as the tools** (a `GatedChat` wrapper blocks the next VLM call on the same
+event that blocks the next action), so a paused mission stops thinking too.
+**Clear mission** cancels, wipes mission/subtasks/input on every dashboard,
+resets the agent's world-model pane, stops the robot (a fresh `/goto` at the
+current waypoint supersedes the leg being driven), and aborts a
+multi-corridor `go_to` between legs — one `go_to` is one tool call, so the
+tool gate alone would let it walk the whole route first.
 
 **Q: Why SSE and not WebSockets?**
 One direction of push is all that's needed (commands and truth flow down;
@@ -814,8 +839,9 @@ checkpointer, one thread id (`"interactive"`) so conversation state persists
 across missions within a server run; `recursion_limit` 300 (a mission is many
 tool calls); `ChatOpenAI` streaming with a 120 s timeout and one retry. The
 mission runs in a thread so `/pause`, `/resume` and `/cancel` answer while it
-walks — pause blocks the *next tool call* (the current motion completes;
-nothing is interrupted mid-corridor, per the movers-are-not-interrupted rule).
+walks — pause blocks the *next thought and the next tool call* (a `GatedChat`
+wrapper gates VLM generations on the same event as the tools); the motion
+already in flight completes, per the movers-are-not-interrupted rule.
 
 ### Prompt design elsewhere in the stack
 
@@ -987,7 +1013,7 @@ level L11, 27 waypoints, 16 worlds built at time of writing):
 | held-out quality (self-consistency) | PSNR 19–23, SSIM 0.72–0.83, LPIPS 0.18–0.26 |
 | generation time / training steps | ~20 min on 4 GPUs / 2,000 steps per world |
 | model weights on disk | ~550 GB (`just setup`) |
-| one project, with / without intermediates | ~103 GB / ~69 GB bundled |
+| one project, with / without intermediates | ~41 GB / ~1.4 GB bundled |
 | VLM | Qwen3-VL-8B-Instruct, ctx 32,768, GPU 0 at 0.80 util |
 | image-edit model | Qwen-Image-Edit-2509, ~45 GB VRAM, its own GPU |
 
@@ -1020,10 +1046,23 @@ IDE browsers abort large downloads. The Cache API needs a secure origin, so
 tunnel to `localhost` rather than browsing to a LAN IP if you want the
 persistent splat cache.
 
-**Moving a building.** `just bundle` → one tarball (map, world, panoramas,
-splats minus training intermediates) → `just unbundle` on the far side, which
-lands files exactly where the stack looks. Weights come from `just setup`
-there.
+**Moving a building.** `just bundle` → one ~1.4 GB tarball (everything in
+the project except training intermediates and tool caches — robot meshes,
+marks and indexes included) → `just unbundle` on the far side, which lands
+files exactly where the stack looks. Weights come from `just setup` there.
+
+**Runtime-only devices.** `compose.minimal.yaml` is the runtime and nothing
+else: viewer, sim, robot bridge, harness — four services, no GPU anywhere in
+the file, brought up with `just up minimal` (or bare `docker compose -f`).
+The mission agent's model is an endpoint there (`DW_VLM_URL`); the three
+images `docker save` to ~6.4 GB for an offline target, so a full runtime
+deployment is under 8 GB of payload.
+
+**Configuration.** Every knob is a `DW_` variable — GPU ids (`DW_VLM_GPU`,
+`DW_GPU_IDS`, `DW_EDIT_GPU`), ports, pacing, the agent's endpoint and key —
+documented with defaults in [.env.example](.env.example). `.env` is
+gitignored (safe for keys) and survives `just` runs, which own only their
+three variables.
 
 **Running halves.** `GALAXEA_URL` unset runs the viewer half with no Gazebo —
 the whole visual system on a laptop. The mission agent's model is a URL —
@@ -1091,6 +1130,10 @@ as institutional memory:
 | Two PLY unpacks in flight sharing one worker reply slot | serialised unpack queue; rows cache makes it self-deduplicating |
 | Prefetch kickoffs scheduled before their functions existed | the 5-second watcher owns starting sweeps and preheats |
 | A mission leg's walk op sent to a dying browser tab, wedging the mission | 180 s per-leg timeout; truth reconciliation once idle |
+| Arrow-pad and agent moves holding no lock — a mid-walk `/viewer/at` re-placed the robot facing its first adjacency neighbour (the 180° flip after "forward") | all three paths into a mover hold MOVE; `/viewer/at` follows face the bearing from the waypoint just left |
+| Cancel letting the current `go_to` walk its whole remaining route (one go_to is one tool call) | cancel checked between legs; a fresh `/goto` supersedes the drive in flight |
+| The run button tracking the HTTP call instead of the mission (`/agent` returns on dispatch) | state carries `agent_busy`/`agent_paused`; every dashboard's button follows them |
+| An include-list bundle silently leaving new asset types behind (robot meshes, marks, indexes) | bundle carries everything except named regenerables, and prints a per-drawer size table at pack time |
 
 The meta-lesson, earned repeatedly: **when two representations of one fact can
 each be written, they will eventually disagree — remove the writer, not the

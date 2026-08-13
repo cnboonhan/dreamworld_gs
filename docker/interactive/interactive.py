@@ -1765,10 +1765,11 @@ input:focus{outline:0;border-color:#1f6feb}
 .go.paused{background:#238636}    /* paused -> button shows RESUME (green) */
 .hint{color:#6e7681;font-size:11px}
 #mapwrap{padding:4px;overflow:hidden;background:#0a0d12;flex:1;min-height:0;display:flex}
-/* The sim, embedded: rmfsim's noVNC screen in a pane under the map, resizable
-   by the splitter above it. A fixed default height; the map flexes. */
-#sim{flex:0 0 34%;min-height:90px}
-#simframe{border:0;width:100%;flex:1;min-height:0;background:#0a0d12}
+/* The sim, embedded: rmfsim's noVNC screen between the floorplan and the
+   controls, resizable by the splitter above it. Sized by flex-basis (height
+   on a flex child loses to it); the map above flexes. */
+#sim{flex:0 0 30%;min-height:90px}
+#simframe{border:0;width:100%;height:100%;display:block;background:#0a0d12}
 #simpop{float:right;font-size:11px;color:#8b949e;text-decoration:none}
 #simpop:hover{color:#58a6ff}
 #map{display:block;width:100%;height:100%;image-rendering:auto;border:1px solid #30363d;border-radius:4px}
@@ -1826,6 +1827,10 @@ header #mbox{flex:1;min-width:140px}
     <span><i style="background:#d24dcf"></i>lift</span>
     <span><i style="background:#0d1117;border:1px solid #484f58"></i>no world yet</span></span></div>
    <div id=mapwrap><canvas id=map></canvas></div>
+   <div id=middrag title="drag to resize the simulation"></div>
+   <div class=ph style="border-top:1px solid #30363d"><b>gazebo</b> — the robot, live in the sim
+    <a id=simpop target=_blank rel=noopener>open full ↗</a></div>
+   <div id=sim><iframe id=simframe title="gazebo simulation over noVNC"></iframe></div>
    <div class=ph style="border-top:1px solid #30363d"><b>controls</b></div>
    <div class=pb style="flex:none;padding-bottom:0;align-items:stretch">
     <div id=pad>
@@ -1845,12 +1850,6 @@ header #mbox{flex:1;min-width:140px}
      robot there, shuts every door and lift, and starts again — an operator move,
      not something the agent can do</div>
    </div>
-  </div>
-  <div id=middrag title="drag to resize the simulation"></div>
-  <div class="panel" id=sim>
-   <div class=ph><b>gazebo</b> — the robot, live in the sim
-    <a id=simpop target=_blank rel=noopener>open full ↗</a></div>
-   <iframe id=simframe title="gazebo simulation over noVNC"></iframe>
   </div>
  </div>
  <div id=drag title="drag to resize"></div>
@@ -1880,14 +1879,17 @@ header #mbox{flex:1;min-width:140px}
     const h=Math.max(44,Math.min(r.height-120, r.bottom-e.clientY));log.style.height=h+'px';});
   window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
 })();
-// Resizable sim pane: drag the splitter under the controls to set its height
-// (the map above flexes, and refits its canvas as it goes).
+// Resizable sim pane: drag the splitter between the map and the sim (the
+// controls below hold still — the sim's bottom edge is pinned to them, so
+// its height is its own bottom minus the mouse). The map above flexes and
+// refits its canvas as it goes.
 (function(){
-  const d=document.getElementById('middrag'), sim=document.getElementById('sim'), col=document.getElementById('stack');
+  const d=document.getElementById('middrag'), sim=document.getElementById('sim'), col=document.getElementById('mid');
   let on=false;
   d.addEventListener('mousedown',e=>{on=true;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
-  window.addEventListener('mousemove',e=>{if(!on)return;const r=col.getBoundingClientRect();
-    const h=Math.max(90,Math.min(r.height-180, r.bottom-e.clientY));sim.style.flexBasis=h+'px';
+  window.addEventListener('mousemove',e=>{if(!on)return;
+    const r=sim.getBoundingClientRect(), m=col.getBoundingClientRect();
+    const h=Math.max(90,Math.min(m.height-260, r.bottom-e.clientY));sim.style.flexBasis=h+'px';
     fitCanvas();if(last)drawMap(last);});
   window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
 })();

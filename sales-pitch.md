@@ -5,8 +5,9 @@ throughout — the demo is not an interlude, it is the evidence track under the
 words.
 
 **The live demo is one thing:** a harness rollout of a single typed mission,
-watched simultaneously on the dashboard (subtasks verifying), the splat
-viewer (the photoreal walk) and Gazebo (the robot walking the same edges).
+watched simultaneously on the dashboard (subtasks verifying, with Gazebo
+embedded under the floorplan — the robot walking the same edges) and the
+splat viewer (the photoreal walk).
 The panorama edit shown at 1:40 is **pre-baked** — edited and saved before
 the meeting; a 40-step diffusion edit does not belong inside a three-minute
 window. Numbers cited are measured on this deployment; the deep reference is
@@ -99,9 +100,10 @@ each replacement toward how your operators actually work.
 
 ## Before they walk in
 
-- `just up`; dashboard (:8086) on the left screen, splat viewer (:8081, opened
-  from the dashboard's link — it connects back on its own) on the right,
-  Gazebo (:8083) in a small window under it.
+- `just up`; dashboard (:8086) on the left screen — the Gazebo sim is
+  embedded in it, under the floorplan — and the splat viewer (:8081, opened
+  from the dashboard's link; it connects back on its own) on the right. Two
+  windows, everything visible.
 - Robot standing at `lift_lobby`; splat cache warm (`splats cached 16/16 ·
   preheated 16/16` in the viewer panel — it fills itself).
 - Pick a mission whose route crosses a **closed door** — `go to the apex
@@ -136,8 +138,8 @@ talk.]**
 I've given it one sentence. Watch three things move together: the agent
 plans the route and writes its subtasks; the photoreal view walks the actual
 corridors — that's not video, it's a generated 3D world you could grab with
-the mouse; and the robot in the simulator walks the same route, edge for
-edge. What keeps them together is a **semantic map** — named places,
+the mouse; and the robot in the simulator — right here under the map — walks
+the same route, edge for edge. What keeps them together is a **semantic map** — named places,
 corridors, doors, lifts — one vocabulary the mission, the plan, the worlds
 and the robot all speak. On top of it sits one tool surface: `go_to`,
 `open_door`, `take_lift`. It's extensible — a new capability is one new

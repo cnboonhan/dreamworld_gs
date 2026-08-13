@@ -398,9 +398,11 @@ unchanged. It comes up with the stack; `just interactive` prints where:
 | planning | `plan_route` `where` `get_path` `get_graph` `write_mission` `write_todos` |
 
 The dashboard is at **http://localhost:8086** — a mission bar across the top, a
-minimap of the level, the tool palette, the live log, and the world model the agent
-reads each turn. The splat viewer opens in its own window from the link in the
-status line and connects back to the dashboard by itself.
+minimap of the level with the Gazebo sim embedded under it (rmfsim's screen in
+a resizable pane, so the robot is watchable without a second window), the tool
+palette, the live log, and the world model the agent reads each turn. The splat
+viewer opens in its own window from the link in the status line and connects
+back to the dashboard by itself.
 
 The page is the dream harness's own, ported: the mission bar and run/pause/cancel
 across the top, the floorplan filling the left column with the arrow pad (`↰ ↑ ↱`,
