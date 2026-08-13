@@ -115,13 +115,13 @@
   }
   .node .glyph { width: 3cqw; height: 3cqw; flex-shrink: 0; }
 
-  .node.ui    { left: 56%;   top: 19%; }
-  .node.learn { left: 84.4%; top: 30.6%; }
-  .node.world { left: 9.6%;  top: 42%; }
-  .node.sense { left: 30.8%; top: 42%; }
-  .node.model { left: 56%;   top: 42%; }
-  .node.map   { left: 29%;   top: 78%; }
-  .node.tools { left: 83%;   top: 78%; }
+  .node.ui    { left: 56%;   top: 22%; }
+  .node.learn { left: 84.4%; top: 36.7%; }
+  .node.world { left: 7.8%;  top: 48%; }
+  .node.sense { left: 28.6%; top: 48%; }
+  .node.model { left: 56%;   top: 48%; }
+  .node.map   { left: 29%;   top: 82%; }
+  .node.tools { left: 83%;   top: 82%; }
 
   /* ---- one orchestrated entrance ----------------------------------------- */
   @media (prefers-reduced-motion: no-preference) {
@@ -159,38 +159,38 @@
       </marker>
     </defs>
     <!-- operator model -> operator ui (one way, up) -->
-    <line class="lane-flow" x1="717" y1="249" x2="717" y2="186"
+    <line class="lane-flow" x1="717" y1="298" x2="717" y2="211"
           marker-end="url(#arr)"/>
-    <circle class="lane-dot" cx="717" cy="249" r="4.5"/>
+    <circle class="lane-dot" cx="717" cy="298" r="4.5"/>
     <!-- operator ui -> learn from data -> operator model (dotted loop) -->
     <path class="lane-dashed" marker-end="url(#arr)"
-          d="M 897 137 H 1070 Q 1080 137 1080 147 V 168"/>
+          d="M 831 158 H 1070 Q 1080 158 1080 168 V 211"/>
     <path class="lane-dashed" marker-end="url(#arr)"
-          d="M 1080 264 V 292 Q 1080 302 1070 302 H 888"/>
+          d="M 1080 309 V 336 Q 1080 346 1070 346 H 888"/>
     <!-- world -> perception (in from the left) -->
-    <line class="lane-line" x1="122" y1="302" x2="394" y2="302"/>
-    <circle class="lane-dot-ring" cx="247" cy="302" r="10"/>
-    <circle class="lane-dot"      cx="247" cy="302" r="4.5"/>
-    <circle class="lane-dot-ring" cx="280" cy="302" r="10"/>
-    <circle class="lane-dot"      cx="280" cy="302" r="4.5"/>
+    <line class="lane-line" x1="100" y1="346" x2="366" y2="346"/>
+    <circle class="lane-dot-ring" cx="190" cy="346" r="10"/>
+    <circle class="lane-dot"      cx="190" cy="346" r="4.5"/>
+    <circle class="lane-dot-ring" cx="252" cy="346" r="10"/>
+    <circle class="lane-dot"      cx="252" cy="346" r="4.5"/>
     <!-- perception -> operator model -->
-    <line class="lane-line" x1="394" y1="302" x2="717" y2="302"/>
-    <circle class="lane-dot-ring" cx="509" cy="302" r="10"/>
-    <circle class="lane-dot"      cx="509" cy="302" r="4.5"/>
-    <circle class="lane-dot-ring" cx="544" cy="302" r="10"/>
-    <circle class="lane-dot"      cx="544" cy="302" r="4.5"/>
+    <line class="lane-line" x1="366" y1="346" x2="717" y2="346"/>
+    <circle class="lane-dot-ring" cx="481" cy="346" r="10"/>
+    <circle class="lane-dot"      cx="481" cy="346" r="4.5"/>
+    <circle class="lane-dot-ring" cx="544" cy="346" r="10"/>
+    <circle class="lane-dot"      cx="544" cy="346" r="4.5"/>
     <!-- operator model -> map -->
-    <line class="lane-line" x1="717" y1="302" x2="371" y2="562"/>
-    <circle class="lane-dot-ring" cx="645" cy="356" r="10"/>
-    <circle class="lane-dot"      cx="645" cy="356" r="4.5"/>
-    <circle class="lane-dot-ring" cx="443" cy="508" r="10"/>
-    <circle class="lane-dot"      cx="443" cy="508" r="4.5"/>
+    <line class="lane-line" x1="717" y1="346" x2="371" y2="590"/>
+    <circle class="lane-dot-ring" cx="648" cy="395" r="10"/>
+    <circle class="lane-dot"      cx="648" cy="395" r="4.5"/>
+    <circle class="lane-dot-ring" cx="441" cy="541" r="10"/>
+    <circle class="lane-dot"      cx="441" cy="541" r="4.5"/>
     <!-- operator model -> robot tools -->
-    <line class="lane-line" x1="717" y1="302" x2="1063" y2="562"/>
-    <circle class="lane-dot-ring" cx="789" cy="356" r="10"/>
-    <circle class="lane-dot"      cx="789" cy="356" r="4.5"/>
-    <circle class="lane-dot-ring" cx="991" cy="508" r="10"/>
-    <circle class="lane-dot"      cx="991" cy="508" r="4.5"/>
+    <line class="lane-line" x1="717" y1="346" x2="1063" y2="590"/>
+    <circle class="lane-dot-ring" cx="786" cy="395" r="10"/>
+    <circle class="lane-dot"      cx="786" cy="395" r="4.5"/>
+    <circle class="lane-dot-ring" cx="972" cy="526" r="10"/>
+    <circle class="lane-dot"      cx="972" cy="526" r="4.5"/>
   </svg>
 
   <!-- node: the operator ui -->
@@ -205,7 +205,7 @@
     </svg>
     <div>
       <h2>Operator UI</h2>
-      <div class="sub">Mission Control &amp; Reasoning Inspection</div>
+      <div class="sub">Mission Control<br>Reasoning Inspection</div>
     </div>
   </section>
 
@@ -221,7 +221,7 @@
     </svg>
     <div>
       <h2>Learn from Data</h2>
-      <div class="sub">data pipelines, model training</div>
+      <div class="sub">data pipelines<br>model training</div>
     </div>
   </section>
 
@@ -236,7 +236,7 @@
     </svg>
     <div>
       <h2>World</h2>
-      <div class="sub">Simulation, 3D Splat</div>
+      <div class="sub">Simulation<br>3D Splat</div>
     </div>
   </section>
 
@@ -299,7 +299,7 @@
     </svg>
     <div>
       <h2>Robot Tools</h2>
-      <div class="sub">open_door, take_lift, go_to(loc)</div>
+      <div class="sub">open_door<br>take_lift<br>go_to(loc)</div>
     </div>
   </section>
 </div>
