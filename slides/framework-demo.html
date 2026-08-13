@@ -50,26 +50,29 @@
   }
   *, *::before, *::after { box-sizing: inherit; }
 
+  /* ---- the slide: a banner strip, then the sheet ------------------------- */
+  .slide { width: min(1280px, 100%); container-type: inline-size; }
+
   /* ---- the sheet -------------------------------------------------------- */
   .stage {
-    position: relative; width: min(1280px, 100%); aspect-ratio: 16 / 9;
-    container-type: inline-size;
+    position: relative; width: 100%; aspect-ratio: 16 / 9;
     background:
       repeating-linear-gradient(0deg,   var(--grid-major) 0 1px, transparent 1px 120px),
       repeating-linear-gradient(90deg,  var(--grid-major) 0 1px, transparent 1px 120px),
       repeating-linear-gradient(0deg,   var(--grid) 0 1px, transparent 1px 24px),
       repeating-linear-gradient(90deg,  var(--grid) 0 1px, transparent 1px 24px),
       var(--sheet);
-    border: 1px solid var(--rule); border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--rule); border-radius: 0 0 6px 6px;
+    overflow: hidden;
   }
 
   /* ---- banner -------------------------------------------------------------- */
   .banner {
-    position: absolute; left: 0; right: 0; top: 0; z-index: 2;
     display: flex; align-items: baseline; gap: 1.6cqw;
-    border-bottom: 1px solid var(--rule);
+    border: 1px solid var(--rule); border-bottom: 0;
+    border-radius: 6px 6px 0 0;
     background: color-mix(in srgb, var(--sheet) 80%, var(--panel));
-    padding: 1.6cqh 4cqw;
+    padding: 1cqw 4cqw;
   }
   .banner .eyebrow {
     font: 600 0.95cqw/1 ui-monospace, "SF Mono", Menlo, monospace;
@@ -101,7 +104,7 @@
     position: absolute; transform: translate(-50%, -50%);
     display: flex; align-items: center; gap: 0.9cqw;
     background: var(--panel); border: 1px solid var(--rule); border-radius: 10px;
-    padding: 1.8cqh 1.6cqw; box-shadow: 0 10px 30px rgba(4, 10, 22, .25);
+    padding: 1cqw 1.6cqw; box-shadow: 0 10px 30px rgba(4, 10, 22, .25);
   }
   .node h2 {
     margin: 0;
@@ -109,7 +112,7 @@
     font-weight: 600; font-size: 2cqw; letter-spacing: 0.01em; white-space: nowrap;
   }
   .node .sub {
-    margin-top: 0.5cqh;
+    margin-top: 0.3cqw;
     font: 500 0.9cqw/1.45 ui-monospace, "SF Mono", Menlo, monospace;
     color: var(--muted); white-space: nowrap;
   }
@@ -144,12 +147,12 @@
   }
 </style>
 
+<div class="slide">
+<div class="banner">
+  <div class="eyebrow">demo world</div>
+  <h1>Multilevel Building</h1>
+</div>
 <div class="stage">
-  <div class="banner">
-    <div class="eyebrow">demo world</div>
-    <h1>Multilevel Building</h1>
-  </div>
-
   <svg class="lanes" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
        aria-hidden="true">
     <defs>
@@ -302,4 +305,5 @@
       <div class="sub">open_door<br>take_lift<br>go_to(loc)</div>
     </div>
   </section>
+</div>
 </div>
