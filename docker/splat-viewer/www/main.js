@@ -1144,6 +1144,10 @@ async function edgePicker(doc, choose, facing, keepPose) {
         if (play) play.textContent = "play";
         return true;
     };
+    // For the operator's reset: a teleport to the scene already on screen
+    // still has to re-stand the camera at the waypoint, and this is the one
+    // function that knows how.
+    window.__standHome = standHome;
 
     const walkTo = who => {
         const k = doc.walks.findIndex(w => w.to === who);
@@ -2799,6 +2803,10 @@ async function main() {
                 // and the backstop re-reads the truth once things are idle.
                 return;
             }
+            // An operator reset outranks the guards that protect ordinary
+            // moves: it is an explicit "be HERE", so the own-move memory is
+            // dropped rather than allowed to veto it.
+            if (truth.reset) window.__lastAt = null;
             // Ignore truth that predates a move of our own, briefly. The
             // server has been told; its next push will agree, and this one is
             // describing where we were.
@@ -2812,8 +2820,18 @@ async function main() {
             // which at a dead end is the corridor you arrived down. Turning to
             // it undid the arrival and faced you back the way you came.
             //
-            // A teleport changes scene, so it still gets its heading below.
-            if (truth.scene === here()) return;
+            // A teleport changes scene, so it still gets its heading below —
+            // and a reset to the scene already on screen still re-stands the
+            // camera at the waypoint, facing the corridor the marker draws.
+            if (truth.scene === here()) {
+                if (truth.reset && window.__standHome) {
+                    const short = String(truth.facing || "").split(".").pop();
+                    const lane = short && ((window.__paths || {}).lanes || [])
+                        .find((l) => l.to === short);
+                    window.__standHome(lane ? lane.dir : null);
+                }
+                return;
+            }
             fixing = true;                       // its own guard: ops.stand takes
             try {                                // seconds and must not re-enter
                 say(`following the model to ${shortOf(truth.scene)}`);

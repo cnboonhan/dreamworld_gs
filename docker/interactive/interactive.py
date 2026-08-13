@@ -458,6 +458,12 @@ def state_dict():
             "galaxea": bool(ST.get("galaxea")),
             "mission": ST.get("mission", ""),
             "todos": ST.get("todos", []),
+            # The mission engine's state, so the run button can be a light as
+            # well as a switch: the /agent call returns in milliseconds while
+            # the mission runs for minutes, and a reloaded dashboard must find
+            # the truth rather than assume idle.
+            "agent_busy": _BUSY.is_set(),
+            "agent_paused": not _RUN.is_set(),
             "built": built_scenes()}
 
 
@@ -505,7 +511,7 @@ def pose_pump():
             pass                      # the bridge going quiet is already reported
 
 
-def push_state():
+def push_state(reset=False):
     """Publish the truth. This server is the only writer of where the tour is;
     the splat viewer and the robot are followers, and both hear about a change
     the moment it happens rather than discovering it on their next poll.
@@ -514,6 +520,10 @@ def push_state():
     needing to disagree twice before acting, so a divergence could stand for
     four seconds. Pushing costs nothing — the command channel is already open —
     and closes that to about as long as one HTTP hop.
+
+    reset=True marks an operator teleport: the viewer treats it as outranking
+    the guards that protect ordinary moves, re-standing at the waypoint even
+    when it already shows the right scene.
     """
     st = state_dict()
     BUS.send({"type": "state", **st})
@@ -525,7 +535,8 @@ def push_state():
                  # vertex it passes, and those are not instructions to jump —
                  # the walk commands are already doing the moving, corridor by
                  # corridor, and they are what give the camera its heading.
-                 "moving": MOVE.locked()})
+                 "moving": MOVE.locked(),
+                 **({"reset": True} if reset else {})})
 
 
 def robot_watchdog():
@@ -625,6 +636,19 @@ def go_to(vertex):
     # any difference is bounded by one corridor and is corrected at every vertex.
     walked = []
     for u, v in zip(path, path[1:]):
+        # A cancel stops a route between legs. The tool gate stops the NEXT
+        # call, but one go_to is one call and can be many corridors — without
+        # this, "clear mission" let the current go_to walk the whole route
+        # first. Guarded by _BUSY so an operator's own go_to is never aborted
+        # by the stale flag of a mission cancelled long before.
+        if _BUSY.is_set() and _CANCEL.is_set():
+            drive_robot([u])
+            with ST["lock"]:
+                ST["cur"], ST["face"] = u, None
+            push_state()
+            return {"ok": False, "cancelled": True, "reached": walked,
+                    "at": lab(u),
+                    "error": f"mission cancelled — stopped at {lab(u)}"}
         # /goto's first act on a leg is to turn to face it, at TURN_RATE — the
         # same turn the viewer now makes before it departs. Both start here, and
         # both are given the SAME arc and distance rather than each deriving its
@@ -1632,6 +1656,7 @@ _AGENT = {"graph": None, "err": "not built"}
 _RUN = threading.Event()      # set = running, cleared = paused
 _RUN.set()
 _CANCEL = threading.Event()   # set = cancelled; tool calls become no-ops
+_BUSY = threading.Event()     # set while a mission thread is executing
 
 
 def _gate(fn):
@@ -1673,8 +1698,22 @@ def build_agent():
         return None
     tools = [StructuredTool.from_function(_gate(t["fn"]), name=n, description=t["desc"])
              for n, t in TOOLS.items()]
-    llm = ChatOpenAI(base_url=VLM_BASE_URL, api_key=VLM_API_KEY, model=VLM_MODEL,
-                     streaming=True, max_retries=1, timeout=120)
+
+    class GatedChat(ChatOpenAI):
+        """Pause gates the model, not just the tools. The tool gate stops the
+        next ACTION; this stops the next THOUGHT — a paused mission makes no
+        further VLM calls. The generation already in flight completes: there
+        is nothing graceful about aborting a streamed response mid-token."""
+        def _generate(self, *a, **k):
+            _RUN.wait()
+            return super()._generate(*a, **k)
+
+        def _stream(self, *a, **k):
+            _RUN.wait()
+            yield from super()._stream(*a, **k)
+
+    llm = GatedChat(base_url=VLM_BASE_URL, api_key=VLM_API_KEY, model=VLM_MODEL,
+                    streaming=True, max_retries=1, timeout=120)
     _AGENT["graph"] = create_deep_agent(model=llm, tools=tools,
                                         system_prompt=AGENT_PROMPT,
                                         checkpointer=MemorySaver())
@@ -1908,18 +1947,24 @@ const P=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'
 // tool calls + harness/state updates); paused it becomes RESUME.
 let agentRunning=false, agentPaused=false;
 function updateRunBtn(){const b=$('runbtn');if(!b)return;
- b.textContent=!agentRunning?'run mission':(agentPaused?'resume':'pause');
+ b.textContent=!agentRunning?'run mission':(agentPaused?'resume mission':'pause mission');
  b.classList.toggle('running',agentRunning&&!agentPaused);
  b.classList.toggle('paused',agentRunning&&agentPaused)}
 function onRunBtn(){
  if(!agentRunning)return runAgent();
  if(!agentPaused){agentPaused=true;updateRunBtn();P('/pause',{}).catch(()=>{})}
  else{agentPaused=false;updateRunBtn();P('/resume',{}).catch(()=>{})}}
+// The button tracks the MISSION, not the HTTP call: /agent returns in
+// milliseconds (the mission runs in a server thread), so resetting in a
+// finally flipped the button back to "run mission" while the robot had
+// minutes still to walk. State events carry agent_busy/agent_paused now and
+// onState keeps the button honest; here it only starts optimistically and
+// backs off if the server refused.
 async function runAgent(){const t=$('mbox').value.trim();if(!t)return;$('mbox').value='';
  agentRunning=true;agentPaused=false;updateRunBtn();
  try{const r=await P('/agent',{text:t});const j=await r.json();
-  if(!j.ok)logEv('err','agent: '+(j.error||'unavailable'))}catch(e){logEv('err','! '+e)}
- finally{agentRunning=false;agentPaused=false;updateRunBtn()}}
+  if(!j.ok){logEv('err','agent: '+(j.error||'unavailable'));agentRunning=false;updateRunBtn()}}
+ catch(e){logEv('err','! '+e);agentRunning=false;updateRunBtn()}}
 function cancelMission(){agentRunning=false;agentPaused=false;updateRunBtn();  // stop the agent + clear
  $('mbox').value='';setMission('');setTodos([]);  // inputs and panes empty now, not at the next broadcast
  P('/cancel',{}).catch(()=>{})}   // server wipes mission+subtasks and broadcasts the cleared state
@@ -1987,7 +2032,9 @@ function onState(s){
  $('pos').textContent='@ '+s.cur_label+(s.level?'  ·  '+s.level:'')
   +(s.heading!=null?'  ·  hdg '+s.heading+'°':'')
   +(s.door_open?'  ·  door→'+s.door_open+' open':'');
- setMission(s.mission);setTodos(s.todos);viewerLink(s);drawMap(s)}
+ setMission(s.mission);setTodos(s.todos);viewerLink(s);drawMap(s);
+ if(s.agent_busy!=null){agentRunning=!!s.agent_busy;
+  agentPaused=agentRunning&&!!s.agent_paused;updateRunBtn()}}
 
 // The rollout is the splat viewer, in its own window rather than a pane here: it
 // is a live WebGL scene, not a stream to embed. The viewer connects back to the
@@ -2462,7 +2509,7 @@ def reset():
     # {} not None: bridge() sends GET when there is no body, and /close_all is
     # POST — which came back 405 and was swallowed as "no doors closed".
     shut = bridge("/close_all", {})
-    push_state()
+    push_state(reset=True)
     _push_context()
     # Not logged. The log is what the agent reads back as `recent_log` to decide
     # what to do next, and an operator putting the robot somewhere is not
@@ -2492,7 +2539,9 @@ def r_agent():
     text = (request.get_json(force=True, silent=True) or {}).get("text", "")
     _CANCEL.clear()
     _RUN.set()
+    _BUSY.set()
     log(f"agent ▶ {text}", "mission")
+    push_state()      # the run button everywhere lights up now, not on a poll
     prompt = (f"New mission from the operator: {text}\n\nCurrent world model:\n"
               f"{build_context()}\n\nSet the mission and subtasks, then execute them.")
     cfg = {"configurable": {"thread_id": "interactive"}, "recursion_limit": 300}
@@ -2509,6 +2558,8 @@ def r_agent():
             log(f"agent error: {e}", "err")
         finally:
             _RUN.set()
+            _BUSY.clear()
+            push_state()      # and goes back to "run mission" when it ends
             _push_context()
 
     # In a thread: a mission is many walks long, and the operator needs /pause and
@@ -2522,7 +2573,8 @@ def r_pause():
     if request.method == "OPTIONS":
         return ("", 204)
     _RUN.clear()
-    log("⏸ paused — the agent's next tool call will block", "warn")
+    log("⏸ paused — the agent's next thought and tool call will block", "warn")
+    push_state()
     return jsonify(ok=True, paused=True)
 
 
@@ -2532,6 +2584,7 @@ def r_resume():
         return ("", 204)
     _RUN.set()
     log("▶ resumed")
+    push_state()
     return jsonify(ok=True, paused=False)
 
 
@@ -2541,6 +2594,10 @@ def r_cancel():
         return ("", 204)
     _CANCEL.set()
     _RUN.set()      # unblock a paused agent so it can see the cancel and stop
+    # Stop the robot too. A new /goto supersedes the one in flight, so sending
+    # the current waypoint halts a leg already being driven rather than
+    # letting it run on to the far end of a mission nobody wants any more.
+    drive_robot([ST["cur"]])
     # The button says clear, so the state clears: mission and subtasks to
     # empty, broadcast, so every dashboard shows the same nothing. The comment
     # in the dashboard's JS promised this for a while before it was true.
@@ -2548,6 +2605,7 @@ def r_cancel():
         ST["mission"] = ""
         ST["todos"] = []
     push_state()
+    _push_context()      # the agent's world-model pane resets with it
     log("✖ mission cancelled", "err")
     return jsonify(ok=True, cancelled=True)
 
