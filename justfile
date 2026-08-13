@@ -118,10 +118,20 @@ _env:
 # Job server, VLM, generator and both viewers come up together and stay up;
 # `just generate` depends on this recipe, so nothing needs launching by hand.
 #
+#   just up            the full stack
+#   just up minimal    the runtime four (compose.minimal.yaml): viewer, sim,
+#                      robot bridge, harness — for a box that only walks a
+#                      project someone else generated
+#
 # Start everything and print the URLs.
-up: _env
+up what="all": _env
     #!/usr/bin/env bash
     set -euo pipefail
+    case "{{what}}" in
+        all)     compose=(docker compose) ;;
+        minimal) compose=(docker compose -f {{repo}}/compose.minimal.yaml) ;;
+        *) echo "unknown: {{what}} — want all or minimal" >&2; exit 1 ;;
+    esac
     # Serialised. Every recipe that submits a job depends on this, so several
     # called together each call it too — and two `docker compose up` racing on
     # the same container leave one with "removal already in progress" and a
@@ -129,7 +139,9 @@ up: _env
     # only bites after a restart.
     exec 9>>{{repo}}/.up.lock
     flock 9
-    docker compose up -d --wait
+    # --remove-orphans: both files are one compose project, so switching shape
+    # stops what the other shape started instead of leaving it running beside.
+    "${compose[@]}" up -d --wait --remove-orphans
     python3 {{repo}}/scripts/summary.py {{assets}} {{project}} --urls
 
 # Everything about the project in one screen: where each waypoint is, how good

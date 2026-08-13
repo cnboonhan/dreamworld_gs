@@ -259,8 +259,8 @@ docker save dreamworld/splat-viewer dreamworld/interactive \
 # on the target
 docker load < dreamworld-runtime.tgz
 just unbundle <project>-<stamp>.tar.gz
-printf 'DW_PROJECT=<project>\nDW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" > .env
-docker compose -f compose.minimal.yaml up -d
+just up minimal            # or, without just:
+                           # docker compose -f compose.minimal.yaml up -d
 ```
 
 The mission agent still works there: point `DW_VLM_URL` at any
