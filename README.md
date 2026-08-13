@@ -238,6 +238,30 @@ Paths are stored as `assets/projects/<name>/...`, so an unbundle lands exactly
 where the stack looks. `unbundle` warns before merging into a project that
 already exists.
 
+**Running on the far side needs none of the generation stack.** A device that
+only walks, simulates and drives an already-generated project uses
+`compose.minimal.yaml`: the splat viewer, the RMF sim, the robot bridge and
+the harness — four services, no GPU, no Prefect, no model weights. Build the
+three images where there is network and carry them with the bundle:
+
+```bash
+# where the images exist
+docker save dreamworld/splat-viewer dreamworld/interactive \
+            dreamworld/rmf-tools | gzip > dreamworld-runtime.tgz
+
+# on the target
+docker load < dreamworld-runtime.tgz
+just unbundle <project>.tar.zst
+printf 'DW_PROJECT=<project>\nDW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+docker compose -f compose.minimal.yaml up -d
+```
+
+The mission agent still works there: point `DW_VLM_URL` at any
+OpenAI-compatible endpoint, or — if the device has a GPU and the weights —
+add `--profile vlm` to serve the default model locally. The two compose files
+share container names, so on the build box stop the full stack before trying
+the minimal one.
+
 ## Naming
 
 Every part of the building gets an id, and a panorama is named for the place it
