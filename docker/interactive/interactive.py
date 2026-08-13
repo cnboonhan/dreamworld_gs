@@ -1828,7 +1828,7 @@ header #mbox{flex:1;min-width:140px}
     <span><i style="background:#0d1117;border:1px solid #484f58"></i>no world yet</span></span></div>
    <div id=mapwrap><canvas id=map></canvas></div>
    <div id=middrag title="drag to resize the simulation"></div>
-   <div class=ph style="border-top:1px solid #30363d"><b>gazebo</b> — the robot, live in the sim
+   <div class=ph style="border-top:1px solid #30363d"><b>simulation</b> — the robot, live
     <a id=simpop target=_blank rel=noopener>open full ↗</a></div>
    <div id=sim><iframe id=simframe title="gazebo simulation over noVNC"></iframe></div>
    <div class=ph style="border-top:1px solid #30363d"><b>controls</b></div>
