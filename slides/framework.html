@@ -70,22 +70,22 @@
   /* ---- nodes -------------------------------------------------------------- */
   .node {
     position: absolute; transform: translate(-50%, -50%);
-    display: flex; align-items: center; gap: 1cqw;
+    display: flex; align-items: center; gap: 0.9cqw;
     background: var(--panel); border: 1px solid var(--rule); border-radius: 10px;
-    padding: 2.4cqh 2cqw; box-shadow: 0 10px 30px rgba(4, 10, 22, .25);
+    padding: 2cqh 1.8cqw; box-shadow: 0 10px 30px rgba(4, 10, 22, .25);
   }
   .node h2 {
     margin: 0;
     font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
-    font-weight: 600; font-size: 2.6cqw; letter-spacing: 0.01em; white-space: nowrap;
+    font-weight: 600; font-size: 2.2cqw; letter-spacing: 0.01em; white-space: nowrap;
   }
-  .node .glyph { width: 3.6cqw; height: 3.6cqw; flex-shrink: 0; }
+  .node .glyph { width: 3.2cqw; height: 3.2cqw; flex-shrink: 0; }
 
-  .node.world { left: 20%; top: 9%;  }
-  .node.sense { left: 20%; top: 30%; }
-  .node.model { left: 50%; top: 30%; }
-  .node.map   { left: 27%; top: 69%; }
-  .node.tools { left: 73%; top: 69%; }
+  .node.world { left: 7.5%;  top: 30%; }
+  .node.sense { left: 27.9%; top: 30%; }
+  .node.model { left: 56%;   top: 30%; }
+  .node.map   { left: 27%;   top: 69%; }
+  .node.tools { left: 73%;   top: 69%; }
 
   /* ---- one orchestrated entrance ----------------------------------------- */
   @media (prefers-reduced-motion: no-preference) {
@@ -97,7 +97,7 @@
     .node.tools { animation-delay: .45s; }
     @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
                       to   { opacity: 1; transform: translate(-50%, -50%); } }
-    .lane-line { stroke-dasharray: 420; stroke-dashoffset: 420;
+    .lane-line { stroke-dasharray: 480; stroke-dashoffset: 480;
                  animation: draw .7s ease .6s forwards; }
     @keyframes draw { to { stroke-dashoffset: 0; } }
     .lane-dot, .lane-dot-ring { opacity: 0; animation: appear .3s ease 1.2s forwards; }
@@ -111,30 +111,30 @@
        between cards shows. viewBox matches the stage's 16:9. -->
   <svg class="lanes" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
        aria-hidden="true">
-    <!-- world -> perception (the left column, straight down) -->
-    <line class="lane-line" x1="256" y1="65" x2="256" y2="216"/>
-    <circle class="lane-dot-ring" cx="256" cy="115" r="10"/>
-    <circle class="lane-dot"      cx="256" cy="115" r="4.5"/>
-    <circle class="lane-dot-ring" cx="256" cy="166" r="10"/>
-    <circle class="lane-dot"      cx="256" cy="166" r="4.5"/>
-    <!-- perception -> operator model (in from the left) -->
-    <line class="lane-line" x1="256" y1="216" x2="640" y2="216"/>
-    <circle class="lane-dot-ring" cx="395" cy="216" r="10"/>
-    <circle class="lane-dot"      cx="395" cy="216" r="4.5"/>
-    <circle class="lane-dot-ring" cx="432" cy="216" r="10"/>
-    <circle class="lane-dot"      cx="432" cy="216" r="4.5"/>
+    <!-- world -> perception (in from the left) -->
+    <line class="lane-line" x1="96" y1="216" x2="357" y2="216"/>
+    <circle class="lane-dot-ring" cx="187" cy="216" r="10"/>
+    <circle class="lane-dot"      cx="187" cy="216" r="4.5"/>
+    <circle class="lane-dot-ring" cx="234" cy="216" r="10"/>
+    <circle class="lane-dot"      cx="234" cy="216" r="4.5"/>
+    <!-- perception -> operator model -->
+    <line class="lane-line" x1="357" y1="216" x2="717" y2="216"/>
+    <circle class="lane-dot-ring" cx="481" cy="216" r="10"/>
+    <circle class="lane-dot"      cx="481" cy="216" r="4.5"/>
+    <circle class="lane-dot-ring" cx="529" cy="216" r="10"/>
+    <circle class="lane-dot"      cx="529" cy="216" r="4.5"/>
     <!-- operator model -> map -->
-    <line class="lane-line" x1="640" y1="216" x2="346" y2="497"/>
-    <circle class="lane-dot-ring" cx="590" cy="264" r="10"/>
-    <circle class="lane-dot"      cx="590" cy="264" r="4.5"/>
-    <circle class="lane-dot-ring" cx="396" cy="449" r="10"/>
-    <circle class="lane-dot"      cx="396" cy="449" r="4.5"/>
+    <line class="lane-line" x1="717" y1="216" x2="346" y2="497"/>
+    <circle class="lane-dot-ring" cx="655" cy="263" r="10"/>
+    <circle class="lane-dot"      cx="655" cy="263" r="4.5"/>
+    <circle class="lane-dot-ring" cx="408" cy="450" r="10"/>
+    <circle class="lane-dot"      cx="408" cy="450" r="4.5"/>
     <!-- operator model -> robot tools -->
-    <line class="lane-line" x1="640" y1="216" x2="934" y2="497"/>
-    <circle class="lane-dot-ring" cx="690" cy="264" r="10"/>
-    <circle class="lane-dot"      cx="690" cy="264" r="4.5"/>
-    <circle class="lane-dot-ring" cx="884" cy="449" r="10"/>
-    <circle class="lane-dot"      cx="884" cy="449" r="4.5"/>
+    <line class="lane-line" x1="717" y1="216" x2="934" y2="497"/>
+    <circle class="lane-dot-ring" cx="753" cy="263" r="10"/>
+    <circle class="lane-dot"      cx="753" cy="263" r="4.5"/>
+    <circle class="lane-dot-ring" cx="898" cy="450" r="10"/>
+    <circle class="lane-dot"      cx="898" cy="450" r="4.5"/>
   </svg>
 
   <!-- node: the world -->
