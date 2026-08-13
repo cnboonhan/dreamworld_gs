@@ -1,0 +1,284 @@
+<title>dreamworld — demo world slide</title>
+<style>
+  /* ---- tokens: night blueprint / drafting paper ------------------------ */
+  :root {
+    --bg: #0b1220;
+    --sheet: #0e1728;
+    --panel: #121d32;
+    --ink: #e8eef7;
+    --muted: #8fa0b8;
+    --rule: #24334d;
+    --grid: rgba(95, 168, 255, 0.05);
+    --grid-major: rgba(95, 168, 255, 0.10);
+    --map: #5fa8ff;
+    --tool: #ffb454;
+    --model: #b18cff;
+    --world: #45c8a8;
+    --sense: #ff7d9c;
+    --lane: #3d5a85;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
+      --ink: #17233a; --muted: #5d6b82; --rule: #cdd7e4;
+      --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
+      --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4;
+      --world: #0e8f74; --sense: #c2405f; --lane: #9db3cf;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1220; --sheet: #0e1728; --panel: #121d32;
+    --ink: #e8eef7; --muted: #8fa0b8; --rule: #24334d;
+    --grid: rgba(95, 168, 255, 0.05); --grid-major: rgba(95, 168, 255, 0.10);
+    --map: #5fa8ff; --tool: #ffb454; --model: #b18cff;
+    --world: #45c8a8; --sense: #ff7d9c; --lane: #3d5a85;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
+    --ink: #17233a; --muted: #5d6b82; --rule: #cdd7e4;
+    --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
+    --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4;
+    --world: #0e8f74; --sense: #c2405f; --lane: #9db3cf;
+  }
+
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    box-sizing: border-box;
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+
+  /* ---- the sheet -------------------------------------------------------- */
+  .stage {
+    position: relative; width: min(1280px, 100%); aspect-ratio: 16 / 9;
+    container-type: inline-size;
+    background:
+      repeating-linear-gradient(0deg,   var(--grid-major) 0 1px, transparent 1px 120px),
+      repeating-linear-gradient(90deg,  var(--grid-major) 0 1px, transparent 1px 120px),
+      repeating-linear-gradient(0deg,   var(--grid) 0 1px, transparent 1px 24px),
+      repeating-linear-gradient(90deg,  var(--grid) 0 1px, transparent 1px 24px),
+      var(--sheet);
+    border: 1px solid var(--rule); border-radius: 6px; overflow: hidden;
+  }
+
+  /* ---- banner -------------------------------------------------------------- */
+  .banner {
+    position: absolute; left: 4cqw; top: 5.5cqh;
+    border: 1px solid var(--rule); border-radius: 8px;
+    background: color-mix(in srgb, var(--sheet) 80%, var(--panel));
+    padding: 1.6cqh 1.6cqw;
+  }
+  .banner .eyebrow {
+    font: 600 0.85cqw/1 ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.22em; color: var(--muted); text-transform: uppercase;
+  }
+  .banner h1 {
+    margin: 0.7cqh 0 0;
+    font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+    font-weight: 600; font-size: 2.4cqw; letter-spacing: 0.01em;
+  }
+
+  /* ---- connector layer --------------------------------------------------- */
+  svg.lanes { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .lane-line { stroke: var(--lane); stroke-width: 2.5; fill: none; }
+  .lane-dot-ring { fill: none; stroke: var(--lane); stroke-width: 2; }
+  .lane-dot { fill: var(--ink); }
+  .lane-flow { stroke: var(--lane); stroke-width: 2.5; fill: none; }
+  .lane-dashed { stroke: var(--lane); stroke-width: 2.5; fill: none;
+                 stroke-dasharray: 7 7; }
+  .arrhead { fill: var(--lane); }
+  .lane-label {
+    font: 600 13px ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.18em; fill: var(--ink); opacity: 0.65;
+    text-transform: uppercase;
+  }
+
+  /* ---- nodes -------------------------------------------------------------- */
+  .node {
+    position: absolute; transform: translate(-50%, -50%);
+    display: flex; align-items: center; gap: 0.9cqw;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 1.8cqh 1.6cqw; box-shadow: 0 10px 30px rgba(4, 10, 22, .25);
+  }
+  .node h2 {
+    margin: 0;
+    font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+    font-weight: 600; font-size: 2cqw; letter-spacing: 0.01em; white-space: nowrap;
+  }
+  .node .sub {
+    margin-top: 0.5cqh;
+    font: 500 0.9cqw/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted); white-space: nowrap;
+  }
+  .node .glyph { width: 3cqw; height: 3cqw; flex-shrink: 0; }
+
+  .node.ui    { left: 56%;   top: 8%;  }
+  .node.world { left: 9.6%;  top: 42%; }
+  .node.sense { left: 30.8%; top: 42%; }
+  .node.model { left: 56%;   top: 42%; }
+  .node.map   { left: 29%;   top: 78%; }
+  .node.tools { left: 83%;   top: 78%; }
+
+  /* ---- one orchestrated entrance ----------------------------------------- */
+  @media (prefers-reduced-motion: no-preference) {
+    .node { opacity: 0; animation: rise .6s cubic-bezier(.2,.7,.3,1) forwards; }
+    .node.world { animation-delay: .05s; }
+    .node.sense { animation-delay: .15s; }
+    .node.model { animation-delay: .25s; }
+    .node.ui    { animation-delay: .35s; }
+    .node.map   { animation-delay: .45s; }
+    .node.tools { animation-delay: .55s; }
+    @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
+                      to   { opacity: 1; transform: translate(-50%, -50%); } }
+    .lane-line { stroke-dasharray: 480; stroke-dashoffset: 480;
+                 animation: draw .7s ease .6s forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    .lane-dot, .lane-dot-ring, .lane-flow, .lane-dashed, .lane-label {
+        opacity: 0; animation: appear .3s ease 1.2s forwards; }
+    @keyframes appear { to { opacity: 1; } }
+  }
+</style>
+
+<div class="stage">
+  <div class="banner">
+    <div class="eyebrow">demo world</div>
+    <h1>Multilevel Building</h1>
+  </div>
+
+  <svg class="lanes" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
+       aria-hidden="true">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path class="arrhead" d="M0 0 L10 5 L0 10 z"/>
+      </marker>
+    </defs>
+    <!-- operator model -> operator ui (one way, up) -->
+    <line class="lane-flow" x1="717" y1="249" x2="717" y2="112"
+          marker-end="url(#arr)"/>
+    <circle class="lane-dot" cx="717" cy="249" r="4.5"/>
+    <!-- operator ui -> operator model (dashed, right face to right face) -->
+    <path class="lane-dashed" marker-end="url(#arr)"
+          d="M 897 58 H 990 Q 1010 58 1010 78 V 282 Q 1010 302 990 302 H 888"/>
+    <text class="lane-label" x="1028" y="185">learn from data</text>
+    <!-- world -> perception (in from the left) -->
+    <line class="lane-line" x1="122" y1="302" x2="394" y2="302"/>
+    <circle class="lane-dot-ring" cx="247" cy="302" r="10"/>
+    <circle class="lane-dot"      cx="247" cy="302" r="4.5"/>
+    <circle class="lane-dot-ring" cx="280" cy="302" r="10"/>
+    <circle class="lane-dot"      cx="280" cy="302" r="4.5"/>
+    <!-- perception -> operator model -->
+    <line class="lane-line" x1="394" y1="302" x2="717" y2="302"/>
+    <circle class="lane-dot-ring" cx="509" cy="302" r="10"/>
+    <circle class="lane-dot"      cx="509" cy="302" r="4.5"/>
+    <circle class="lane-dot-ring" cx="544" cy="302" r="10"/>
+    <circle class="lane-dot"      cx="544" cy="302" r="4.5"/>
+    <!-- operator model -> map -->
+    <line class="lane-line" x1="717" y1="302" x2="371" y2="562"/>
+    <circle class="lane-dot-ring" cx="645" cy="356" r="10"/>
+    <circle class="lane-dot"      cx="645" cy="356" r="4.5"/>
+    <circle class="lane-dot-ring" cx="443" cy="508" r="10"/>
+    <circle class="lane-dot"      cx="443" cy="508" r="4.5"/>
+    <!-- operator model -> robot tools -->
+    <line class="lane-line" x1="717" y1="302" x2="1063" y2="562"/>
+    <circle class="lane-dot-ring" cx="789" cy="356" r="10"/>
+    <circle class="lane-dot"      cx="789" cy="356" r="4.5"/>
+    <circle class="lane-dot-ring" cx="991" cy="508" r="10"/>
+    <circle class="lane-dot"      cx="991" cy="508" r="4.5"/>
+  </svg>
+
+  <!-- node: the operator ui -->
+  <section class="node ui">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="7" y="10" width="34" height="28" rx="3" fill="none"
+            stroke="var(--ink)" stroke-width="2.4"/>
+      <path d="M7 18 h34" stroke="var(--ink)" stroke-width="2" opacity="0.7"/>
+      <circle cx="12" cy="14" r="1.6" fill="var(--ink)"/>
+      <path d="M12 25 h12 M12 31 h18" stroke="var(--ink)" stroke-width="2"
+            stroke-linecap="round" opacity="0.7"/>
+    </svg>
+    <div>
+      <h2>Operator UI</h2>
+      <div class="sub">Mission Control &amp; Reasoning Inspection</div>
+    </div>
+  </section>
+
+  <!-- node: the world -->
+  <section class="node world">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="24" r="15" fill="none" stroke="var(--world)" stroke-width="2.4"/>
+      <path d="M24 9 c-7.5 0 -7.5 30 0 30 c7.5 0 7.5 -30 0 -30 z" fill="none"
+            stroke="var(--world)" stroke-width="2" opacity="0.7"/>
+      <path d="M11 18 h26 M9 24 h30 M11 30 h26" fill="none"
+            stroke="var(--world)" stroke-width="2" opacity="0.7"/>
+    </svg>
+    <div>
+      <h2>World</h2>
+      <div class="sub">Simulation, 3D Splat</div>
+    </div>
+  </section>
+
+  <!-- node: perception -->
+  <section class="node sense">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M6 24 C14 11, 34 11, 42 24 C34 37, 14 37, 6 24 z" fill="none"
+            stroke="var(--sense)" stroke-width="2.4" stroke-linejoin="round"/>
+      <circle cx="24" cy="24" r="6.5" fill="none" stroke="var(--sense)" stroke-width="2.2"/>
+      <circle cx="24" cy="24" r="2.4" fill="var(--sense)"/>
+    </svg>
+    <div>
+      <h2>Perception</h2>
+      <div class="sub">/door_states<br>/lift_states<br>/robot_state</div>
+    </div>
+  </section>
+
+  <!-- node: the operator model -->
+  <section class="node model">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M24 9 c-4 -1 -8 1 -9 5 c-4 0 -7 3 -7 7 c0 3 2 6 5 7 c0 4 3 7 7 7
+               c2 0 3 -1 4 -2 c1 1 2 2 4 2 c4 0 7 -3 7 -7 c3 -1 5 -4 5 -7
+               c0 -4 -3 -7 -7 -7 c-1 -4 -5 -6 -9 -5 z"
+            fill="none" stroke="var(--model)" stroke-width="2.4"
+            stroke-linejoin="round"/>
+      <path d="M24 10 v23" fill="none" stroke="var(--model)" stroke-width="2"
+            opacity="0.7"/>
+      <path d="M16 20 c2 1.5 4 1.5 6 0 M26 26 c2 -1.5 4 -1.5 6 0"
+            fill="none" stroke="var(--model)" stroke-width="2"
+            stroke-linecap="round" opacity="0.7"/>
+    </svg>
+    <div>
+      <h2>Operator Model (VLM)</h2>
+      <div class="sub">Agentic Models</div>
+    </div>
+  </section>
+
+  <!-- node: the map -->
+  <section class="node map">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M9 36 L21 12 M21 12 L39 20 M21 12 L36 38" fill="none"
+            stroke="var(--map)" stroke-width="2" opacity="0.55"/>
+      <circle cx="9"  cy="36" r="4" fill="var(--panel)" stroke="var(--map)" stroke-width="2"/>
+      <circle cx="39" cy="20" r="4" fill="var(--panel)" stroke="var(--map)" stroke-width="2"/>
+      <circle cx="36" cy="38" r="4" fill="var(--panel)" stroke="var(--map)" stroke-width="2"/>
+      <circle cx="21" cy="12" r="5" fill="var(--map)"/>
+    </svg>
+    <div>
+      <h2>Map</h2>
+      <div class="sub">Annotated Scene Graph</div>
+    </div>
+  </section>
+
+  <!-- node: robot tools -->
+  <section class="node tools">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M24 8 v10 M24 30 v10 M8 24 h10 M30 24 h10" fill="none"
+            stroke="var(--tool)" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="24" cy="24" r="4.5" fill="var(--tool)"/>
+    </svg>
+    <div>
+      <h2>Robot Tools</h2>
+      <div class="sub">open_door, take_lift, go_to(loc)</div>
+    </div>
+  </section>
+</div>
