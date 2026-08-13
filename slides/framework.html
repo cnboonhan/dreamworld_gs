@@ -66,6 +66,16 @@
   .lane-line { stroke: var(--lane); stroke-width: 2.5; fill: none; }
   .lane-dot-ring { fill: none; stroke: var(--lane); stroke-width: 2; }
   .lane-dot { fill: var(--ink); }
+  /* directed flows: an arrow instead of a ring at the destination */
+  .lane-flow { stroke: var(--lane); stroke-width: 2.5; fill: none; }
+  .lane-dashed { stroke: var(--lane); stroke-width: 2.5; fill: none;
+                 stroke-dasharray: 7 7; }
+  .arrhead { fill: var(--lane); }
+  .lane-label {
+    font: 600 13px ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.18em; fill: var(--ink); opacity: 0.65;
+    text-transform: uppercase;
+  }
 
   /* ---- nodes -------------------------------------------------------------- */
   .node {
@@ -81,6 +91,7 @@
   }
   .node .glyph { width: 3.2cqw; height: 3.2cqw; flex-shrink: 0; }
 
+  .node.ui    { left: 56%;   top: 9%;  }
   .node.world { left: 7.5%;  top: 30%; }
   .node.sense { left: 27.9%; top: 30%; }
   .node.model { left: 56%;   top: 30%; }
@@ -93,14 +104,16 @@
     .node.world { animation-delay: .05s; }
     .node.sense { animation-delay: .15s; }
     .node.model { animation-delay: .25s; }
-    .node.map   { animation-delay: .35s; }
-    .node.tools { animation-delay: .45s; }
+    .node.ui    { animation-delay: .35s; }
+    .node.map   { animation-delay: .45s; }
+    .node.tools { animation-delay: .55s; }
     @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
                       to   { opacity: 1; transform: translate(-50%, -50%); } }
     .lane-line { stroke-dasharray: 480; stroke-dashoffset: 480;
                  animation: draw .7s ease .6s forwards; }
     @keyframes draw { to { stroke-dashoffset: 0; } }
-    .lane-dot, .lane-dot-ring { opacity: 0; animation: appear .3s ease 1.2s forwards; }
+    .lane-dot, .lane-dot-ring, .lane-flow, .lane-dashed, .lane-label {
+        opacity: 0; animation: appear .3s ease 1.2s forwards; }
     @keyframes appear { to { opacity: 1; } }
   }
 </style>
@@ -111,6 +124,20 @@
        between cards shows. viewBox matches the stage's 16:9. -->
   <svg class="lanes" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
        aria-hidden="true">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path class="arrhead" d="M0 0 L10 5 L0 10 z"/>
+      </marker>
+    </defs>
+    <!-- operator model -> operator ui (one way, up) -->
+    <line class="lane-flow" x1="717" y1="170" x2="717" y2="112"
+          marker-end="url(#arr)"/>
+    <circle class="lane-dot" cx="717" cy="170" r="4.5"/>
+    <!-- operator ui -> operator model (dashed, right face to right face) -->
+    <path class="lane-dashed" marker-end="url(#arr)"
+          d="M 837 65 H 950 Q 970 65 970 85 V 196 Q 970 216 950 216 H 903"/>
+    <text class="lane-label" x="988" y="146">learn from data</text>
     <!-- world -> perception (in from the left) -->
     <line class="lane-line" x1="96" y1="216" x2="357" y2="216"/>
     <circle class="lane-dot-ring" cx="187" cy="216" r="10"/>
@@ -136,6 +163,19 @@
     <circle class="lane-dot-ring" cx="898" cy="450" r="10"/>
     <circle class="lane-dot"      cx="898" cy="450" r="4.5"/>
   </svg>
+
+  <!-- node: the operator ui -->
+  <section class="node ui">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="7" y="10" width="34" height="28" rx="3" fill="none"
+            stroke="var(--ink)" stroke-width="2.4"/>
+      <path d="M7 18 h34" stroke="var(--ink)" stroke-width="2" opacity="0.7"/>
+      <circle cx="12" cy="14" r="1.6" fill="var(--ink)"/>
+      <path d="M12 25 h12 M12 31 h18" stroke="var(--ink)" stroke-width="2"
+            stroke-linecap="round" opacity="0.7"/>
+    </svg>
+    <h2>Operator UI</h2>
+  </section>
 
   <!-- node: the world -->
   <section class="node world">
