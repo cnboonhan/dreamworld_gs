@@ -1765,6 +1765,12 @@ input:focus{outline:0;border-color:#1f6feb}
 .go.paused{background:#238636}    /* paused -> button shows RESUME (green) */
 .hint{color:#6e7681;font-size:11px}
 #mapwrap{padding:4px;overflow:hidden;background:#0a0d12;flex:1;min-height:0;display:flex}
+/* The sim, embedded: rmfsim's noVNC screen in a pane under the map, resizable
+   by the splitter above it. A fixed default height; the map flexes. */
+#sim{flex:0 0 34%;min-height:90px}
+#simframe{border:0;width:100%;flex:1;min-height:0;background:#0a0d12}
+#simpop{float:right;font-size:11px;color:#8b949e;text-decoration:none}
+#simpop:hover{color:#58a6ff}
 #map{display:block;width:100%;height:100%;image-rendering:auto;border:1px solid #30363d;border-radius:4px}
 #mission{font-size:13px;color:#cae8ff;min-height:20px;white-space:pre-wrap;background:#051d40;border:1px solid #1f6feb;border-radius:4px;padding:8px}
 #mission.empty{color:#6e7681;background:#0d1117;border-color:#30363d}
@@ -1840,6 +1846,12 @@ header #mbox{flex:1;min-width:140px}
      not something the agent can do</div>
    </div>
   </div>
+  <div id=middrag title="drag to resize the simulation"></div>
+  <div class="panel" id=sim>
+   <div class=ph><b>gazebo</b> — the robot, live in the sim
+    <a id=simpop target=_blank rel=noopener>open full ↗</a></div>
+   <iframe id=simframe title="gazebo simulation over noVNC"></iframe>
+  </div>
  </div>
  <div id=drag title="drag to resize"></div>
  <div class="panel" id=right>
@@ -1867,6 +1879,26 @@ header #mbox{flex:1;min-width:140px}
   window.addEventListener('mousemove',e=>{if(!on)return;const r=col.getBoundingClientRect();
     const h=Math.max(44,Math.min(r.height-120, r.bottom-e.clientY));log.style.height=h+'px';});
   window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
+})();
+// Resizable sim pane: drag the splitter under the controls to set its height
+// (the map above flexes, and refits its canvas as it goes).
+(function(){
+  const d=document.getElementById('middrag'), sim=document.getElementById('sim'), col=document.getElementById('stack');
+  let on=false;
+  d.addEventListener('mousedown',e=>{on=true;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
+  window.addEventListener('mousemove',e=>{if(!on)return;const r=col.getBoundingClientRect();
+    const h=Math.max(90,Math.min(r.height-180, r.bottom-e.clientY));sim.style.flexBasis=h+'px';
+    fitCanvas();if(last)drawMap(last);});
+  window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
+})();
+// The gazebo pane's source: rmfsim's noVNC, autoconnecting and scaled to fit.
+// Built from the page's own hostname so a tunnelled dashboard embeds the
+// tunnelled sim; the port is rmfsim's default (DW_RMF_PORT) — like the
+// viewer's :8086 assumption, a changed port means using "open full" instead.
+(function(){
+  const base=location.protocol+'//'+location.hostname+':8083';
+  document.getElementById('simframe').src=base+'/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000';
+  document.getElementById('simpop').href=base;
 })();
 const $=id=>document.getElementById(id);
 let G=null, FP=new Image(), fpReady=false, last=null;
