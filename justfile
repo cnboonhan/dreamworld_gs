@@ -94,8 +94,15 @@ _env:
     # one-command override (DW_PROJECT=x just ...), and an override must not
     # quietly become the new default — only `just use` switches.
     active=$(sed -n 's/^DW_PROJECT=//p' {{repo}}/.env 2>/dev/null | tail -1)
-    printf 'DW_UID=%s\nDW_GID=%s\nDW_PROJECT=%s\n' \
-        "$(id -u)" "$(id -g)" "${active:-{{project}}}" > {{repo}}/.env
+    # And keep every OTHER line. .env is also where deployment settings and
+    # secrets live — DW_VLM_KEY, DW_VLM_URL, port overrides — and this recipe
+    # owns three variables, not the file. It used to rewrite the whole thing,
+    # which silently deleted an API key on the next `just up`.
+    keep=$(grep -v '^DW_UID=\|^DW_GID=\|^DW_PROJECT=' {{repo}}/.env 2>/dev/null || true)
+    { printf 'DW_UID=%s\nDW_GID=%s\nDW_PROJECT=%s\n' \
+          "$(id -u)" "$(id -g)" "${active:-{{project}}}"
+      if [ -n "$keep" ]; then printf '%s\n' "$keep"; fi
+    } > {{repo}}/.env
     # Seed the sample project, so the RMF sim has a building to open. Copies
     # only what is missing (-n), so an existing project — or an edited map — is
     # never overwritten. Every project gets the same four drawers.
