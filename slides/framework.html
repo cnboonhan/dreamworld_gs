@@ -9,8 +9,9 @@
     --rule: #24334d;
     --grid: rgba(95, 168, 255, 0.05);
     --grid-major: rgba(95, 168, 255, 0.10);
-    --map: #5fa8ff;        /* blueprint blue — the map side */
-    --tool: #ffb454;       /* actuator amber — the tools side */
+    --map: #5fa8ff;        /* blueprint blue — the map */
+    --tool: #ffb454;       /* actuator amber — the tools */
+    --model: #b18cff;      /* violet — the model */
     --lane: #3d5a85;
   }
   @media (prefers-color-scheme: light) {
@@ -18,20 +19,20 @@
       --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
       --ink: #17233a; --rule: #cdd7e4;
       --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
-      --map: #2f6fd0; --tool: #b26f00; --lane: #9db3cf;
+      --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4; --lane: #9db3cf;
     }
   }
   :root[data-theme="dark"] {
     --bg: #0b1220; --sheet: #0e1728; --panel: #121d32;
     --ink: #e8eef7; --rule: #24334d;
     --grid: rgba(95, 168, 255, 0.05); --grid-major: rgba(95, 168, 255, 0.10);
-    --map: #5fa8ff; --tool: #ffb454; --lane: #3d5a85;
+    --map: #5fa8ff; --tool: #ffb454; --model: #b18cff; --lane: #3d5a85;
   }
   :root[data-theme="light"] {
     --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
     --ink: #17233a; --rule: #cdd7e4;
     --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
-    --map: #2f6fd0; --tool: #b26f00; --lane: #9db3cf;
+    --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4; --lane: #9db3cf;
   }
 
   body {
@@ -75,35 +76,62 @@
   }
   .node .glyph { width: 4cqw; height: 4cqw; flex-shrink: 0; }
 
-  .node.map   { left: 27%; top: 50%; }
-  .node.tools { left: 73%; top: 50%; }
+  .node.model { left: 50%; top: 30%; }
+  .node.map   { left: 27%; top: 69%; }
+  .node.tools { left: 73%; top: 69%; }
 
   /* ---- one orchestrated entrance ----------------------------------------- */
   @media (prefers-reduced-motion: no-preference) {
     .node { opacity: 0; animation: rise .6s cubic-bezier(.2,.7,.3,1) forwards; }
-    .node.map   { animation-delay: .1s; }
-    .node.tools { animation-delay: .25s; }
+    .node.model { animation-delay: .1s; }
+    .node.map   { animation-delay: .2s; }
+    .node.tools { animation-delay: .3s; }
     @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
                       to   { opacity: 1; transform: translate(-50%, -50%); } }
-    .lane-line { stroke-dasharray: 340; stroke-dashoffset: 340;
-                 animation: draw .7s ease .45s forwards; }
+    .lane-line { stroke-dasharray: 420; stroke-dashoffset: 420;
+                 animation: draw .7s ease .5s forwards; }
     @keyframes draw { to { stroke-dashoffset: 0; } }
-    .lane-dot, .lane-dot-ring { opacity: 0; animation: appear .3s ease 1.05s forwards; }
+    .lane-dot, .lane-dot-ring { opacity: 0; animation: appear .3s ease 1.1s forwards; }
     @keyframes appear { to { opacity: 1; } }
   }
 </style>
 
 <div class="stage">
-  <!-- connector: one lane, waypoint dots at both ends.
-       viewBox matches the stage's 16:9 so coordinates stay put as it scales. -->
+  <!-- connectors: lanes with waypoint rings at their visible ends. Lines run
+       centre to centre and the node cards sit on top, so only the corridor
+       between cards shows. viewBox matches the stage's 16:9. -->
   <svg class="lanes" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
        aria-hidden="true">
-    <line class="lane-line" x1="472" y1="360" x2="808" y2="360"/>
-    <circle class="lane-dot-ring" cx="472" cy="360" r="10"/>
-    <circle class="lane-dot"      cx="472" cy="360" r="4.5"/>
-    <circle class="lane-dot-ring" cx="808" cy="360" r="10"/>
-    <circle class="lane-dot"      cx="808" cy="360" r="4.5"/>
+    <!-- operator model -> map -->
+    <line class="lane-line" x1="640" y1="216" x2="346" y2="497"/>
+    <circle class="lane-dot-ring" cx="589" cy="265" r="10"/>
+    <circle class="lane-dot"      cx="589" cy="265" r="4.5"/>
+    <circle class="lane-dot-ring" cx="397" cy="448" r="10"/>
+    <circle class="lane-dot"      cx="397" cy="448" r="4.5"/>
+    <!-- operator model -> robot tools -->
+    <line class="lane-line" x1="640" y1="216" x2="934" y2="497"/>
+    <circle class="lane-dot-ring" cx="691" cy="265" r="10"/>
+    <circle class="lane-dot"      cx="691" cy="265" r="4.5"/>
+    <circle class="lane-dot-ring" cx="883" cy="448" r="10"/>
+    <circle class="lane-dot"      cx="883" cy="448" r="4.5"/>
   </svg>
+
+  <!-- node: the operator model -->
+  <section class="node model">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M24 9 c-4 -1 -8 1 -9 5 c-4 0 -7 3 -7 7 c0 3 2 6 5 7 c0 4 3 7 7 7
+               c2 0 3 -1 4 -2 c1 1 2 2 4 2 c4 0 7 -3 7 -7 c3 -1 5 -4 5 -7
+               c0 -4 -3 -7 -7 -7 c-1 -4 -5 -6 -9 -5 z"
+            fill="none" stroke="var(--model)" stroke-width="2.4"
+            stroke-linejoin="round"/>
+      <path d="M24 10 v23" fill="none" stroke="var(--model)" stroke-width="2"
+            opacity="0.7"/>
+      <path d="M16 20 c2 1.5 4 1.5 6 0 M26 26 c2 -1.5 4 -1.5 6 0"
+            fill="none" stroke="var(--model)" stroke-width="2"
+            stroke-linecap="round" opacity="0.7"/>
+    </svg>
+    <h2>Operator Model (VLM)</h2>
+  </section>
 
   <!-- node: the map -->
   <section class="node map">
