@@ -1,0 +1,190 @@
+<title>dreamworld — framework slide</title>
+<style>
+  /* ---- tokens: night blueprint / drafting paper ------------------------ */
+  :root {
+    --bg: #0b1220;
+    --sheet: #0e1728;
+    --panel: #121d32;
+    --ink: #e8eef7;
+    --muted: #8fa0b8;
+    --rule: #24334d;
+    --grid: rgba(95, 168, 255, 0.05);
+    --grid-major: rgba(95, 168, 255, 0.10);
+    --map: #5fa8ff;        /* blueprint blue — the map side */
+    --tool: #ffb454;       /* actuator amber — the tools side */
+    --lane: #3d5a85;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
+      --ink: #17233a; --muted: #5d6b82; --rule: #cdd7e4;
+      --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
+      --map: #2f6fd0; --tool: #b26f00; --lane: #9db3cf;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1220; --sheet: #0e1728; --panel: #121d32;
+    --ink: #e8eef7; --muted: #8fa0b8; --rule: #24334d;
+    --grid: rgba(95, 168, 255, 0.05); --grid-major: rgba(95, 168, 255, 0.10);
+    --map: #5fa8ff; --tool: #ffb454; --lane: #3d5a85;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
+    --ink: #17233a; --muted: #5d6b82; --rule: #cdd7e4;
+    --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
+    --map: #2f6fd0; --tool: #b26f00; --lane: #9db3cf;
+  }
+
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    box-sizing: border-box;
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+
+  /* ---- the sheet -------------------------------------------------------- */
+  .stage {
+    position: relative; width: min(1280px, 100%); aspect-ratio: 16 / 9;
+    container-type: inline-size;
+    background:
+      repeating-linear-gradient(0deg,   var(--grid-major) 0 1px, transparent 1px 120px),
+      repeating-linear-gradient(90deg,  var(--grid-major) 0 1px, transparent 1px 120px),
+      repeating-linear-gradient(0deg,   var(--grid) 0 1px, transparent 1px 24px),
+      repeating-linear-gradient(90deg,  var(--grid) 0 1px, transparent 1px 24px),
+      var(--sheet);
+    border: 1px solid var(--rule); border-radius: 6px; overflow: hidden;
+  }
+
+  /* ---- header ------------------------------------------------------------ */
+  .head { position: absolute; left: 4.5cqw; top: 5.5cqh; }
+  .eyebrow {
+    font: 600 1.05cqw/1 ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.22em; color: var(--muted); text-transform: uppercase;
+  }
+  .head h1 {
+    margin: 0.8cqh 0 0;
+    font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+    font-weight: 600; font-size: 3.4cqw; letter-spacing: 0.01em; text-wrap: balance;
+  }
+
+  /* ---- title block (engineering sheet corner) --------------------------- */
+  .tblock {
+    position: absolute; right: 0; bottom: 0;
+    border-left: 1px solid var(--rule); border-top: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--sheet) 88%, var(--panel));
+    font: 500 0.95cqw/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted); min-width: 22cqw;
+  }
+  .tblock div { padding: 0.9cqh 1.4cqw; }
+  .tblock div + div { border-top: 1px solid var(--rule); }
+  .tblock b { color: var(--ink); font-weight: 600; }
+
+  /* ---- connector layer --------------------------------------------------- */
+  svg.lanes { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .lane-line { stroke: var(--lane); stroke-width: 2.5; fill: none; }
+  .lane-dot-ring { fill: none; stroke: var(--lane); stroke-width: 2; }
+  .lane-dot { fill: var(--ink); }
+  .lane-label {
+    font: 600 13px ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.18em; fill: var(--muted); text-transform: uppercase;
+  }
+
+  /* ---- nodes -------------------------------------------------------------- */
+  .node {
+    position: absolute; width: 26cqw; transform: translate(-50%, -50%);
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 2.2cqh 1.6cqw 2.4cqh; box-shadow: 0 10px 30px rgba(4, 10, 22, .25);
+  }
+  .node .tag {
+    font: 600 0.85cqw/1 ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.2em; text-transform: uppercase;
+  }
+  .node h2 {
+    margin: 1.1cqh 0 0.9cqh;
+    font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+    font-weight: 600; font-size: 2.5cqw; letter-spacing: 0.01em;
+  }
+  .node p { margin: 0; font-size: 1.15cqw; line-height: 1.5; color: var(--muted); }
+  .node .vocab {
+    margin-top: 1.4cqh; padding-top: 1.2cqh; border-top: 1px dashed var(--rule);
+    font: 500 1cqw/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink);
+  }
+  .node .glyph { position: absolute; top: 2cqh; right: 1.5cqw; width: 4cqw; height: 4cqw; }
+
+  .node.map  { left: 26%; top: 52%; }
+  .node.map .tag  { color: var(--map); }
+  .node.tools { left: 74%; top: 52%; }
+  .node.tools .tag { color: var(--tool); }
+
+  /* ---- one orchestrated entrance ----------------------------------------- */
+  @media (prefers-reduced-motion: no-preference) {
+    .node { opacity: 0; animation: rise .6s cubic-bezier(.2,.7,.3,1) forwards; }
+    .node.map   { animation-delay: .1s; }
+    .node.tools { animation-delay: .25s; }
+    @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
+                      to   { opacity: 1; transform: translate(-50%, -50%); } }
+    .lane-line { stroke-dasharray: 340; stroke-dashoffset: 340;
+                 animation: draw .7s ease .45s forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    .lane-dot, .lane-dot-ring, .lane-label { opacity: 0; animation: appear .3s ease forwards; }
+    .lane-dot, .lane-dot-ring { animation-delay: 1.05s; }
+    .lane-label { animation-delay: 1.15s; }
+    @keyframes appear { to { opacity: 1; } }
+  }
+</style>
+
+<div class="stage">
+  <header class="head">
+    <div class="eyebrow">dreamworld_gs · the framework</div>
+    <h1>Components, drawn as a floorplan</h1>
+  </header>
+
+  <!-- connectors: one lane, waypoint dots at both ends, label above.
+       viewBox matches the stage's 16:9 so coordinates stay put as it scales. -->
+  <svg class="lanes" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
+       aria-hidden="true">
+    <line class="lane-line" x1="502" y1="374" x2="778" y2="374"/>
+    <circle class="lane-dot-ring" cx="502" cy="374" r="10"/>
+    <circle class="lane-dot"      cx="502" cy="374" r="4.5"/>
+    <circle class="lane-dot-ring" cx="778" cy="374" r="10"/>
+    <circle class="lane-dot"      cx="778" cy="374" r="4.5"/>
+    <text class="lane-label" x="640" y="348" text-anchor="middle">every call names a place</text>
+  </svg>
+
+  <!-- node: the map -->
+  <section class="node map">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M9 36 L21 12 M21 12 L39 20 M21 12 L36 38" fill="none"
+            stroke="var(--map)" stroke-width="2" opacity="0.55"/>
+      <circle cx="9"  cy="36" r="4" fill="var(--panel)" stroke="var(--map)" stroke-width="2"/>
+      <circle cx="39" cy="20" r="4" fill="var(--panel)" stroke="var(--map)" stroke-width="2"/>
+      <circle cx="36" cy="38" r="4" fill="var(--panel)" stroke="var(--map)" stroke-width="2"/>
+      <circle cx="21" cy="12" r="5" fill="var(--map)"/>
+    </svg>
+    <div class="tag">shared vocabulary</div>
+    <h2>Map</h2>
+    <p>Named places, the corridors between them, and every door and lift —
+       the one language the whole framework speaks.</p>
+    <div class="vocab">L11.lift_lobby · lanes · doors · lifts</div>
+  </section>
+
+  <!-- node: robot tools -->
+  <section class="node tools">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M24 8 v10 M24 30 v10 M8 24 h10 M30 24 h10" fill="none"
+            stroke="var(--tool)" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="24" cy="24" r="4.5" fill="var(--tool)"/>
+    </svg>
+    <div class="tag">verified surface</div>
+    <h2>Robot Tools</h2>
+    <p>One call per capability, checked against the world after each —
+       the same surface a real fleet implements.</p>
+    <div class="vocab">go_to · open_door · take_lift · pick</div>
+  </section>
+
+  <div class="tblock">
+    <div><b>dreamworld_gs</b> — framework sheet</div>
+    <div>SHT 01 · nodes 2 · <b>iterating</b></div>
+  </div>
+</div>
