@@ -9,11 +9,10 @@
 #
 # What is deliberately absent: Prefect and both job workers (nothing is
 # generated here), the panorama editor and its model (editing happens where
-# the GPUs are), the pano viewer (nice, not needed). The mission agent still
-# works — point DW_VLM_URL at any OpenAI-compatible endpoint, or, if this
-# device has a GPU, bring the bundled model up with:
-#
-#   docker compose -f compose.minimal.yaml --profile vlm up -d
+# the GPUs are), the pano viewer (nice, not needed), and the VLM (no GPU
+# assumed). The mission agent still works — point DW_VLM_URL at any
+# OpenAI-compatible endpoint; a device with a GPU that wants the model
+# locally runs the full compose.yaml instead.
 #
 # Offline target: build the three images where there is network and carry
 # them over —
@@ -128,39 +127,10 @@ services:
       GALAXEA_URL: "http://localhost:${DW_GALAXEA_PORT:-8090}"
       DRIVE_SPEED: "${DW_DRIVE_SPEED:-2.0}"
       TURN_RATE: "${DW_TURN_RATE:-1.25}"
-      # The mission agent's model. On a GPU-less runtime box, point this at
-      # an endpoint elsewhere; with a GPU, `--profile vlm` serves the default.
+      # The mission agent's model — an endpoint, not a service here. Point it
+      # wherever an OpenAI-compatible server answers; without one, every tool
+      # stays directly callable and only missions are off.
       VLM_BASE_URL: "${DW_VLM_URL:-http://localhost:8000/v1}"
       VLM_API_KEY: "${DW_VLM_KEY:-x}"
       VLM_MODEL: "${DW_VLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}"
-    restart: unless-stopped
-
-  # Opt-in: only when this device has a GPU and the weights (assets/hf).
-  vlm:
-    profiles: ["vlm"]
-    image: vllm/vllm-openai:v0.11.0
-    container_name: dreamworld-vlm
-    network_mode: host
-    ipc: host
-    volumes:
-      - ./assets/hf:/hf:ro
-    environment:
-      HF_HOME: /hf
-      HF_HUB_OFFLINE: "1"
-    command:
-      - --model=${DW_VLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
-      - --port=8000
-      - --host=127.0.0.1
-      - --max-model-len=32768
-      - --trust-remote-code
-      - --gpu-memory-utilization=0.80
-      - --enable-auto-tool-choice
-      - --tool-call-parser=hermes
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
     restart: unless-stopped

@@ -260,10 +260,10 @@ docker compose -f compose.minimal.yaml up -d
 ```
 
 The mission agent still works there: point `DW_VLM_URL` at any
-OpenAI-compatible endpoint, or — if the device has a GPU and the weights —
-add `--profile vlm` to serve the default model locally. The two compose files
-share container names, so on the build box stop the full stack before trying
-the minimal one.
+OpenAI-compatible endpoint — the minimal file runs no model of its own, and a
+device that wants one locally runs the full `compose.yaml`. The two compose
+files share container names, so on the build box stop the full stack before
+trying the minimal one.
 
 ## Naming
 
