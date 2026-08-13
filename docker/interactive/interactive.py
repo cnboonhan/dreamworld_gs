@@ -1286,19 +1286,31 @@ def handle(text):
     t = " ".join(str(text).split()).lower()
     if not t:
         return {"ok": False, "error": "say something"}
+
+    # The same one-move-at-a-time promise /invoke makes for MOVERS. This path
+    # — the arrow pad and the text box — used to call the tools bare, so a
+    # walk it started held no lock: the viewer's mid-walk /viewer/at found
+    # MOVE free and re-placed the robot, which is how "forward" ended with
+    # the robot spun round facing backwards. choose_forward runs inside the
+    # lock too, so it reads the heading the PREVIOUS move left, not one it
+    # is halfway through changing.
+    def move(fn):
+        with MOVE:
+            return fn()
+
     if t in ("where", "where am i", "look"):
         return {**(where()), "_tool": "where"}
     m = re.fullmatch(r"(?:go|walk|go to|walk to)\s+(?:to\s+)?(.+)", t)
     if m:
-        return {**(go_to(m.group(1))), "_tool": "go_to"}
+        return {**move(lambda: go_to(m.group(1))), "_tool": "go_to"}
     m = re.fullmatch(r"face\s+(.+)", t)
     if m:
-        return {**(face(m.group(1))), "_tool": "face"}
+        return {**move(lambda: face(m.group(1))), "_tool": "face"}
     if t == "forward":
-        return {**(go_to(lab(choose_forward()))), "_tool": "go_to"}
+        return {**move(lambda: go_to(lab(choose_forward()))), "_tool": "go_to"}
     m = re.fullmatch(r"turn\s+(left|right)", t)
     if m:
-        return {**(turn(m.group(1))), "_tool": "turn"}
+        return {**move(lambda: turn(m.group(1))), "_tool": "turn"}
     m = re.fullmatch(r"open\s+door(?:\s+to\s+(.+))?", t)
     if m:
         return {**(open_door(m.group(1) or "")), "_tool": "open_door"}
@@ -1635,6 +1647,14 @@ def _gate(fn):
         blocked = _mission_gate(fn.__name__)
         if blocked is not None:
             return blocked
+        # Movers hold the MOVE lock here too. The agent's calls came through
+        # this wrapper rather than /invoke, so a mission's walks never held
+        # it: truth went out with moving=false mid-leg, and every guard keyed
+        # on "a move is in flight" — the watchdog, /viewer/at deferral — was
+        # blind to the agent's own motion.
+        if fn.__name__ in MOVERS:
+            with MOVE:
+                return _post_tool(fn.__name__, k or list(a), fn(*a, **k))
         return _post_tool(fn.__name__, k or list(a), fn(*a, **k))
     return w
 
@@ -2343,12 +2363,23 @@ def r_viewer_at():
         # than following the viewer somewhere neither of them can be.
         return jsonify(ok=False, error=f"no splat world for {lab(v)}"), 400
     with ST["lock"]:
+        came = ST["cur"]
         ST["prev"], ST["cur"], ST["face"] = ST["cur"], v, None
     # Placed, not driven: drive_path walks pairs of waypoints and does nothing
     # with one, and a camera that jumped there by hand did not walk a corridor
     # either — so the robot should not pretend to.
-    nb = next((n for n, _ in ST["adj"].get(v, [])), None)
-    yaw = _az(v, nb) if nb is not None else 0.0
+    #
+    # Facing the way the walk was going, when it walked: the bearing from the
+    # waypoint just left. The old pick — the first neighbour in the adjacency
+    # list — was arbitrary, and at a corridor vertex the first neighbour is
+    # often the very waypoint just left: the robot drove forward and then
+    # snapped round 180 to look back down the corridor.
+    if came is not None and came != v and \
+            v in [n for n, _ in ST["adj"].get(came, [])]:
+        yaw = _az(came, v)
+    else:
+        nb = next((n for n, _ in ST["adj"].get(v, [])), None)
+        yaw = _az(v, nb) if nb is not None else 0.0
     bridge("/reset", {"level": ST["level"], "x": ST["verts"][v][1],
                       "y": ST["verts"][v][2], "yaw": yaw})
     with ST["lock"]:
