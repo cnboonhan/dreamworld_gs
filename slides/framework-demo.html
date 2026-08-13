@@ -15,6 +15,7 @@
     --model: #b18cff;
     --world: #45c8a8;
     --sense: #ff7d9c;
+    --learn: #a3d55f;
     --lane: #3d5a85;
   }
   @media (prefers-color-scheme: light) {
@@ -23,7 +24,7 @@
       --ink: #17233a; --muted: #5d6b82; --rule: #cdd7e4;
       --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
       --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4;
-      --world: #0e8f74; --sense: #c2405f; --lane: #9db3cf;
+      --world: #0e8f74; --sense: #c2405f; --learn: #5f8f1f; --lane: #9db3cf;
     }
   }
   :root[data-theme="dark"] {
@@ -31,14 +32,14 @@
     --ink: #e8eef7; --muted: #8fa0b8; --rule: #24334d;
     --grid: rgba(95, 168, 255, 0.05); --grid-major: rgba(95, 168, 255, 0.10);
     --map: #5fa8ff; --tool: #ffb454; --model: #b18cff;
-    --world: #45c8a8; --sense: #ff7d9c; --lane: #3d5a85;
+    --world: #45c8a8; --sense: #ff7d9c; --learn: #a3d55f; --lane: #3d5a85;
   }
   :root[data-theme="light"] {
     --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
     --ink: #17233a; --muted: #5d6b82; --rule: #cdd7e4;
     --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
     --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4;
-    --world: #0e8f74; --sense: #c2405f; --lane: #9db3cf;
+    --world: #0e8f74; --sense: #c2405f; --learn: #5f8f1f; --lane: #9db3cf;
   }
 
   body {
@@ -114,7 +115,8 @@
   }
   .node .glyph { width: 3cqw; height: 3cqw; flex-shrink: 0; }
 
-  .node.ui    { left: 56%;   top: 14%; }
+  .node.ui    { left: 56%;   top: 19%; }
+  .node.learn { left: 84.4%; top: 30.6%; }
   .node.world { left: 9.6%;  top: 42%; }
   .node.sense { left: 30.8%; top: 42%; }
   .node.model { left: 56%;   top: 42%; }
@@ -128,6 +130,7 @@
     .node.sense { animation-delay: .15s; }
     .node.model { animation-delay: .25s; }
     .node.ui    { animation-delay: .35s; }
+    .node.learn { animation-delay: .4s;  }
     .node.map   { animation-delay: .45s; }
     .node.tools { animation-delay: .55s; }
     @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
@@ -156,13 +159,14 @@
       </marker>
     </defs>
     <!-- operator model -> operator ui (one way, up) -->
-    <line class="lane-flow" x1="717" y1="249" x2="717" y2="155"
+    <line class="lane-flow" x1="717" y1="249" x2="717" y2="186"
           marker-end="url(#arr)"/>
     <circle class="lane-dot" cx="717" cy="249" r="4.5"/>
-    <!-- operator ui -> operator model (dashed, right face to right face) -->
+    <!-- operator ui -> learn from data -> operator model (dotted loop) -->
     <path class="lane-dashed" marker-end="url(#arr)"
-          d="M 897 101 H 990 Q 1010 101 1010 121 V 282 Q 1010 302 990 302 H 888"/>
-    <text class="lane-label" x="1028" y="205">learn from data</text>
+          d="M 897 137 H 1070 Q 1080 137 1080 147 V 168"/>
+    <path class="lane-dashed" marker-end="url(#arr)"
+          d="M 1080 264 V 292 Q 1080 302 1070 302 H 888"/>
     <!-- world -> perception (in from the left) -->
     <line class="lane-line" x1="122" y1="302" x2="394" y2="302"/>
     <circle class="lane-dot-ring" cx="247" cy="302" r="10"/>
@@ -202,6 +206,22 @@
     <div>
       <h2>Operator UI</h2>
       <div class="sub">Mission Control &amp; Reasoning Inspection</div>
+    </div>
+  </section>
+
+  <!-- node: learn from data -->
+  <section class="node learn">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M 14 21 A 11 11 0 0 1 33 17" fill="none"
+            stroke="var(--learn)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M 33 10 l 2 8 -8 -1 z" fill="var(--learn)"/>
+      <path d="M 34 27 A 11 11 0 0 1 15 31" fill="none"
+            stroke="var(--learn)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M 15 38 l -2 -8 8 1 z" fill="var(--learn)"/>
+    </svg>
+    <div>
+      <h2>Learn from Data</h2>
+      <div class="sub">data pipelines, model training</div>
     </div>
   </section>
 

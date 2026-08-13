@@ -14,6 +14,7 @@
     --model: #b18cff;      /* violet — the model */
     --world: #45c8a8;      /* teal — the world outside */
     --sense: #ff7d9c;      /* rose — perception */
+    --learn: #a3d55f;      /* lime — learning from data */
     --lane: #3d5a85;
   }
   @media (prefers-color-scheme: light) {
@@ -22,7 +23,7 @@
       --ink: #17233a; --rule: #cdd7e4;
       --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
       --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4;
-      --world: #0e8f74; --sense: #c2405f; --lane: #9db3cf;
+      --world: #0e8f74; --sense: #c2405f; --learn: #5f8f1f; --lane: #9db3cf;
     }
   }
   :root[data-theme="dark"] {
@@ -30,14 +31,14 @@
     --ink: #e8eef7; --rule: #24334d;
     --grid: rgba(95, 168, 255, 0.05); --grid-major: rgba(95, 168, 255, 0.10);
     --map: #5fa8ff; --tool: #ffb454; --model: #b18cff;
-    --world: #45c8a8; --sense: #ff7d9c; --lane: #3d5a85;
+    --world: #45c8a8; --sense: #ff7d9c; --learn: #a3d55f; --lane: #3d5a85;
   }
   :root[data-theme="light"] {
     --bg: #eef1f6; --sheet: #f8fafd; --panel: #ffffff;
     --ink: #17233a; --rule: #cdd7e4;
     --grid: rgba(47, 111, 208, 0.06); --grid-major: rgba(47, 111, 208, 0.12);
     --map: #2f6fd0; --tool: #b26f00; --model: #6d4fc4;
-    --world: #0e8f74; --sense: #c2405f; --lane: #9db3cf;
+    --world: #0e8f74; --sense: #c2405f; --learn: #5f8f1f; --lane: #9db3cf;
   }
 
   body {
@@ -92,6 +93,7 @@
   .node .glyph { width: 3.2cqw; height: 3.2cqw; flex-shrink: 0; }
 
   .node.ui    { left: 56%;   top: 8%;  }
+  .node.learn { left: 84.4%; top: 27%; }
   .node.world { left: 7.5%;  top: 42%; }
   .node.sense { left: 27.9%; top: 42%; }
   .node.model { left: 56%;   top: 42%; }
@@ -105,6 +107,7 @@
     .node.sense { animation-delay: .15s; }
     .node.model { animation-delay: .25s; }
     .node.ui    { animation-delay: .35s; }
+    .node.learn { animation-delay: .4s;  }
     .node.map   { animation-delay: .45s; }
     .node.tools { animation-delay: .55s; }
     @keyframes rise { from { opacity: 0; transform: translate(-50%, -46%); }
@@ -134,10 +137,11 @@
     <line class="lane-flow" x1="717" y1="256" x2="717" y2="105"
           marker-end="url(#arr)"/>
     <circle class="lane-dot" cx="717" cy="256" r="4.5"/>
-    <!-- operator ui -> operator model (dashed, right face to right face) -->
+    <!-- operator ui -> learn from data -> operator model (dotted loop) -->
     <path class="lane-dashed" marker-end="url(#arr)"
-          d="M 837 58 H 950 Q 970 58 970 78 V 282 Q 970 302 950 302 H 903"/>
-    <text class="lane-label" x="988" y="185">learn from data</text>
+          d="M 837 58 H 1070 Q 1080 58 1080 68 V 149"/>
+    <path class="lane-dashed" marker-end="url(#arr)"
+          d="M 1080 231 V 292 Q 1080 302 1070 302 H 903"/>
     <!-- world -> perception (in from the left) -->
     <line class="lane-line" x1="96" y1="302" x2="357" y2="302"/>
     <circle class="lane-dot-ring" cx="187" cy="302" r="10"/>
@@ -175,6 +179,19 @@
             stroke-linecap="round" opacity="0.7"/>
     </svg>
     <h2>Operator UI</h2>
+  </section>
+
+  <!-- node: learn from data -->
+  <section class="node learn">
+    <svg class="glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M 14 21 A 11 11 0 0 1 33 17" fill="none"
+            stroke="var(--learn)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M 33 10 l 2 8 -8 -1 z" fill="var(--learn)"/>
+      <path d="M 34 27 A 11 11 0 0 1 15 31" fill="none"
+            stroke="var(--learn)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M 15 38 l -2 -8 8 1 z" fill="var(--learn)"/>
+    </svg>
+    <h2>Learn from Data</h2>
   </section>
 
   <!-- node: the world -->
