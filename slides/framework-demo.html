@@ -64,19 +64,20 @@
 
   /* ---- banner -------------------------------------------------------------- */
   .banner {
-    position: absolute; left: 4cqw; top: 5.5cqh;
-    border: 1px solid var(--rule); border-radius: 8px;
+    position: absolute; left: 0; right: 0; top: 0; z-index: 2;
+    display: flex; align-items: baseline; gap: 1.6cqw;
+    border-bottom: 1px solid var(--rule);
     background: color-mix(in srgb, var(--sheet) 80%, var(--panel));
-    padding: 1.6cqh 1.6cqw;
+    padding: 1.6cqh 4cqw;
   }
   .banner .eyebrow {
-    font: 600 0.85cqw/1 ui-monospace, "SF Mono", Menlo, monospace;
+    font: 600 0.95cqw/1 ui-monospace, "SF Mono", Menlo, monospace;
     letter-spacing: 0.22em; color: var(--muted); text-transform: uppercase;
   }
   .banner h1 {
-    margin: 0.7cqh 0 0;
+    margin: 0;
     font-family: "Avenir Next Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
-    font-weight: 600; font-size: 2.4cqw; letter-spacing: 0.01em;
+    font-weight: 600; font-size: 2.2cqw; letter-spacing: 0.01em;
   }
 
   /* ---- connector layer --------------------------------------------------- */
@@ -113,7 +114,7 @@
   }
   .node .glyph { width: 3cqw; height: 3cqw; flex-shrink: 0; }
 
-  .node.ui    { left: 56%;   top: 8%;  }
+  .node.ui    { left: 56%;   top: 14%; }
   .node.world { left: 9.6%;  top: 42%; }
   .node.sense { left: 30.8%; top: 42%; }
   .node.model { left: 56%;   top: 42%; }
@@ -155,13 +156,13 @@
       </marker>
     </defs>
     <!-- operator model -> operator ui (one way, up) -->
-    <line class="lane-flow" x1="717" y1="249" x2="717" y2="112"
+    <line class="lane-flow" x1="717" y1="249" x2="717" y2="155"
           marker-end="url(#arr)"/>
     <circle class="lane-dot" cx="717" cy="249" r="4.5"/>
     <!-- operator ui -> operator model (dashed, right face to right face) -->
     <path class="lane-dashed" marker-end="url(#arr)"
-          d="M 897 58 H 990 Q 1010 58 1010 78 V 282 Q 1010 302 990 302 H 888"/>
-    <text class="lane-label" x="1028" y="185">learn from data</text>
+          d="M 897 101 H 990 Q 1010 101 1010 121 V 282 Q 1010 302 990 302 H 888"/>
+    <text class="lane-label" x="1028" y="205">learn from data</text>
     <!-- world -> perception (in from the left) -->
     <line class="lane-line" x1="122" y1="302" x2="394" y2="302"/>
     <circle class="lane-dot-ring" cx="247" cy="302" r="10"/>
