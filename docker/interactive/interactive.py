@@ -1863,35 +1863,45 @@ header #mbox{flex:1;min-width:140px}
 </main>
 <script>
 // Resizable right column: drag the splitter to set #right width.
-(function(){
-  const d=document.getElementById('drag'), r=document.getElementById('right');
-  let x0=0,w0=0,on=false;
-  d.addEventListener('mousedown',e=>{on=true;x0=e.clientX;w0=r.offsetWidth;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
-  window.addEventListener('mousemove',e=>{if(!on)return;const w=Math.max(220,Math.min(window.innerWidth-260,w0-(e.clientX-x0)));r.style.width=w+'px';});
-  window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
-})();
-// Resizable log: drag the horizontal splitter to set #log height (agent panel above flexes).
-(function(){
-  const d=document.getElementById('logdrag'), log=document.getElementById('log'), col=document.getElementById('right');
+// One helper for every splitter, on pointer capture. Plain mouse events die
+// the moment the pointer crosses the embedded sim iframe — and a mouseup
+// released over it lands in the IFRAME's document, so the parent never heard
+// it and the drag stayed stuck on. Capture routes every pointer event to the
+// handle until release, iframes and window edges included; pointercancel
+// covers the pointer being taken away entirely.
+function splitter(id,onDown,onMove){
+  const d=document.getElementById(id); if(!d)return;
   let on=false;
-  d.addEventListener('mousedown',e=>{on=true;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
-  window.addEventListener('mousemove',e=>{if(!on)return;const r=col.getBoundingClientRect();
+  d.addEventListener('pointerdown',e=>{on=true;if(onDown)onDown(e);
+    d.setPointerCapture(e.pointerId);d.classList.add('on');
+    document.body.style.userSelect='none';e.preventDefault();});
+  d.addEventListener('pointermove',e=>{if(on)onMove(e);});
+  const end=()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';};
+  d.addEventListener('pointerup',end);
+  d.addEventListener('pointercancel',end);
+}
+// Right column width.
+(function(){
+  const r=document.getElementById('right'); let x0=0,w0=0;
+  splitter('drag',e=>{x0=e.clientX;w0=r.offsetWidth;},
+    e=>{const w=Math.max(220,Math.min(window.innerWidth-260,w0-(e.clientX-x0)));r.style.width=w+'px';});
+})();
+// Log height (the agent panel above flexes).
+(function(){
+  const log=document.getElementById('log'), col=document.getElementById('right');
+  splitter('logdrag',null,e=>{const r=col.getBoundingClientRect();
     const h=Math.max(44,Math.min(r.height-120, r.bottom-e.clientY));log.style.height=h+'px';});
-  window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
 })();
-// Resizable sim pane: drag the splitter between the map and the sim (the
-// controls below hold still — the sim's bottom edge is pinned to them, so
-// its height is its own bottom minus the mouse). The map above flexes and
-// refits its canvas as it goes.
+// Sim pane height: the splitter sits between the map and the sim, and the
+// controls below hold still — the sim's bottom edge is pinned to them, so its
+// height is its own bottom minus the mouse. The map above flexes and refits
+// its canvas as it goes.
 (function(){
-  const d=document.getElementById('middrag'), sim=document.getElementById('sim'), col=document.getElementById('mid');
-  let on=false;
-  d.addEventListener('mousedown',e=>{on=true;d.classList.add('on');document.body.style.userSelect='none';e.preventDefault();});
-  window.addEventListener('mousemove',e=>{if(!on)return;
+  const sim=document.getElementById('sim'), col=document.getElementById('mid');
+  splitter('middrag',null,e=>{
     const r=sim.getBoundingClientRect(), m=col.getBoundingClientRect();
     const h=Math.max(90,Math.min(m.height-260, r.bottom-e.clientY));sim.style.flexBasis=h+'px';
     fitCanvas();if(last)drawMap(last);});
-  window.addEventListener('mouseup',()=>{if(!on)return;on=false;d.classList.remove('on');document.body.style.userSelect='';});
 })();
 // The gazebo pane's source: rmfsim's noVNC, autoconnecting and scaled to fit.
 // Built from the page's own hostname so a tunnelled dashboard embeds the
