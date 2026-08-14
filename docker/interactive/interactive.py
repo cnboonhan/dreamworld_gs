@@ -2520,6 +2520,33 @@ def r_viewer_hello():
     return jsonify(ok=True, expect=scene_of(ST["cur"]))
 
 
+@app.route("/viewer/bye", methods=["POST", "OPTIONS"])
+def r_viewer_bye():
+    """The viewer says it is leaving — the chip clicked off, or the tab closing.
+
+    Without this the server learns of a gone viewer only when a write to its
+    dead stream fails, up to one keepalive later — and a mission started in
+    that window sends its first walk into the void and waits the full call
+    timeout. An explicit goodbye flips the state now, so the very next move
+    runs robot-only: the simulation carries on without the splats.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    with VIEWER.lock:
+        qs = list(VIEWER.qs)
+    for q in qs:
+        try:
+            q.put_nowait({"op": "bye", "why": "the viewer said goodbye"})
+        except queue.Full:
+            pass
+    with ST["lock"]:
+        ST["viewers"] = 0
+        ST["viewer_up"] = False
+    log("splat viewer stood down — moves are robot-only until one connects")
+    push_state()
+    return jsonify(ok=True)
+
+
 @app.route("/reset", methods=["POST", "OPTIONS"])
 @app.route("/teleport", methods=["POST", "OPTIONS"])   # what it was called first
 def reset():

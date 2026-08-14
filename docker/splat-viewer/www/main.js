@@ -2904,6 +2904,12 @@ async function main() {
             const handsOff = (why) => {
                 if (detached) return;
                 detached = true;
+                // Say goodbye rather than just leaving: the server otherwise
+                // learns of a gone viewer only when a write to the dead stream
+                // fails, and a mission started in that window hangs a leg on a
+                // walk nobody will answer. Told now, its very next move runs
+                // robot-only — the simulation carries on without the splats.
+                post("/viewer/bye", {}).catch(() => {});
                 es.close();
                 setChip("off", "agent off — click to connect");
                 say(why || "agent: disconnected by hand");
@@ -2963,6 +2969,13 @@ async function main() {
         // dashboard says. Taking the controls by hand — a walkthrough
         // button, or the chip — is what lets go.
         connect();
+        // A closing tab says goodbye too — a beacon outlives the page just
+        // long enough. Without it the dashboard believes a viewer is attached
+        // until a write fails, and the first move after the tab closed hangs.
+        addEventListener("pagehide", () => {
+            if (!detached && navigator.sendBeacon)
+                navigator.sendBeacon(new URL("/viewer/bye", agentBase).href, "{}");
+        });
     }
 
     /** Each frame: where are we, which way are we going, what should be loaded. */
