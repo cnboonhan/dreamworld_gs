@@ -444,7 +444,15 @@ def state_dict():
             d = math.hypot(fx - px, fy - py) or 1.0
             dirv = [(fx - px) / d, (fy - py) / d]
     heading = None if ST["face"] is None else round(math.degrees(_az(cur, ST["face"])) % 360)
-    return {"level": ST["level"], "cur": cur, "at": lab(cur), "scene": scene_of(cur),
+    # The scene is what a viewer can SHOW. Standing at a waypoint with no
+    # splat world (a lift cabin), naming its scene sent every follower after a
+    # world that cannot load — the viewer hung on "L11.v18: loading" and the
+    # dashboard's viewer link 404ed. The last showable scene stands in until
+    # the robot is somewhere showable again.
+    if lab(cur) in built_scenes():
+        ST["shown"] = scene_of(cur)
+    return {"level": ST["level"], "cur": cur, "at": lab(cur),
+            "scene": ST.get("shown") or scene_of(cur),
             "cur_label": lab(cur), "px": px, "py": py, "dir": dirv, "heading": heading,
             "door_open": ", ".join(sorted(ST["open_doors"])) or "",
             "neighbors": [{"id": v, "label": lab(v), "facing": v == ST["face"]}
@@ -655,7 +663,29 @@ def go_to(vertex):
         # own, so the two motions are equal by construction.
         motion = leg_motion(u, v)
         drive_robot([u, v])
-        res = viewer_call("walk", to=lab(v), motion=motion)
+        built = built_scenes()
+        if lab(v) not in built:
+            # A waypoint with no splat world — the lift cabins, above all:
+            # nobody photographs the inside of a lift. Walking the viewer there
+            # rode the corridor and then waited two minutes for a world that
+            # cannot load ("still at lift_lobby, wanted v18"). There is nothing
+            # for the camera to swap to, so it stays where it is and faces the
+            # way the robot went, and the robot's own RMF state gates the leg.
+            viewer_call("face", to=lab(v), timeout=20)
+            arrived = wait_robot(ST["verts"][v][1], ST["verts"][v][2])
+            res = {"ok": True} if arrived else \
+                  {"ok": False, "error": f"robot has not reported reaching {lab(v)} "
+                                         f"({lab(v)} has no splat world; robot-only leg)"}
+        elif lab(u) not in built:
+            # Stepping OUT of an unshowable place — leaving the cabin after a
+            # ride. The camera never entered it, and after a level change the
+            # world it still shows has no lane to walk; stand it straight into
+            # the destination world while the robot drives the leg.
+            res = viewer_call("stand", scene=scene_of(v))
+            if res.get("ok") and not res.get("no_viewer"):
+                wait_robot(ST["verts"][v][1], ST["verts"][v][2])
+        else:
+            res = viewer_call("walk", to=lab(v), motion=motion)
         with ST["lock"]:
             ST["yaw"] = motion["yaw"]        # the heading both are now holding
         if not res.get("ok"):
