@@ -470,8 +470,15 @@ def state_dict():
             # well as a switch: the /agent call returns in milliseconds while
             # the mission runs for minutes, and a reloaded dashboard must find
             # the truth rather than assume idle.
-            "agent_busy": _BUSY.is_set(),
-            "agent_paused": not _RUN.is_set(),
+            # Busy AND not cancelled: a cancelled mission's thread can take one
+            # more model round-trip to wind down, and reporting it busy flipped
+            # the dashboard's button back to "pause" — so the operator's next
+            # click paused the dying thread instead of starting a mission, and
+            # paused, it never died. Once cancel is set the mission is over as
+            # far as the operator is concerned; /agent handles the wind-down.
+            "agent_busy": _BUSY.is_set() and (not _CANCEL.is_set()
+                                              or bool(_AGENT.get("queued"))),
+            "agent_paused": not _RUN.is_set() and _BUSY.is_set(),
             "built": built_scenes()}
 
 
@@ -2638,17 +2645,38 @@ def r_agent():
         return jsonify(ok=False, error=f"agent unavailable: {_AGENT['err']}")
     from langchain_core.messages import HumanMessage
     text = (request.get_json(force=True, silent=True) or {}).get("text", "")
-    _CANCEL.clear()
-    _RUN.set()
-    _BUSY.set()
+    # One mission thread at a time — they share a checkpointer thread and a
+    # building. Running: the operator must cancel first. Cancelled but still
+    # winding down — the model gets one last word, which can take a whole
+    # inference if the cancel landed mid-thought — the new mission QUEUES
+    # behind it rather than blocking this request or racing the corpse.
+    if _BUSY.is_set():
+        if not _CANCEL.is_set():
+            return jsonify(ok=False, error="a mission is already running — "
+                                           "cancel it (✕) or let it finish")
+        if _AGENT.get("queued"):
+            return jsonify(ok=False, error="a mission is already queued behind "
+                                           "the cancelled one")
+        _AGENT["queued"] = True
+        _RUN.set()        # a paused corpse must wake to see its cancel
     log(f"agent ▶ {text}", "mission")
-    push_state()      # the run button everywhere lights up now, not on a poll
     prompt = (f"New mission from the operator: {text}\n\nCurrent world model:\n"
               f"{build_context()}\n\nSet the mission and subtasks, then execute them.")
     cfg = {"configurable": {"thread_id": "interactive"}, "recursion_limit": 300}
+    predecessor = _AGENT.get("thread")
 
     def run():
         try:
+            if predecessor is not None and predecessor.is_alive():
+                log("waiting for the cancelled mission to wind down…")
+                predecessor.join(timeout=300)
+                if predecessor.is_alive():
+                    log("the cancelled mission never wound down — not starting "
+                        "(restart the dashboard if this repeats)", "err")
+                    return
+            _AGENT["queued"] = False
+            _CANCEL.clear()
+            _RUN.set()
             out = _AGENT["graph"].invoke({"messages": [HumanMessage(content=prompt)]}, cfg)
             final = out["messages"][-1].content if out.get("messages") else ""
             todos = ST.get("todos") or []
@@ -2659,13 +2687,22 @@ def r_agent():
             log(f"agent error: {e}", "err")
         finally:
             _RUN.set()
-            _BUSY.clear()
-            push_state()      # and goes back to "run mission" when it ends
-            _push_context()
+            _AGENT["queued"] = False
+            # Only the CURRENT mission may declare the surface idle: a corpse
+            # finishing its last word after a successor started must not clear
+            # the successor's busy flag out from under it.
+            if _AGENT.get("thread") is threading.current_thread():
+                _BUSY.clear()
+                push_state()      # and goes back to "run mission" when it ends
+                _push_context()
 
     # In a thread: a mission is many walks long, and the operator needs /pause and
-    # /cancel to be answerable while it runs.
-    threading.Thread(target=run, daemon=True).start()
+    # /cancel to be answerable while it runs. Kept by name: ownership of the busy
+    # flag, and the queue behind a cancelled predecessor, both hang off it.
+    _BUSY.set()
+    push_state()      # the run button everywhere lights up now, not on a poll
+    _AGENT["thread"] = threading.Thread(target=run, daemon=True)
+    _AGENT["thread"].start()
     return jsonify(ok=True, started=True)
 
 
@@ -2673,6 +2710,13 @@ def r_agent():
 def r_pause():
     if request.method == "OPTIONS":
         return ("", 204)
+    # Nothing running, nothing to pause. Pausing anyway once froze the whole
+    # surface: a cancelled mission's dying thread was still winding down, a
+    # stale button pressed pause, and the thread blocked forever with BUSY
+    # held — after which no mission could ever start.
+    if not _BUSY.is_set() or _CANCEL.is_set():
+        push_state()          # resync any dashboard whose button had gone stale
+        return jsonify(ok=False, error="no mission is running to pause")
     _RUN.clear()
     log("⏸ paused — the agent's next thought and tool call will block", "warn")
     push_state()
