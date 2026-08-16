@@ -22,13 +22,25 @@ assets/projects/<project>/
   worlds/<map>/    <map>.world, models/, nav_graphs/0.yaml,
                    capture_plan.json                            (generated)
   panos/<id>.jpg   one 360, taken standing at that waypoint     (you shoot)
+  panos/<id>@<variant>.jpg   an edited look of the same place   (you edit)
   splats/<id>/     world.ply, world.usdz, world.cam.json,
                    world.paths.json                             (generated)
+  splats/<id>@<variant>/     the world generated from a variant (generated)
 ```
 
 A panorama is named for the place it was taken, so a splat is addressed by
 where it is in the building rather than by a name someone invented. See
 [naming](#naming) for the ids.
+
+**Variants are looks, not places.** `<id>@<name>` is the same waypoint with a
+different appearance — a pallet blocking the corridor, a cleared room — made
+in the panorama editor (select a look, edit, **Save** to overwrite it or
+**Save as variant…** to add one) and built with `just generate <id>@<name>`.
+A variant world answers to its base waypoint: it inherits the base's
+alignment marks until re-marked, its paths doc names the base, and the
+dashboard and missions go on addressing the vertex. Choosing which look is
+on screen is the splat viewer's variant dropdown in the side panel; scenario
+authoring is exactly this loop.
 
 The rest of the repo:
 

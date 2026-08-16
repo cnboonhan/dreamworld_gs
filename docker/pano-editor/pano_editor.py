@@ -21,6 +21,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import struct
 import sys
@@ -119,25 +120,48 @@ def vid(v):
     return f"{G['level']}.{name or f'v{v}'}"
 
 
-def live_pano(v):
+def _stem(v, variant=""):
+    """The filename stem a (waypoint, variant) pair is filed under:
+    <id> for the original, <id>@<name> for a variant of it."""
+    return vid(v) + ("@" + variant if variant else "")
+
+
+def _clean_variant(name):
+    n = str(name or "").strip()
+    return n if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", n) else None
+
+
+def live_pano(v, variant=""):
     """The panorama on disk for waypoint v, whatever extension the camera wrote."""
-    base = os.path.join(G["base"], "panos", vid(v))
+    base = os.path.join(G["base"], "panos", _stem(v, variant))
     for ext in (".JPG", ".jpg", ".jpeg", ".JPEG", ".png", ".PNG"):
         if os.path.isfile(base + ext):
             return base + ext
     return None
 
 
-def pano_path(v, kind):
+def pano_variants(v):
+    """This waypoint's looks: "" is the original photograph, every other name
+    is a panos/<id>@<name>.<ext> beside it."""
+    names = [""] if live_pano(v) else []
+    for p in glob.glob(os.path.join(G["base"], "panos", vid(v) + "@*")):
+        n = os.path.splitext(os.path.basename(p))[0].split("@", 1)[1]
+        if n and n not in names:
+            names.append(n)
+    return names
+
+
+def pano_path(v, kind, variant=""):
     """`current` is the file the pipeline reads; `candidate` is the pending edit.
 
     There is no `gz` here — that was the simulated panorama the dream restyled
     from, and this repo edits the photograph itself.
     """
     if kind in ("restyle", "current"):
-        return live_pano(v) or os.path.join(G["base"], "panos", vid(v) + ".JPG")
+        return live_pano(v, variant) or os.path.join(
+            G["base"], "panos", _stem(v, variant) + ".JPG")
     if kind == "candidate":
-        return os.path.join(G["cand_dir"], vid(v) + ".png")
+        return os.path.join(G["cand_dir"], _stem(v, variant) + ".png")
     return None
 
 
@@ -279,35 +303,39 @@ def _perspective_edit(base_path, url, prompt, seed, view, out_path):
     return True, "ok"
 
 
-def _cand_base(v, from_candidate):
+def _cand_base(v, from_candidate, variant=""):
     """Accumulate: successive edits build on the last candidate when asked, else on the saved
     restyle. So you can stack several edits (add a table, then a lamp, then a rug) before Save."""
-    cand = pano_path(v, "candidate")
-    return cand if (from_candidate and os.path.isfile(cand)) else pano_path(v, "restyle")
+    cand = pano_path(v, "candidate", variant)
+    return cand if (from_candidate and os.path.isfile(cand)) \
+        else pano_path(v, "restyle", variant)
 
 
-def _snapshot_candidate(v):
-    """Push the current candidate onto a per-vertex history stack so an edit can be reverted."""
+def _snapshot_candidate(v, variant=""):
+    """Push the current candidate onto a history stack so an edit can be reverted."""
     import shutil
-    cand = pano_path(v, "candidate")
+    cand = pano_path(v, "candidate", variant)
     if os.path.isfile(cand):
-        n = len(glob.glob(os.path.join(G["cand_dir"], f"{v}.h*.png")))
-        shutil.copy2(cand, os.path.join(G["cand_dir"], f"{v}.h{n}.png"))
+        key = _stem(v, variant) if variant else str(v)
+        n = len(glob.glob(os.path.join(G["cand_dir"], f"{key}.h*.png")))
+        shutil.copy2(cand, os.path.join(G["cand_dir"], f"{key}.h{n}.png"))
 
 
-def _clear_hist(v):
-    """Drop a vertex's edit history (a fresh edit session starts clean)."""
-    for p in glob.glob(os.path.join(G["cand_dir"], f"{v}.h*.png")):
+def _clear_hist(v, variant=""):
+    """Drop an edit history (a fresh edit session starts clean)."""
+    key = _stem(v, variant) if variant else str(v)
+    for p in glob.glob(os.path.join(G["cand_dir"], f"{key}.h*.png")):
         os.remove(p)
 
 
-def revert_candidate(v):
+def revert_candidate(v, variant=""):
     """Undo the last accumulated edit: pop the newest history snapshot back to the candidate.
     Returns True if a candidate still remains (compare view), False if we're back to the base."""
     import shutil
-    hist = sorted(glob.glob(os.path.join(G["cand_dir"], f"{v}.h*.png")),
+    key = _stem(v, variant) if variant else str(v)
+    hist = sorted(glob.glob(os.path.join(G["cand_dir"], f"{key}.h*.png")),
                   key=lambda p: int(p.rsplit(".h", 1)[1].split(".")[0]))
-    cand = pano_path(v, "candidate")
+    cand = pano_path(v, "candidate", variant)
     if hist:
         shutil.move(hist[-1], cand); return True
     if os.path.isfile(cand):
@@ -315,7 +343,8 @@ def revert_candidate(v):
     return False
 
 
-def edit_candidate(v, prompt, seed, view=None, mask_b64=None, from_candidate=False):
+def edit_candidate(v, prompt, seed, view=None, mask_b64=None, from_candidate=False,
+                   variant=""):
     """Edit waypoint v's panorama -> candidate PNG.
 
     One mode, where the dream had four. `restyle` and `reference` re-rendered the
@@ -329,18 +358,20 @@ def edit_candidate(v, prompt, seed, view=None, mask_b64=None, from_candidate=Fal
     crop, reproject it, and composite only the pixels that changed.
     """
     url = G["qwen"][0]
-    base = _cand_base(v, from_candidate)
+    base = _cand_base(v, from_candidate, variant)
     if not base or not os.path.isfile(base):
-        return False, f"no panorama for v{v} to edit"
+        return False, f"no panorama for v{v}" + (f" variant '{variant}'" if variant
+                                                 else "") + " to edit"
     os.makedirs(G["cand_dir"], exist_ok=True)
     if from_candidate:
-        _snapshot_candidate(v)             # stacking -> make this edit revertible
+        _snapshot_candidate(v, variant)    # stacking -> make this edit revertible
     else:
-        _clear_hist(v)                     # fresh edit session on this waypoint
+        _clear_hist(v, variant)            # fresh edit session on this look
     if view and not mask_b64:
         # The view-focused path: the crop is undistorted, so the model sees a
         # photograph of a room rather than a warped band of one.
-        return _perspective_edit(base, url, prompt, seed, view, pano_path(v, "candidate"))
+        return _perspective_edit(base, url, prompt, seed, view,
+                                 pano_path(v, "candidate", variant))
     # No facing given (or a brushed mask) -> edit the whole equirect. Framed as an
     # in-place edit and with void_fill off, so the model changes what was asked and
     # does not drift the rest of the photograph toward the phrase.
@@ -355,7 +386,7 @@ def edit_candidate(v, prompt, seed, view=None, mask_b64=None, from_candidate=Fal
     if r.status_code != 200 or len(r.content) < 1000:
         return False, f"qwen {r.status_code}"
     os.makedirs(G["cand_dir"], exist_ok=True)
-    out = pano_path(v, "candidate")
+    out = pano_path(v, "candidate", variant)
     if mask_b64:
         _composite_inpaint(base, r.content, mask_b64, out)   # brush: keep that region
     else:
@@ -411,8 +442,14 @@ def floorplan():
 @app.route("/pano")
 def pano():
     v, kind = int(request.args["v"]), request.args.get("kind", "restyle")
-    p = pano_path(v, kind)
+    p = pano_path(v, kind, request.args.get("variant", ""))
     return send_file(p) if p and os.path.isfile(p) else Response("no pano", status=404)
+
+
+@app.route("/variants")
+def r_variants():
+    """This waypoint's looks: "" is the original, the rest are its variants."""
+    return jsonify(variants=pano_variants(int(request.args["v"])))
 
 
 @app.route("/edit", methods=["POST"])
@@ -424,7 +461,8 @@ def edit():
         return jsonify(ok=False, error="say what to change")
     ok, msg = edit_candidate(v, prompt, int(b.get("seed", v)),
                              view=b.get("view"), mask_b64=b.get("mask"),
-                             from_candidate=bool(b.get("from_candidate")))
+                             from_candidate=bool(b.get("from_candidate")),
+                             variant=str(b.get("variant") or ""))
     return jsonify(ok=ok, error=None if ok else msg, v=v)
 
 
@@ -452,11 +490,38 @@ def save():
     """
     b = request.get_json(force=True) or {}
     v = int(b["v"])
-    cand = pano_path(v, "candidate")
+    variant = str(b.get("variant") or "")
+    cand = pano_path(v, "candidate", variant)
     if not os.path.isfile(cand):
         return jsonify(ok=False, error="nothing to save — make an edit first")
-    live = live_pano(v)
-    ident = vid(v)
+    from PIL import Image
+    as_new = b.get("as_new")
+    if as_new is not None:
+        # Save the candidate as a NEW look of this waypoint, beside the one it
+        # was edited from. Nothing is replaced, so nothing goes to
+        # .before-edit; the original photograph is untouched by construction.
+        name = _clean_variant(as_new)
+        if name is None:
+            return jsonify(ok=False, error="variant names are letters, digits, "
+                                           "- and _ (up to 32)")
+        if name in pano_variants(v):
+            return jsonify(ok=False, error=f"variant '{name}' already exists — "
+                                           "select it and Save to overwrite it")
+        src = live_pano(v, variant) or live_pano(v)
+        ext = os.path.splitext(src)[1] if src else ".JPG"
+        ident = vid(v) + "@" + name
+        dest = os.path.join(G["base"], "panos", ident + ext)
+        im = Image.open(cand).convert("RGB")
+        im.save(dest, quality=95) if dest.lower().endswith((".jpg", ".jpeg")) \
+            else im.save(dest)
+        os.remove(cand)
+        _clear_hist(v, variant)
+        return jsonify(ok=True, saved=os.path.relpath(dest, G["base"]), id=ident,
+                       variant=name, next=f"just generate {ident}",
+                       message=f"saved new variant '{name}' — build its world "
+                               f"with `just generate {ident}`")
+    live = live_pano(v, variant)
+    ident = _stem(v, variant)
     dest = live or os.path.join(G["base"], "panos", ident + ".JPG")
     if live:
         kept = os.path.join(G["base"], "panos", ".before-edit")
@@ -465,11 +530,10 @@ def save():
     # Write in the extension already on disk: the pipeline finds the file by stem
     # and PIL sniffs content, but a .JPG holding a PNG confuses anything reading
     # it by name.
-    from PIL import Image
     im = Image.open(cand).convert("RGB")
     im.save(dest, quality=95) if dest.lower().endswith((".jpg", ".jpeg")) else im.save(dest)
     os.remove(cand)
-    _clear_hist(v)
+    _clear_hist(v, variant)
     # The alignment record is about how the panorama was TURNED, and an edit does
     # not turn it — so it stays, and a regenerated world keeps the same heading.
     return jsonify(ok=True, saved=os.path.relpath(dest, G["base"]), id=ident,
@@ -481,8 +545,9 @@ def save():
 
 @app.route("/revert", methods=["POST"])
 def revert():
-    v = int((request.get_json(force=True) or {})["v"])
-    has_cand = revert_candidate(v)                   # pop last edit; False -> back to saved restyle
+    b = request.get_json(force=True) or {}
+    v = int(b["v"])
+    has_cand = revert_candidate(v, str(b.get("variant") or ""))
     return jsonify(ok=True, v=v, has_candidate=has_cand)
 
 

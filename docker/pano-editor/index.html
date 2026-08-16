@@ -66,6 +66,7 @@
     <div class="sec"><label class=f>floorplan — click a vertex</label>
       <div id="fpwrap"><canvas id="fp"></canvas></div>
       <div class="row" style="margin-top:6px"><select id="vsel"><option value="">— select vertex —</option></select></div>
+      <div class="row" style="margin-top:6px"><select id="varsel" style="display:none"></select></div>
       <div class="kv" style="margin-top:6px">selected: <span id="sel">none</span></div>
     </div>
     <div class="sec">
@@ -80,6 +81,7 @@
       <div class="row">
         <button class="go" id="revert" style="display:none;flex:0 0 auto;background:#30363d">↶ undo edit</button>
         <button class="go save" id="save" disabled>Save panorama</button>
+        <button class="go" id="saveas" disabled style="background:#1f6feb">Save as variant…</button>
       </div>
       <div id="status"></div>
     </div>
@@ -105,6 +107,13 @@ const $=id=>document.getElementById(id);
 window.onerror=(msg,src,ln,col)=>{const b=$("err");if(b){b.style.display="block";
   b.textContent="JS error: "+msg+"  (line "+ln+")";}};
 let SEL=null, G=null, FP=new Image(), fpReady=false, hasCand=false, brush=30, painting=false, undoStack=[], progTimer=null;
+let VAR="";   // which look of the vertex is loaded: "" = the original photograph
+function panoURL(kind){return `/pano?v=${SEL}&kind=${kind}&variant=${encodeURIComponent(VAR)}&t=${Date.now()}`;}
+async function loadVariants(i){try{
+  const j=await(await fetch(`/variants?v=${i}`)).json();const names=j.variants||[];
+  const s=$("varsel");
+  s.innerHTML=names.map(n=>`<option value="${n}"${n===VAR?" selected":""}>${n?("variant: "+n):"original"}</option>`).join("");
+  s.style.display=names.length?"":"none";}catch(e){}}
 let brushOn=false;   // default: instruction edit, no mask. brush is an opt-in region limit.
 
 // ── synced 360 viewer (panorama_viewer engine) ─────────────────────────────────
@@ -200,8 +209,9 @@ $("fp").addEventListener("click",e=>{if(!G)return;const cv=$("fp"),r=cv.getBound
   let best=null,bd=1e9;G.verts.forEach(v=>{const d=Math.hypot(v.px-mx,v.py-my);if(d<bd){bd=d;best=v;}});
   if(best&&bd<Math.max(60,(G.w||cv.width)/22))select(best.id);});
 
-function select(i){SEL=i;const v=G.verts.find(x=>x.id===i);
-  P.cur.setSrc(`/pano?v=${i}&kind=current&t=${Date.now()}`);
+function select(i){SEL=i;VAR="";const v=G.verts.find(x=>x.id===i);
+  loadVariants(i);
+  P.cur.setSrc(panoURL("current"));
   try{$("sel").textContent="v"+i+(v&&v.name?" ("+v.name+")":"");
     if($("vsel"))$("vsel").value=String(i);
     $("gen").disabled=false;hasCand=false;reflectCand();layout();drawFP();}
@@ -217,6 +227,7 @@ function reflectCand(){$("revert").style.display=hasCand?"":"none";
   // Save only means something with a pending edit now: there is nothing to
   // regenerate from here, so an unedited waypoint has nothing to save.
   $("save").disabled=!hasCand;
+  $("saveas").disabled=!hasCand;
   $("save").textContent="Save panorama";}
 function resetUndo(){undoStack=[];}
 function pushUndo(){undoStack.push(MC.toDataURL());if(undoStack.length>30)undoStack.shift();}
@@ -226,9 +237,9 @@ $("undo").onclick=undo;
 async function revertEdit(){if(SEL===null||!hasCand)return;
   status("reverting…");
   const j=await(await fetch("/revert",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({v:SEL})})).json();
+    body:JSON.stringify({v:SEL,variant:VAR})})).json();
   hasCand=j.has_candidate;layout();reflectCand();
-  if(hasCand){P.cand.setSrc(`/pano?v=${SEL}&kind=candidate&t=${Date.now()}`);status("undid last edit","ok");}
+  if(hasCand){P.cand.setSrc(panoURL("candidate"));status("undid last edit","ok");}
   else status("back to the saved panorama","ok");}
 $("revert").onclick=revertEdit;
 // Ctrl/Cmd+Z: undo the brush stroke while brushing, otherwise undo the last accumulated edit.
@@ -271,7 +282,7 @@ $("gen").onclick=async()=>{if(SEL===null)return;const prompt=$("prompt").value.t
   if(!prompt){status("describe the change","err");return;}
   const m=brushOn?maskDataURL():null;
   if(brushOn&&!m){status("brush a region, or untick “brush to limit area”","err");return;}
-  const body={v:SEL,prompt,mode:m?"inpaint":"edit",seed:Math.floor(Math.random()*1e6),from_candidate:hasCand};
+  const body={v:SEL,variant:VAR,prompt,mode:m?"inpaint":"edit",seed:Math.floor(Math.random()*1e6),from_candidate:hasCand};
   if(m)body.mask=m;
   else body.view={yaw,pitch,fov,aspect:(P.cur.cvs.clientHeight/P.cur.cvs.clientWidth)||0.66};  // edit what you're facing
   $("gen").disabled=true;startProg();status((hasCand?"editing the candidate…":m?"inpainting…":"editing the view…"));
@@ -279,20 +290,37 @@ $("gen").onclick=async()=>{if(SEL===null)return;const prompt=$("prompt").value.t
       body:JSON.stringify(body)})).json();
     if(!j.ok){stopProg(false);status("edit failed: "+j.error,"err");}
     else{stopProg(true);hasCand=true;layout();
-      P.cand.setSrc(`/pano?v=${SEL}&kind=candidate&t=${Date.now()}`);
+      P.cand.setSrc(panoURL("candidate"));
       reflectCand();status("candidate ready — edit again to stack, or Save","ok");}}
   catch(e){stopProg(false);status("! "+e,"err");}finally{$("gen").disabled=false;}};
 
 $("save").onclick=async()=>{if(SEL===null||!hasCand)return;
-  if(!confirm(`Save v${SEL}? This overwrites its panorama — the one it replaces is kept `
+  const what=VAR?`variant '${VAR}' of v${SEL}`:`v${SEL}`;
+  if(!confirm(`Save ${what}? This overwrites its panorama — the one it replaces is kept `
              +`under panos/.before-edit/. Rebuilding its splat world is a separate `
              +`\`just generate\` afterwards.`))return;
   $("save").disabled=true;status("saving…");
   try{const j=await(await fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({v:SEL})})).json();
+      body:JSON.stringify({v:SEL,variant:VAR})})).json();
     if(!j.ok){status("save failed: "+j.error,"err");$("save").disabled=false;}
-    else{status(j.message,"ok");hasCand=false;reflectCand();layout();select(SEL);}}
+    else{const keep=VAR;status(j.message,"ok");hasCand=false;reflectCand();layout();
+      select(SEL);VAR=keep;loadVariants(SEL);P.cur.setSrc(panoURL("current"));}}
   catch(e){status("! "+e,"err");$("save").disabled=false;}};
+
+$("saveas").onclick=async()=>{if(SEL===null||!hasCand)return;
+  const name=prompt("name for the new variant (letters, digits, - and _):");
+  if(!name)return;
+  $("saveas").disabled=true;status("saving variant…");
+  try{const j=await(await fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({v:SEL,variant:VAR,as_new:name})})).json();
+    if(!j.ok){status("save failed: "+j.error,"err");$("saveas").disabled=false;}
+    else{status(j.message,"ok");hasCand=false;VAR=j.variant;
+      await loadVariants(SEL);reflectCand();layout();P.cur.setSrc(panoURL("current"));}}
+  catch(e){status("! "+e,"err");$("saveas").disabled=false;}};
+
+$("varsel").onchange=()=>{VAR=$("varsel").value;hasCand=false;reflectCand();layout();
+  P.cur.setSrc(panoURL("current"));
+  status(VAR?`variant '${VAR}' loaded`:"original loaded","ok");};
 
 // build_library recreates the deleted artifacts by name; /progress reports how many exist
 // Save writes panos/<id> and stops. Rebuilding the splat world from it is

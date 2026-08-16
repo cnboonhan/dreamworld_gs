@@ -413,8 +413,11 @@ def built_scenes():
     except OSError:
         return []
     pre = ST["level"] + "."
+    # Variants (splats/<id>@<name>/) are a way of SEEING a place, not another
+    # place: the viewer's dropdown chooses between them, and the model goes on
+    # addressing the base vertex.
     return sorted(n[len(pre):] for n in names
-                  if n.startswith(pre)
+                  if n.startswith(pre) and "@" not in n
                   and os.path.isfile(os.path.join(root, n, "world.ply")))
 
 

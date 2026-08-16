@@ -857,6 +857,7 @@ async function edgePicker(doc, choose, facing, keepPose) {
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
         <div id="spotRow"></div>
+        <select id="variantSel"></select>
         <select id="goTo"></select>
         <button id="goBtn">go to position</button>
         <button id="saveSpot"></button>
@@ -1042,6 +1043,44 @@ async function edgePicker(doc, choose, facing, keepPose) {
         const b = spotRow.querySelector(`button[data-i="${best.i}"]`);
         if (b) b.click();
     };
+
+    // Variants of this waypoint's world — splats/<id>@<name>/ siblings of the
+    // base: the same place, edited. The dropdown swaps which one is on
+    // screen; the heading carries over and the dashboard goes on addressing
+    // the base vertex, because a variant is a way of SEEING the place, not
+    // another place. Removed when the waypoint has only its original.
+    (async () => {
+        const vs = box.querySelector("#variantSel");
+        if (!vs) return;
+        const cur = (decodeURIComponent(location.search)
+            .match(/splats\/([^/]+)\/world\.ply/) || [])[1];
+        if (!proj || !cur) { vs.remove(); return; }
+        const base = cur.split("@")[0];
+        let index = [];
+        try {
+            const r = await fetch(new URL(
+                `files/${proj[1]}/splats/scenes.json`, location.href).href);
+            if (r.ok) index = await r.json();
+        } catch (err) { /* no index, no dropdown */ }
+        const kin = index.map((x) => x.scene)
+            .filter((s) => s === base || s.startsWith(base + "@"));
+        if (kin.length < 2) { vs.remove(); return; }
+        vs.innerHTML = kin.map((s) => {
+            const name = s.includes("@") ? s.split("@")[1] : "original";
+            return `<option value="${s}"${s === cur ? " selected" : ""}>` +
+                   `variant: ${name}</option>`;
+        }).join("");
+        vs.onchange = async () => {
+            const scene = vs.value;
+            if (scene === cur) return;
+            // Standing in place: cameFrom is this very waypoint, so the
+            // arrival keeps the heading instead of turning down a corridor.
+            window.__cameFrom = doc.waypoint;
+            await window.prepareArrival(proj[1], scene, me);
+            if (window.stepThrough && !window.stepThrough())
+                tour.waiting = true;
+        };
+    })();
 
     const paintSpots = () => {
         spotRow.innerHTML = spots.map((v, i) =>

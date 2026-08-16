@@ -59,6 +59,11 @@ def main() -> None:
         print(f"{scene.name}: not a waypoint id, no lanes")
         return
     level, waypoint = scene.name.split(".", 1)
+    # A variant world — splats/<id>@<name>/ — is the same PLACE, edited. It
+    # answers to its base waypoint for lanes and marks, and the doc it writes
+    # names the base, so a viewer standing in a variant still knows where it
+    # is in the building and every tool addresses the vertex, not the look.
+    waypoint, _, variant = waypoint.partition("@")
     named, lanes = building(project, level)
     if waypoint not in named:
         # an edge world, or a loose panorama: no lanes leave it, so there is
@@ -81,6 +86,12 @@ def main() -> None:
     # implied anywhere from 0.65 to 2.95 units per metre.
     saved = {}
     rec = scene.parent / ".aligned" / f"{scene.name}.json"
+    if variant and not rec.is_file():
+        # Inherited from the base until someone re-marks the variant. Two
+        # generation runs need not share a frame, so if a variant's walks land
+        # off, mark IT in the aligner — that writes <id>@<name>.json and this
+        # fallback stops applying.
+        rec = scene.parent / ".aligned" / f"{level}.{waypoint}.json"
     if rec.is_file():
         saved = json.loads(rec.read_text())
     # The waypoint's OWN position needs no marking — the panorama was shot
