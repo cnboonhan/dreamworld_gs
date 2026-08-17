@@ -16,3 +16,14 @@ fetch:
     HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
         --with safetensors --no-project \
         {{repo}}/scripts/fetch_assets.py {{assets}}
+
+# Pack the WHOLE assets/projects/<project> into dist/ — maps, worlds, panos,
+# splats, training intermediates, everything. Weights are separate (just fetch).
+#
+# Carry a project to another machine, entire.
+pack proj=project dest="dist":
+    @python3 {{repo}}/scripts/pack.py pack {{assets}} {{proj}} {{dest}}
+
+# Restore a packed project, in place (merges into an existing one, with a note).
+unpack FILE:
+    @python3 {{repo}}/scripts/pack.py unpack {{repo}} {{FILE}}
