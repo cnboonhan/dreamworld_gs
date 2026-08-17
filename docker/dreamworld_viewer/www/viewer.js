@@ -257,7 +257,9 @@ gl.vertexAttribDivisor(a_idx, 1);
 let projection = [];
 function resize() {
   const w = innerWidth, h = innerHeight;
-  const f = 0.785 * h;
+  // the crossing videos were extracted at 1.2 rad horizontal fov; the
+  // splat camera matches it, so the video-to-splat handoff keeps scale
+  const f = (0.5 / Math.tan(0.6)) * w;
   cv.width = w; cv.height = h;
   gl.viewport(0, 0, w, h);
   gl.uniform2fv(u_focal, new Float32Array([f, f]));
@@ -341,46 +343,40 @@ function strafe(d) {
   st.cam.eye = st.cam.eye.map((v, i) => v + right[i] * d);
 }
 
-// ---- the plan overlay (main's picker palette) -----------------------------
+// ---- the plan overlay: main's picker view — the waypoint you stand at,
+// the walls around it, the neighbours you can walk to, nothing more.
+// Range scales to the farthest neighbour, as main scaled to its lanes.
 const px = plan.getContext('2d');
 let hits = [];
 function drawPlan() {
-  if (!graph || !st.at) return;
+  if (!graph || !st.at || plan.style.display === 'none') return;
   const me = graph.vertices[st.at];
   const L = graph.levels[me.level] || { walls: [] };
-  const pts = [];
-  for (const w of L.walls) pts.push([w[0], w[1]], [w[2], w[3]]);
-  for (const [n, v] of Object.entries(graph.vertices))
-    if (v.level === me.level) pts.push([v.x, v.y]);
-  if (!pts.length) return;
-  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  const y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const k = Math.min(260 / Math.max(1, x1 - x0), 200 / Math.max(1, y1 - y0));
-  const P = (x, y) => [10 + (x - x0) * k, 10 + (y - y0) * k];
+  const nbrs = neighbours(st.at);
+  const far = Math.max(40, ...nbrs.map(n => {
+    const v = graph.vertices[n];
+    return Math.hypot(v.x - me.x, v.y - me.y);
+  })) * 1.4;
+  const cx2 = 140, cy2 = 110, R = 95;
+  const P = (x, y) => [cx2 + (x - me.x) / far * R,
+                       cy2 + (y - me.y) / far * R];
   px.fillStyle = '#0a0d12';
   px.fillRect(0, 0, 280, 220);
-  px.strokeStyle = '#3a4757'; px.lineWidth = 1.5; px.beginPath();
+  px.strokeStyle = '#3a4757'; px.lineWidth = 2; px.beginPath();
   for (const w of L.walls) {
     const a = P(w[0], w[1]), b = P(w[2], w[3]);
     px.moveTo(a[0], a[1]); px.lineTo(b[0], b[1]);
   }
   px.stroke();
-  px.strokeStyle = '#2f4568'; px.lineWidth = 2; px.beginPath();
-  for (const [a, b] of graph.edges) {
-    const va = graph.vertices[a], vb = graph.vertices[b];
-    if (!va || !vb || va.level !== me.level) continue;
-    const p = P(va.x, va.y), q = P(vb.x, vb.y);
-    px.moveTo(p[0], p[1]); px.lineTo(q[0], q[1]);
-  }
-  px.stroke();
   hits = [];
-  const nbrs = neighbours(st.at);
-  for (const [n, v] of Object.entries(graph.vertices)) {
+  for (const n of nbrs) {
+    const v = graph.vertices[n];
     if (v.level !== me.level) continue;
     const [x, y] = P(v.x, v.y);
     const built = Object.keys(v.looks).length > 0;
-    if (n === st.at) continue;
+    px.strokeStyle = built ? '#3a5f8f' : '#7d4348';
+    px.lineWidth = 1.5; px.beginPath();
+    px.moveTo(cx2, cy2); px.lineTo(x, y); px.stroke();
     px.beginPath();
     if (v.lift) {
       px.save(); px.translate(x, y); px.rotate(Math.PI / 4);
@@ -389,27 +385,34 @@ function drawPlan() {
       px.fillRect(-4, -4, 8, 8); px.strokeRect(-4, -4, 8, 8);
       px.restore();
     } else {
-      px.fillStyle = built ? '#7aa2f7' : '#0a0d12';
-      px.strokeStyle = '#7aa2f7';
+      px.fillStyle = built ? '#9cc7ff' : '#0a0d12';
+      px.strokeStyle = built ? '#9cc7ff' : '#ff9d97';
       px.arc(x, y, 4, 0, 7); px.fill(); px.stroke();
     }
-    const nb = nbrs.includes(n);
-    px.fillStyle = nb ? '#9cc7ff' : '#7d8590';
-    px.font = '10px system-ui';
-    px.fillText(n.split('.').pop(), x + 6, y - 5);
-    if (nb && built) hits.push({ n, x, y });
+    px.fillStyle = built ? '#9cc7ff' : '#ff9d97';
+    px.font = '11px system-ui';
+    px.fillText(n.split('.').pop(),
+                cx2 + (x - cx2) * 0.62 + 3, cy2 + (y - cy2) * 0.62 - 3);
+    if (built) hits.push({ n, x, y });
   }
   // us: a green triangle carrying the heading, as the dashboard drew it
-  const [mx, my2] = P(me.x, me.y);
-  // yaw is a building bearing; the drawing's y runs down
+  // (yaw is a building bearing; the drawing's y runs down)
   const a2 = -st.cam.yaw;
-  const T = (r, off) => [mx + r * Math.cos(a2 + off),
-                         my2 + r * Math.sin(a2 + off)];
+  const T = (r, off) => [cx2 + r * Math.cos(a2 + off),
+                         cy2 + r * Math.sin(a2 + off)];
   const tip = T(11, 0), l = T(8, 2.55), r2 = T(8, -2.55);
   px.fillStyle = '#3fb950'; px.beginPath();
   px.moveTo(tip[0], tip[1]); px.lineTo(l[0], l[1]);
-  px.lineTo(mx, my2); px.lineTo(r2[0], r2[1]); px.fill();
+  px.lineTo(cx2, cy2); px.lineTo(r2[0], r2[1]); px.fill();
 }
+const planBtn = $('planBtn');
+planBtn.onclick = () => {
+  const off = plan.style.display === 'none';
+  plan.style.display = off ? '' : 'none';
+  $('panel').style.display = 'none';
+  planBtn.textContent = off ? '−' : '☰';
+  planBtn.title = off ? 'hide the plan' : 'show the plan';
+};
 plan.addEventListener('click', e => {
   if (st.moving) return;
   const r = plan.getBoundingClientRect();
@@ -498,21 +501,25 @@ async function go() {
   st.moving = true;
   $('panel').style.display = 'none';
   const bearing = bearingTo(to);
+  // the destination downloads through the WHOLE crossing — spin and video
+  // both — so by the time the last frame holds, the world is waiting
+  const loading = fetchRecords(to, look);
   // 1. spin in place to face the way we will walk
   await spinTo(bearing, 800);
-  // 2. the crossing video covers the canvas while the next world loads
+  // 2. the crossing video covers the canvas
   const key = tagOf(st.at, st.look) + '__' + tagOf(to, look);
   const hasVideo = graph.crossings.includes(key);
-  const loading = fetchRecords(to, look);
   if (hasVideo) {
     await playVideo(`${FILES}/.crossings/${key}/crossing.mp4`);
   } else {
     $('shade').style.opacity = '1';
     await new Promise(r => setTimeout(r, 350));
   }
-  $('spin').style.display = st.vertexCount ? 'none' : 'flex';
   // 3. arrive: the destination world, standing at its capture point,
-  //    facing the same bearing the crossing travelled
+  //    facing the same bearing the crossing travelled. The video HOLDS
+  //    its last frame — which is the destination's own view — until the
+  //    splat's first sorted frame has actually been drawn beneath it,
+  //    then fades: that unbroken image is the seam.
   const ab = await loading;
   const meta = graph.vertices[to].looks[look].meta;
   st.basis = basisOf(meta);
@@ -520,7 +527,8 @@ async function go() {
   st.cam.yaw = bearing;
   st.cam.pitch = 0;
   await showRecords(ab);
-  $('spin').style.display = 'none';
+  await new Promise(r => requestAnimationFrame(
+    () => requestAnimationFrame(r)));
   $('vid').style.opacity = '0';
   $('shade').style.opacity = '0';
   st.at = to;
