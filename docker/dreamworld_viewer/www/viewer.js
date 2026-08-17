@@ -189,7 +189,7 @@ const $ = id => document.getElementById(id);
 const cv = $('cv'), plan = $('plan');
 let graph = null;
 const st = {
-  at: null, look: 'original', target: null, moving: false,
+  at: null, look: 'original', target: null, moving: false, follow: true,
   cam: { eye: [0, 0, 0], yaw: 0, pitch: 0 },
   basis: null,           // {east, north, up} of the CURRENT world
   vertexCount: 0,
@@ -212,6 +212,70 @@ function coreMark() {
   el.style.color = live ? '#3fb950' : '#f85149';
 }
 setInterval(coreMark, 1000);
+addEventListener('DOMContentLoaded', () => {
+  const f = $('follow');
+  if (f) f.onchange = () => {
+    st.follow = f.checked;
+    if (st.follow) lastSeq = 0;   // catch up to wherever the core is
+  };
+});
+
+// ---- following the core: main's protocol, kept — the core is the ONLY
+// writer of position. The harness posts where the walker should be; so
+// does our own go button; the viewer notices the sequence advance and
+// enacts it: a spin-and-crossing for a neighbour, a cut for anywhere
+// else, a reload in place for a change of look. The follow toggle turns
+// the viewer back into a free agent.
+let lastSeq = 0;
+function followTruth(pos, seq) {
+  if (!st.follow || st.moving || !graph) return;
+  if (!(seq > lastSeq)) return;
+  lastSeq = seq;
+  enact(pos.at, pos.look);
+}
+async function enact(to, look) {
+  if (!graph.vertices[to] || !graph.vertices[to].looks[look]) return;
+  if (to === st.at && look === st.look) return;
+  if (to !== st.at && neighbours(st.at).includes(to)) {
+    await runGo(to, look);
+  } else {
+    await jumpTo(to, look);
+  }
+}
+async function jumpTo(to, look) {
+  st.moving = true;
+  st.transition = { to, look, phase: 'cut' };
+  pushState(true);
+  $('shade').style.opacity = '1';
+  const ab = await fetchRecords(to, look);
+  await new Promise(r => setTimeout(r, 300));
+  const meta = graph.vertices[to].looks[look].meta;
+  st.basis = basisOf(meta);
+  st.cam.eye = meta.center.slice();
+  const nbrs2 = neighbours(to);
+  if (to !== st.at && nbrs2.length) st.cam.yaw = bearingToFrom(to, nbrs2[0]);
+  st.cam.pitch = 0;
+  await showRecords(ab);
+  await new Promise(r => requestAnimationFrame(
+    () => requestAnimationFrame(r)));
+  $('shade').style.opacity = '0';
+  st.at = to;
+  st.look = look;
+  st.transition = null;
+  updateBar();
+  st.moving = false;
+  pushState(true);
+  preheat();
+}
+function bearingToFrom(frm, to) {
+  const a = graph.vertices[frm], b = graph.vertices[to];
+  return Math.atan2(-(b.y - a.y), b.x - a.x);
+}
+function postPosition(at, look) {
+  return fetch('/dreamworld_core/position', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ at, look }) }).catch(() => {});
+}
 function pushState(force) {
   if (!graph || !st.at) return;
   const now = performance.now();
@@ -231,7 +295,14 @@ function pushState(force) {
   lastPush = now;
   fetch('/dreamworld_core/viewer/state', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: s }).then(r => { if (r.ok) coreOk = performance.now();
+    body: s }).then(async r => {
+      if (r.ok) {
+        coreOk = performance.now();
+        // the response carries the TRUTH: core's position, which this
+        // viewer follows — the harness (or our own go button) moved it
+        const doc = await r.json();
+        if (doc.position) followTruth(doc.position, doc.seq);
+      }
       coreMark(); }).catch(() => coreMark());
 }
 
@@ -570,7 +641,16 @@ $('cancelBtn').onclick = () => {
   st.target = null;
   $('panel').style.display = 'none';
 };
-$('goBtn').onclick = () => { if (st.target && !st.moving) go(); };
+$('goBtn').onclick = () => {
+  if (!st.target || st.moving) return;
+  const to = st.target, look = $('tlook').value;
+  st.target = null;
+  $('panel').style.display = 'none';
+  // one writer of position: even our own button asks the core to move
+  // the walker, and the follow loop enacts what comes back
+  if (st.follow) postPosition(to, look);
+  else runGo(to, look);
+};
 
 function spinTo(bearing, ms) {
   return new Promise(res => {
@@ -600,10 +680,8 @@ function playVideo(url) {
   });
 }
 
-async function go() {
-  const to = st.target, look = $('tlook').value;
+async function runGo(to, look) {
   st.moving = true;
-  $('panel').style.display = 'none';
   const bearing = bearingTo(to);
   // the destination downloads through the WHOLE crossing — spin and video
   // both — so by the time the last frame holds, the world is waiting
@@ -698,9 +776,27 @@ async function boot() {
     $('spin').style.display = 'none';
     return;
   }
-  const [start] = candidates.find(([n]) => n === want) || candidates[0];
+  // the core's position is the truth: adopt it when it names a built
+  // world, seed it when it holds nothing yet
+  let core = null;
+  try {
+    core = await (await fetch('/dreamworld_core/position')).json();
+  } catch (e) { core = null; }
+  let start, startLook = null;
+  if (core && core.position && graph.vertices[core.position.at]
+      && graph.vertices[core.position.at].looks[core.position.look]) {
+    start = core.position.at;
+    startLook = core.position.look;
+    lastSeq = core.seq || 0;
+  } else {
+    [start] = candidates.find(([n]) => n === want) || candidates[0];
+  }
   st.at = start;
-  st.look = Object.keys(graph.vertices[start].looks)[0];
+  st.look = startLook || Object.keys(graph.vertices[start].looks)[0];
+  if (!startLook) {
+    const seeded = await postPosition(st.at, st.look);
+    try { lastSeq = (await seeded.json()).seq || lastSeq; } catch (e) {}
+  }
   const nbrs = neighbours(start);
   const meta = graph.vertices[start].looks[st.look].meta;
   st.basis = basisOf(meta);
