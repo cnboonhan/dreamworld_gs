@@ -66,7 +66,7 @@
     <div class="sec"><label class=f>floorplan — click a vertex</label>
       <div id="fpwrap"><canvas id="fp"></canvas></div>
       <div class="row" style="margin-top:6px"><select id="vsel"><option value="">— select vertex —</option></select></div>
-      <div class="row" style="margin-top:6px"><select id="varsel" style="display:none"></select></div>
+      <div class="row" style="margin-top:6px"><select id="varsel" style="display:none"></select><button id="vardel" title="delete this variant — its panorama and its splat world" style="display:none;flex:0 0 auto;background:#30363d;color:#ff7b72;border:1px solid #f85149;border-radius:5px;padding:6px 10px;font:600 13px var(--sans);cursor:pointer">✕</button></div>
       <div class="kv" style="margin-top:6px">selected: <span id="sel">none</span></div>
     </div>
     <div class="sec">
@@ -81,7 +81,10 @@
       <div class="row">
         <button class="go" id="revert" style="display:none;flex:0 0 auto;background:#30363d">↶ undo edit</button>
         <button class="go save" id="save" disabled>Save panorama</button>
-        <button class="go" id="saveas" disabled style="background:#1f6feb">Save as variant…</button>
+        <button class="go" id="saveas" disabled style="background:#1f6feb">Save as variant</button>
+      </div>
+      <div class="row">
+        <input id="varname" placeholder="new variant name (e.g. blocked)" style="flex:1;background:#0d1117;color:var(--text);border:1px solid var(--hair);border-radius:5px;padding:7px;font:13px var(--sans)">
       </div>
       <div id="status"></div>
     </div>
@@ -113,7 +116,8 @@ async function loadVariants(i){try{
   const j=await(await fetch(`/variants?v=${i}`)).json();const names=j.variants||[];
   const s=$("varsel");
   s.innerHTML=names.map(n=>`<option value="${n}"${n===VAR?" selected":""}>${n?("variant: "+n):"original"}</option>`).join("");
-  s.style.display=names.length?"":"none";}catch(e){}}
+  s.style.display=names.length?"":"none";
+  $("vardel").style.display=VAR?"":"none";}catch(e){}}
 let brushOn=false;   // default: instruction edit, no mask. brush is an opt-in region limit.
 
 // ── synced 360 viewer (panorama_viewer engine) ─────────────────────────────────
@@ -308,17 +312,30 @@ $("save").onclick=async()=>{if(SEL===null||!hasCand)return;
   catch(e){status("! "+e,"err");$("save").disabled=false;}};
 
 $("saveas").onclick=async()=>{if(SEL===null||!hasCand)return;
-  const name=prompt("name for the new variant (letters, digits, - and _):");
-  if(!name)return;
+  const name=$("varname").value.trim();
+  if(!name){status("name the variant first — the field under the save buttons","err");
+    $("varname").focus();return;}
   $("saveas").disabled=true;status("saving variant…");
   try{const j=await(await fetch("/save",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({v:SEL,variant:VAR,as_new:name})})).json();
     if(!j.ok){status("save failed: "+j.error,"err");$("saveas").disabled=false;}
-    else{status(j.message,"ok");hasCand=false;VAR=j.variant;
+    else{status(j.message,"ok");hasCand=false;VAR=j.variant;$("varname").value="";
       await loadVariants(SEL);reflectCand();layout();P.cur.setSrc(panoURL("current"));}}
   catch(e){status("! "+e,"err");$("saveas").disabled=false;}};
 
+$("vardel").onclick=async()=>{if(SEL===null||!VAR)return;
+  if(!confirm(`Delete variant '${VAR}' of v${SEL}? This removes its panorama AND its `
+             +`splat world. The original is untouched.`))return;
+  status("deleting variant…");
+  try{const j=await(await fetch("/variant_delete",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({v:SEL,variant:VAR})})).json();
+    if(!j.ok){status("delete failed: "+j.error,"err");}
+    else{status(j.message,"ok");VAR="";hasCand=false;
+      await loadVariants(SEL);reflectCand();layout();P.cur.setSrc(panoURL("current"));}}
+  catch(e){status("! "+e,"err");}};
+
 $("varsel").onchange=()=>{VAR=$("varsel").value;hasCand=false;reflectCand();layout();
+  $("vardel").style.display=VAR?"":"none";
   P.cur.setSrc(panoURL("current"));
   status(VAR?`variant '${VAR}' loaded`:"original loaded","ok");};
 

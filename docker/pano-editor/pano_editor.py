@@ -452,6 +452,62 @@ def r_variants():
     return jsonify(variants=pano_variants(int(request.args["v"])))
 
 
+def _rebuild_scenes_index():
+    """scenes.json is normally edge_walks' to write; deleting a variant must
+    heal it too, or the viewer's dropdown goes on offering a world that is
+    gone. Same entries, same source of truth: the splat dirs on disk."""
+    root = os.path.join(G["base"], "splats")
+    index = []
+    for d in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        ply = os.path.join(root, d, "world.ply")
+        paths = os.path.join(root, d, "world.paths.json")
+        if not (os.path.isfile(ply) and os.path.isfile(paths)):
+            continue
+        try:
+            p = json.load(open(paths))
+        except (OSError, ValueError):
+            continue
+        index.append({"scene": d, "lanes": len(p.get("lanes", [])),
+                      "walks": len(p.get("walks", [])),
+                      "placed": len(p.get("placed", {}))})
+    with open(os.path.join(root, "scenes.json"), "w") as f:
+        json.dump(index, f)
+
+
+@app.route("/variant_delete", methods=["POST"])
+def r_variant_delete():
+    """Remove one look of a waypoint: its panorama, its splat world, its
+    marks, its pending edits. The ORIGINAL is not a variant and cannot be
+    deleted from here — it is the photograph everything else is made from."""
+    b = request.get_json(force=True) or {}
+    v = int(b["v"])
+    variant = _clean_variant(b.get("variant"))
+    if not variant:
+        return jsonify(ok=False, error="the original cannot be deleted — "
+                                       "only variants can")
+    if variant not in pano_variants(v):
+        return jsonify(ok=False, error=f"v{v} has no variant '{variant}'")
+    ident = vid(v) + "@" + variant
+    removed = []
+    p = live_pano(v, variant)
+    if p:
+        os.remove(p); removed.append(os.path.relpath(p, G["base"]))
+    world = os.path.join(G["base"], "splats", ident)
+    if os.path.isdir(world):
+        shutil.rmtree(world); removed.append(f"splats/{ident}/")
+    mark = os.path.join(G["base"], "splats", ".aligned", ident + ".json")
+    if os.path.isfile(mark):
+        os.remove(mark); removed.append(f"splats/.aligned/{ident}.json")
+    cand = pano_path(v, "candidate", variant)
+    if os.path.isfile(cand):
+        os.remove(cand)
+    _clear_hist(v, variant)
+    _rebuild_scenes_index()
+    return jsonify(ok=True, removed=removed,
+                   message=f"deleted variant '{variant}' of {vid(v)}"
+                           f" ({', '.join(removed) or 'no files found'})")
+
+
 @app.route("/edit", methods=["POST"])
 @app.route("/restyle", methods=["POST"])          # the name the ported page posts to
 def edit():
