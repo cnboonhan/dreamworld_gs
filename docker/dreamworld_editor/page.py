@@ -526,12 +526,14 @@ def variants_card(name, v, sel, refresh_all):
                       if ok else "nothing to undo")
             refresh_all()
 
-        with ui.row().classes("w-full items-center gap-2"):
-            ui.button("edit", color="primary",
-                      on_click=edit_variant).props("dense")
+        with ui.row().classes("w-full items-center"):
             ui.button("undo", on_click=undo).props(
                 "dense flat" + ("" if store.has_undo(name, var)
                                 else " disable"))
+            ui.space()
+            ui.button("edit", color="primary",
+                      on_click=edit_variant).props("dense")
+            ui.space()
             ui.button("delete", color="negative",
                       on_click=delete_variant).props("dense")
         ui.label("drag to look, scroll to zoom, place the rectangle over "
