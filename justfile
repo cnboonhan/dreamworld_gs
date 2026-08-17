@@ -23,9 +23,5 @@ repo    := justfile_directory()
 assets  := repo / "assets"
 project := env_var_or_default("DW_PROJECT", "multilevel_office")
 
-# compose runs containers as you, not root, so outputs stay writable
-export DW_UID := `id -u`
-export DW_GID := `id -g`
-
 _default:
     @just --list
