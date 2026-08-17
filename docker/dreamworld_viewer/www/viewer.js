@@ -388,8 +388,9 @@ function drawPlan() {
   const cx2 = 140, cy2 = 110, R = 95;
   const P = (x, y) => [cx2 + (x - me.x) / far * R,
                        cy2 + (y - me.y) / far * R];
-  px.fillStyle = '#0a0d12';
-  px.fillRect(0, 0, 320, 220);
+  // clear, not fill: the plan's translucency is its CSS background,
+  // so the world stays faintly visible behind it
+  px.clearRect(0, 0, 320, 220);
   px.strokeStyle = '#3a4757'; px.lineWidth = 2; px.beginPath();
   for (const w of L.walls) {
     const a = P(w[0], w[1]), b = P(w[2], w[3]);
