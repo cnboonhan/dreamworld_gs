@@ -1079,6 +1079,20 @@ async function edgePicker(doc, choose, facing, keepPose) {
             // Standing in place: cameFrom is this very waypoint, so the
             // arrival keeps the heading instead of turning down a corridor.
             window.__cameFrom = doc.waypoint;
+            // Keep the view angle across the switch. The raw camera vector
+            // cannot carry over — two generation runs need not share a frame —
+            // but the heading RELATIVE to a lane both worlds name transfers
+            // exactly; the arrival rebuilds it in the new frame.
+            const fwd = cameraForward();
+            const lane0 = (doc.lanes || [])[0];
+            if (fwd && lane0) {
+                const u = norm3(doc.up || [0, -1, 0]);
+                const e = norm3(lane0.dir.map(
+                    (v, i) => v - u[i] * dot3(lane0.dir, u)));
+                const b2 = cross3(u, e);
+                window.__keepAngle = {to: lane0.to,
+                    rel: [dot3(fwd, e), dot3(fwd, b2), dot3(fwd, u)]};
+            }
             await window.prepareArrival(proj[1], scene, me);
             if (window.stepThrough && !window.stepThrough())
                 tour.waiting = true;
@@ -2453,6 +2467,22 @@ async function main() {
             const l = (a.doc.lanes || []).find((x) => x.to === want);
             if (l) dir = l.dir;
         }
+        // A variant switch keeps the view angle: the heading captured
+        // relative to a lane the old world named, rebuilt against the same
+        // lane in this one. One-shot, and only meaningful when both worlds
+        // know that lane.
+        const keep = window.__keepAngle;
+        window.__keepAngle = null;
+        if (keep) {
+            const l = (a.doc.lanes || []).find((x) => x.to === keep.to);
+            if (l) {
+                const u = norm3(a.doc.up || [0, -1, 0]);
+                const e = norm3(l.dir.map((v, i) => v - u[i] * dot3(l.dir, u)));
+                const b2 = cross3(u, e);
+                dir = norm3([0, 1, 2].map((i) =>
+                    e[i] * keep.rel[0] + b2[i] * keep.rel[1] + u[i] * keep.rel[2]));
+            }
+        }
         const ahead = dir ? stand.map((v, i) => v + dir[i] * 0.01) : null;
         if (ahead) {
             tourInit({points: [stand, ahead], up: a.doc.up}, false);
@@ -2536,94 +2566,10 @@ async function main() {
         return true;
     };
 
-    // ---- crossing a corridor by hand ------------------------------------
-    //
-    // Fly down a marked corridor with the keys and the world follows. A few
-    // steps in the far world starts unpacking, so it is ready long before it
-    // is needed; past HANDOVER the camera is re-expressed in the far world's
-    // frame — same spot on the corridor, same offset beside it, same heading
-    // relative to it — and flying continues there through a cross-fade. The
-    // books are settled exactly as an arrival settles them, except the camera
-    // is not stood home: it is already somewhere real.
-    let crossing = false;
-    setInterval(() => {
-        if (crossing || tour.playing || tour.on || window.__swapping) return;
-        const doc = window.__paths;
-        if (!doc || !(doc.walks || []).length) return;
-        const proj = decodeURIComponent(location.search).match(/files\/([^/]+)\//);
-        if (!proj) return;
-        const meN = String(doc.waypoint || "").split(".").pop();
-        const A0 = (doc.placed || {})[meN] || doc.origin;
-        if (!A0) return;
-        const d3 = (p, q) => [0, 1, 2].map((i) => p[i] - q[i]);
-        const inv = invert4(viewMatrix);
-        const pos = [inv[12], inv[13], inv[14]];
-        let pick = null;
-        for (const w of doc.walks) {
-            const B0 = (doc.placed || {})[w.to];
-            if (!B0) continue;
-            const E = d3(B0, A0), L2 = dot3(E, E);
-            if (L2 < 1e-9) continue;
-            const f = dot3(d3(pos, A0), E) / L2;
-            // from the corridor's start, not halfway: the tenth of a corridor
-            // keeps a junction from prefetching a lane you merely stand on,
-            // and everything past it leaves ample time to unpack
-            if (f < 0.1 || f > 1.05) continue;
-            // beside the corridor, in metres: the marks give the scale
-            const foot = [0, 1, 2].map((i) => A0[i] + E[i] * f);
-            const lat = Math.hypot(...d3(pos, foot)) *
-                (w.metres || 5) / Math.sqrt(L2);
-            if (lat > 2.5) continue;
-            if (!pick || f > pick.f) pick = {w, f, E};
-        }
-        if (!pick) return;
-        const scene = `${doc.waypoint.split(".")[0]}.${pick.w.to}`;
-        // prepare once per corridor, not once per tick: prepareArrival resets
-        // its own record first, so calling it again mid-download starts over
-        if (arrival.to !== pick.w.to)
-            window.prepareArrival(proj[1], scene, pick.w.to);
-        if (pick.f < HANDOVER || HANDOVER >= 1 || arrival.to !== pick.w.to ||
-            !arrival.records || !arrival.doc) return;
-        const across = arrival.doc;
-        const back = (across.walks || []).find((x) => x.to === meN);
-        const A1 = (across.placed || {})[meN];
-        const B1 = (across.placed || {})[pick.w.to] || across.origin;
-        if (!back || !A1 || !B1) return;
-        crossing = true;
-        try {
-            // a frame either side of the shared corridor: along it, beside it,
-            // and up — the one correspondence two marks and an up vector give
-            const uA = norm3(doc.up || [0, -1, 0]);
-            const uB = norm3(across.up || [0, -1, 0]);
-            const flatn = (v, u) => norm3(
-                [0, 1, 2].map((i) => v[i] - u[i] * dot3(v, u)));
-            const eA = flatn(pick.E, uA), bA = cross3(uA, eA);
-            const E1 = d3(B1, A1);
-            const eB = flatn(E1, uB), bB = cross3(uB, eB);
-            const s = Math.hypot(...E1) / Math.hypot(...pick.E);
-            const off = d3(pos, A0);
-            const pos2 = [0, 1, 2].map((i) => A1[i] + E1[i] * pick.f +
-                bB[i] * dot3(off, bA) * s + uB[i] * dot3(off, uA) * s);
-            const fw = cameraForward() || eA;
-            const rel = [dot3(fw, eA), dot3(fw, bA), dot3(fw, uA)];
-            const fw2 = norm3([0, 1, 2].map((i) =>
-                eB[i] * rel[0] + bB[i] * rel[1] + uB[i] * rel[2]));
-            crossFade();
-            splatData = arrival.records;
-            worker.postMessage({buffer: arrival.records.buffer,
-                                vertexCount: Math.floor(arrival.records.length /
-                                                        rowLength)});
-            window.__cameFrom = doc.waypoint;
-            tourInit({points: [pos2, [0, 1, 2].map((i) => pos2[i] +
-                                                   fw2[i] * 0.01)],
-                      up: across.up}, false);
-            setHeading(fw2, {now: true});
-            tour.t = 0; tour.playing = false; tour.on = false;
-            settle(arrival, null, {keepPose: true});
-        } finally {
-            crossing = false;
-        }
-    }, 400);
+    // Manual flight stays in its world. The free-flight corridor crossing
+    // that used to live here swapped worlds under a camera someone was
+    // steering by hand; transitions belong to the walkthroughs — minimap
+    // clicks and dashboard legs — where the ride owns the camera.
 
     // ---- agent control -----------------------------------------------------
     //
