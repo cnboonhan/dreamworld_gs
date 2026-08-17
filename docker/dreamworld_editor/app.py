@@ -71,5 +71,9 @@ async def upload_pano(request: Request):
     return {"ok": True}
 
 fastapi_app = FastAPI()
+# reconnect_timeout: how long a disconnected client's state survives on the
+# server. The default 3s is shorter than any real tunnel hiccup, so every
+# blip ended in "Connection lost" and a full page reload — zoom, selection
+# and in-flight uploads gone. Within this window the page resumes in place.
 ui.run_with(fastapi_app, mount_path=MOUNT, title="dreamworld editor",
-            dark=True, favicon="🌐")
+            dark=True, favicon="🌐", reconnect_timeout=300)
