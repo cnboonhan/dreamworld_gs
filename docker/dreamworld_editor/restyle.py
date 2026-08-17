@@ -12,6 +12,13 @@ pixel-identical to the base.
 One adaptation: the crop is taken at yaw = look - off, so an unsaved
 alignment turn still edits exactly what is on screen. The working size is
 main's 1536x768 — a variant is a look, decided at model resolution.
+
+One CORRECTION against main's pano editor: its extractor mapped longitude
+the standard way (u = lon/2pi + 0.5) because its own viewer did. Our
+viewer is align_panos', whose convention is column c holds
+lon = pi - 2pi(c+0.5)/W — mirrored about the centre column. The extractor
+and reprojector here follow OUR viewer, or an edit aimed left of centre
+lands equally far right: one frame everywhere, and it is the viewer's.
 """
 
 import io
@@ -71,7 +78,8 @@ def _extract_perspective(equi, yaw, pitch, fov, Wp, Hp):
     d /= np.linalg.norm(d, axis=2, keepdims=True)
     lon = np.arctan2(d[..., 1], d[..., 0])
     lat = np.arcsin(np.clip(d[..., 2], -1, 1))
-    u = (lon / (2 * math.pi) + 0.5) * We
+    # the viewer's convention, not the textbook's: u = (pi - lon) / 2pi
+    u = (0.5 - lon / (2 * math.pi)) * We
     vv = (0.5 - lat / math.pi) * He
     return Image.fromarray(
         np.clip(_bilinear(arr, u, vv, wrap_x=True), 0, 255).astype(np.uint8))
@@ -86,7 +94,8 @@ def _reproject_into_equi(base, edited_crop, yaw, pitch, fov):
     He, We = base_a.shape[:2]
     F, R, U = _cam_basis(yaw, pitch)
     t = math.tan(fov / 2)
-    lon = ((np.arange(We) + 0.5) / We - 0.5) * 2 * math.pi
+    # inverse of the extractor's mapping: column c holds lon = pi - 2pi(c+.5)/W
+    lon = (0.5 - (np.arange(We) + 0.5) / We) * 2 * math.pi
     lat = (0.5 - (np.arange(He) + 0.5) / He) * math.pi
     LON, LAT = np.meshgrid(lon, lat)
     dx = np.cos(LAT) * np.cos(LON)
