@@ -105,6 +105,45 @@ def level_scene(lv: dict):
     return "".join(parts), w, h, (tx, ty)
 
 
+# Pan and zoom, the one interaction NiceGUI does not carry: a CSS transform
+# on the drawing inside a clipping box. Wheel pans (a touchpad's two-finger
+# scroll), pinch or ctrl+wheel zooms toward the cursor (a touchpad pinch
+# arrives as exactly that), dragging pans, double-click refits. offsetX-based
+# hit-testing is computed in the element's local frame, so the click-to-name
+# handler keeps working untouched under any transform.
+DW_VIEW_JS = """<script>
+window.dwView = (id, w, h) => {
+  const box = document.getElementById('c' + id);
+  if (!box || box.dataset.dw) return;
+  box.dataset.dw = 1;
+  const kid = box.firstElementChild;
+  kid.style.transformOrigin = '0 0';
+  let k = 1, px = 0, py = 0, drag = null;
+  const apply = () => kid.style.transform =
+    `translate(${px}px,${py}px) scale(${k})`;
+  const fit = () => { const r = box.getBoundingClientRect();
+    k = Math.min(r.width / w, r.height / h);
+    px = (r.width - w * k) / 2; py = (r.height - h * k) / 2; apply(); };
+  fit();
+  box.addEventListener('wheel', e => { e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      const r = box.getBoundingClientRect();
+      const cx = e.clientX - r.left, cy = e.clientY - r.top;
+      const nk = Math.min(20, Math.max(0.05, k * Math.exp(-e.deltaY * 0.01)));
+      px = cx - (cx - px) * nk / k; py = cy - (cy - py) * nk / k; k = nk;
+    } else { px -= e.deltaX; py -= e.deltaY; }
+    apply(); }, {passive: false});
+  box.addEventListener('pointerdown', e => {
+    drag = [e.clientX, e.clientY]; box.setPointerCapture(e.pointerId); });
+  box.addEventListener('pointermove', e => { if (!drag) return;
+    px += e.clientX - drag[0]; py += e.clientY - drag[1];
+    drag = [e.clientX, e.clientY]; apply(); });
+  box.addEventListener('pointerup', () => drag = null);
+  box.addEventListener('dblclick', fit);
+};
+</script>"""
+
+
 def chip(color: str, text: str) -> None:
     ui.html(f'<span style="display:inline-flex;align-items:center;gap:6px">'
             f'<span style="width:10px;height:10px;border-radius:5px;'
@@ -113,6 +152,9 @@ def chip(color: str, text: str) -> None:
 
 @ui.page("/")
 def index():
+    # inside the page builder, not at module level: head html added outside
+    # a page lands on NiceGUI's auto-index client, and this page never sees it
+    ui.add_head_html(DW_VIEW_JS)
     sel = {"level": None}
 
     def on_click(lv, shift):
@@ -154,12 +196,20 @@ def index():
         lv = levels[sel["level"]]
         svg, w, h, shift = level_scene(lv)
         with ui.column().classes("w-full px-4"):
-            # no source image at all — the plan IS the drawing; size gives
-            # the SVG its coordinate frame
-            ui.interactive_image(
-                size=(w, h), content=svg,
-                events=["mousedown"], on_mouse=on_click(lv, shift),
-            ).classes("w-full max-w-4xl")
+            box = ui.element("div").classes("w-full").style(
+                f"height:75vh;overflow:hidden;touch-action:none;"
+                f"background:{C_BG};border-radius:8px;cursor:grab")
+            with box:
+                # no source image at all — the plan IS the drawing; size
+                # gives the SVG its coordinate frame, dwView its viewport
+                ui.interactive_image(
+                    size=(w, h), content=svg,
+                    events=["mousedown"], on_mouse=on_click(lv, shift),
+                )
+            ui.label("drag or scroll to pan · pinch or ctrl+scroll to zoom · "
+                     "double-click to fit").classes("text-xs text-gray-600")
+            ui.timer(0.1, lambda: ui.run_javascript(
+                f"dwView({box.id}, {w}, {h})"), once=True)
 
     board()
 
