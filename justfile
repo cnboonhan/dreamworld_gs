@@ -27,3 +27,17 @@ pack proj=project dest="dist":
 # Restore a packed project, in place (merges into an existing one, with a note).
 unpack FILE:
     @python3 {{repo}}/scripts/pack.py unpack {{repo}} {{FILE}}
+
+_env:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{assets}}/projects
+    grep -q "^DW_PROJECT=" {{repo}}/.env 2>/dev/null || \
+        echo "DW_PROJECT={{project}}" >> {{repo}}/.env
+    grep -q "^DW_UID=" {{repo}}/.env 2>/dev/null || \
+        printf 'DW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" >> {{repo}}/.env
+
+# Author the building map in the traffic editor, over noVNC.
+editor: _env
+    docker compose up -d --build editor
+    @echo "  http://localhost:8084"
