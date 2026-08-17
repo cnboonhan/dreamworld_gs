@@ -1,22 +1,22 @@
-# HuggingFace repos the pipeline loads, fetched by `just setup models`.
-# Blank lines and #-comments ignored.
+# HuggingFace repos the pipeline loads, fetched by `just fetch`.
+# Blank lines and #-comments ignored. Every entry is a verified runtime load;
+# an audit against the pipeline found (and removed) 138 GB that nothing loads.
 
-# world generation: HY-Pano 2.0, WorldStereo 2.0, WorldMirror 2.0
+# world generation: HY-Pano 2.0, WorldStereo 2.0 (Wan-derived weights are
+# bundled inside it), WorldMirror 2.0
 tencent/HY-World-2.0
 hanshanxue/WorldStereo
 tencent/HunyuanWorld-Mirror
-Qwen/Qwen-Image-Edit
 
-# base video model WorldStereo builds on
-Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
-
-# the panorama editor's model (Qwen-Image-Edit-2509, ~54GB, bf16 needs ~45GB VRAM)
+# the panorama backend inside HY-Pano AND the panorama editor's model
+# (~54GB on disk, bf16 needs ~45GB VRAM)
 Qwen/Qwen-Image-Edit-2509
 
-# perception models the trajectory planner loads
+# perception the trajectory planner and retrieval load
 naver-iv/zim-anything-vitl
 IDEA-Research/grounding-dino-tiny
 Ruicheng/moge-2-vitl-normal
+facebook/dinov2-base
 
-# VLM that plans the camera trajectories
+# VLM that plans the camera trajectories (and drives the mission agent)
 Qwen/Qwen3-VL-8B-Instruct
