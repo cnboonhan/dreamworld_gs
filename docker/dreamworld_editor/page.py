@@ -378,15 +378,11 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
             ui.button("save alignment", on_click=save_alignment).props(
                 "dense").classes("bg-[#2c6e3f]")
 
-            async def reset_view():
-                undone = await run.io_bound(store.reset_roll, name, var)
-                ui.notify(f"unrolled {undone:.1f}° — back to the upload"
-                          if undone else "nothing to reset")
-                refresh_all()
-
-            with ui.button("reset", on_click=reset_view).props(
-                    "dense flat" + (" disable" if applied is None else "")):
-                ui.tooltip("undo the saved roll — the panorama as uploaded")
+            with ui.button("reset", on_click=lambda: ui.run_javascript(
+                    "window.dwPanoReset && dwPanoReset()")).props(
+                    "dense flat"):
+                ui.tooltip("discard the unsaved turn — back to the last "
+                           "saved alignment")
 
         first = brs[0] if brs else None
         if first:

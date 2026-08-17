@@ -79,5 +79,8 @@ window.dwPano = (id, url, offId) => {
   loop();
   window.dwPanoFace = r => { st.look = r; st.pitch = 0; readout(); };
   window.dwPanoNudge = d => { st.off = (st.off + d + 360) % 360; readout(); };
+  // back to the last SAVED alignment: the saved roll lives in the file,
+  // so discarding the pending turn is all a reset is
+  window.dwPanoReset = () => { st.off = 0; readout(); };
   window.dwPanoOff = () => st.off;
 };

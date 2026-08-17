@@ -284,25 +284,6 @@ def apply_roll(name: str, degrees: float, variant: str | None = None) -> int:
     return abs(shift)
 
 
-def reset_roll(name: str, variant: str | None = None) -> float:
-    """Undo the saved roll entire: the panorama returns to the orientation
-    it was uploaded in, and the record of having been turned goes with it.
-    Possible only because aligned.json keeps the cumulative degrees —
-    the file itself carries no memory of the turn."""
-    applied = applied_of(name, variant)
-    if not applied:
-        return 0.0
-    f = pano_of(name, variant)
-    im = np.asarray(Image.open(f).convert("RGB"))
-    shift = int(round(applied / 360.0 * im.shape[1]))    # apply_roll, negated
-    Image.fromarray(np.roll(im, shift, axis=1)).save(
-        f, **({"quality": 95} if f.suffix.lower() != ".png" else {}))
-    (DREAM / name / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
-    preview_of(name, variant)
-    _aligned_rec(name, variant).unlink(missing_ok=True)
-    return applied
-
-
 def signature():
     """Cheap change detector: the map file plus everything in the dreamworld
     tree. Another client's upload or roll must redraw this one too."""
