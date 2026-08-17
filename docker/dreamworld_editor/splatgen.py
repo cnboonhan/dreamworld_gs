@@ -1,0 +1,43 @@
+"""The editor's line to the splat generator — HY-World jobs over HTTP.
+
+The editor owns the tree, so it prepares the scene: the variant's panorama
+becomes <splat-dir>/panorama.png and the generator is pointed at that
+directory. Both containers mount the projects tree at /projects, so the
+path the editor writes is the path the generator reads.
+"""
+
+import os
+
+import requests
+from PIL import Image
+
+import store
+
+URL = os.environ.get("SPLATGEN_URL", "http://splatgen:8000")
+
+
+def ready() -> bool:
+    try:
+        return (requests.get(f"{URL}/health", timeout=3)
+                .json().get("status") == "ok")
+    except (requests.RequestException, ValueError):
+        return False
+
+
+def status():
+    try:
+        return requests.get(f"{URL}/status", timeout=3).json()
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def submit(name: str, variant: str | None, steps: int = 2000) -> None:
+    scene = store.splat_dir(name, variant)
+    scene.mkdir(parents=True, exist_ok=True)
+    Image.open(store.pano_of(name, variant)).convert("RGB").save(
+        scene / "panorama.png")
+    r = requests.post(f"{URL}/generate",
+                      json={"scene": str(scene), "steps": steps}, timeout=30)
+    if r.status_code == 409:
+        raise RuntimeError("the generator is busy with another world")
+    r.raise_for_status()

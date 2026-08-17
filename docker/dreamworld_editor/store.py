@@ -174,12 +174,22 @@ def load_dream() -> dict:
                 applied = float(json.loads(rec.read_text())["degrees"])
             except (OSError, ValueError, KeyError):
                 pass
-        splat = d / "splat"
         out[d.name] = {"level": v.get("level", ""), "x": float(v["x"]),
                        "y": float(v["y"]), "pano": pano_of(d.name) is not None,
                        "applied": applied,
-                       "splat": splat.is_dir() and any(splat.iterdir())}
+                       "splat": splat_of(d.name) is not None}
     return out
+
+
+def splat_dir(name: str, variant: str | None = None) -> Path:
+    return DREAM / name / (f"splat@{variant}" if variant else "splat")
+
+
+def splat_of(name: str, variant: str | None = None):
+    """The built world, or None — world.ply is the honest readiness test,
+    since a running generation fills the directory long before it."""
+    p = splat_dir(name, variant) / "world.ply"
+    return p if p.is_file() else None
 
 
 def state_color(v: dict) -> str:

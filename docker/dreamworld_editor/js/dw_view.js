@@ -36,6 +36,10 @@ window.dwView = (id, w, h, key) => {
     k = Math.min(r.width / w, r.height / h);
     px = (r.width - w * k) / 2; py = (r.height - h * k) / 2; apply(); };
   if (mem[key]) { ({ k, px, py } = mem[key]); apply(); } else fit();
+  // rendered hidden until this line: between the refresh and the restored
+  // transform the drawing sat unplaced for a frame, which read as the view
+  // resetting and zooming back in
+  kid.style.visibility = 'visible';
   box.addEventListener('wheel', e => { e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
       const r = box.getBoundingClientRect();

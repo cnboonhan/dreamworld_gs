@@ -15,6 +15,7 @@ from nicegui import run, ui
 
 from config import C_BG, C_WALL, CURSOR, DREAM, MOUNT, PROJ, PROJECT
 import restyle
+import splatgen
 import store
 from scene import level_scene
 
@@ -34,12 +35,14 @@ def index():
     # a page lands on NiceGUI's auto-index client, and this page never sees it
     ui.add_head_html(_script("dw_view.js"))
     ui.add_head_html(_script("dw_pano.js"))
+    ui.add_head_html(_script("dw_splat.js"))
     sel = {"level": None, "vertex": None, "mode": None, "edge_from": None,
-           "variant": None, "busy": False}
+           "variant": None, "splat_var": None, "busy": False}
 
     def select_vertex(nm):
         if nm != sel["vertex"]:
-            sel["variant"] = None       # the dropdown belongs to one vertex
+            sel["variant"] = None       # the dropdowns belong to one vertex
+            sel["splat_var"] = None
         sel["vertex"] = nm
 
     with ui.header().classes("items-center bg-[#0b0e13] gap-6"):
@@ -174,11 +177,13 @@ def index():
                     f"background:{C_BG};border-radius:8px;"
                     f"cursor:{CURSOR[sel['mode']]}")
                 with box:
+                    # hidden until dwView places it — otherwise every
+                    # refresh flashes the unplaced drawing for a frame
                     ui.interactive_image(
                         size=(w, h), content=svg,
                         events=["mousedown", "mouseup"],
                         on_mouse=on_map_mouse(dream, shift),
-                    )
+                    ).style("visibility:hidden")
                 ui.label("drag or scroll to pan · pinch or ctrl+scroll to "
                          "zoom · double-click to fit").classes(
                     "text-xs text-gray-600")
@@ -204,8 +209,16 @@ def index():
                 vertex_card(name, v, sel, refresh_all)
                 pano_card(name, v, dream, scale, sel, refresh_all)
                 variants_card(name, v, sel, refresh_all)
-                splat_card()
+                splat_card(name, v, sel, refresh_all)
             side()
+
+    def on_key(e):
+        if e.key.escape and e.action.keydown and (sel["vertex"]
+                                                  or sel["edge_from"]):
+            sel["vertex"] = None
+            sel["edge_from"] = None
+            refresh_all()
+    ui.keyboard(on_key=on_key)
 
     state = {"sig": store.signature()}
 
@@ -542,11 +555,100 @@ def variants_card(name, v, sel, refresh_all):
                  ).classes("text-xs text-gray-500")
 
 
-def splat_card():
+def splat_card(name, v, sel, refresh_all):
+    """The same layout as the variants box, for worlds: pick a look, view
+    its splat if one is built, or send it to the generator — HY-World's six
+    stages on four cards, about seventeen minutes a world, one at a time."""
     with ui.card().classes("w-full bg-[#11151c]"):
-        ui.label("splat").classes("font-bold")
-        ui.element("div").classes("w-full").style(
-            f"height:120px;border:2px dashed {C_WALL};border-radius:6px;"
-            "display:flex;align-items:center;justify-content:center")
-        ui.label("no splat yet — generation will land here").classes(
-            "text-xs text-gray-500")
+        variants = store.variants_of(name)
+        if sel["splat_var"] not in variants:
+            sel["splat_var"] = None
+        svar = sel["splat_var"]
+        scene = store.splat_dir(name, svar)
+        ply = store.splat_of(name, svar)
+
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.label("splat").classes("font-bold")
+            if ply:
+                ui.label("ready").classes("text-xs text-[#6c6]")
+            else:
+                ui.label("none yet").classes("text-xs text-gray-500")
+            ui.space()
+            ui.select(["original"] + variants, value=svar or "original",
+                      label="variant",
+                      on_change=lambda e: (sel.update(
+                          splat_var=None if e.value == "original"
+                          else e.value), refresh_all())
+                      ).classes("w-40").props("dense options-dense")
+
+        gen = splatgen.status()
+        busy_here = bool(gen and gen.get("busy")
+                         and gen.get("scene") == str(scene))
+
+        if ply:
+            # the world itself: main's renderer, minimal. Drag looks,
+            # wheel walks, shift-drag pans.
+            cv = ui.element("canvas").classes("w-full").style(
+                f"height:320px;display:block;cursor:grab;"
+                f"touch-action:none;background:{C_BG};border-radius:6px")
+            base = f"{MOUNT}/files/{name}/{scene.name}"
+            t = int(ply.stat().st_mtime)
+            ui.timer(0.15, lambda: ui.run_javascript(
+                f"dwSplat({cv.id}, '{base}/world.ply?t={t}', "
+                f"'{base}/world.cam.json?t={t}')"), once=True)
+            ui.label("drag to look · wheel to walk · shift-drag to pan"
+                     ).classes("text-xs text-gray-500")
+
+        if busy_here:
+            ui.label(f"generating {svar or 'original'} …").classes(
+                "text-xs text-gray-500")
+            ui.linear_progress(show_value=False).props(
+                "indeterminate").classes("w-full")
+            stage_lb = ui.label(gen.get("stage") or "starting").classes(
+                "text-xs text-gray-500")
+            el_lb = ui.label("").classes("text-xs text-gray-500")
+
+            def tick():
+                s = splatgen.status()
+                if not s or not s.get("busy") \
+                        or s.get("scene") != str(scene):
+                    refresh_all()
+                    return
+                stage_lb.set_text(s.get("stage") or "starting")
+                el_lb.set_text(f"{s.get('elapsed', 0) // 60}m"
+                               f"{s.get('elapsed', 0) % 60:02d}s elapsed")
+            ui.timer(5.0, tick)
+            return
+
+        has_pano = store.pano_of(name, svar) is not None
+        done = gen.get("done") if gen else None
+        if done and done.get("scene") == str(scene) and not done.get("ok"):
+            ui.label(f"last generation failed: {done.get('error')}").classes(
+                "text-xs text-[#f85149]")
+
+        with ui.row().classes("w-full items-center gap-2"):
+            async def generate():
+                if not splatgen.ready():
+                    ui.notify("the generator is not ready — still loading, "
+                              "or not running", type="negative")
+                    return
+                try:
+                    await run.io_bound(splatgen.submit, name, svar)
+                except Exception as err:
+                    ui.notify(str(err), type="negative")
+                    return
+                ui.notify("generation started — six stages, roughly "
+                          "fifteen to twenty minutes")
+                refresh_all()
+
+            busy_other = bool(gen and gen.get("busy"))
+            props = "dense" + ("" if has_pano and not busy_other
+                               else " disable")
+            ui.button("regenerate" if ply else "generate splat",
+                      color="primary", on_click=generate).props(props)
+            if busy_other:
+                ui.label(f"generator busy: {gen.get('scene', '')}").classes(
+                    "text-xs text-[#f0a35e]")
+            elif not has_pano:
+                ui.label("this look has no panorama yet").classes(
+                    "text-xs text-gray-500")
