@@ -3,14 +3,17 @@
 The flow this page carries: panorama -> splat -> align -> walkthrough. A
 minimap of each level, read straight from the project's building.yaml and
 drawn the way the splat viewer's picker draws its plan — an abstract line
-drawing on a dark ground. Switch on "add vertex" and click the plan to drop
-a vertex; click a vertex to select it, rename it, upload the panorama shot
-there, and align it.
+drawing on a dark ground. The add-vertex button drops a vertex where the
+plan is clicked, the connect button joins two into an edge; a vertex is red
+until its panorama is up, yellow while work remains, green once aligned
+with a splat generated. Clicking a vertex selects it for rename, upload
+and alignment.
 
-Everything the flow produces lives under the project's dreamworld/ tree,
-one folder per vertex — vertex.json, pano.jpg, aligned.json, splat later —
-and this UI is that tree's only writer. building.yaml stays the traffic
-editor's file: walls, doors and scale are read from it, never written.
+Everything the flow produces lives under the project's dreamworld/ tree —
+one folder per vertex (vertex.json, pano.jpg, aligned.json, splat later)
+plus edges.json — and this UI is that tree's only writer. building.yaml
+stays the traffic editor's file: walls, doors and scale are read from it,
+never written.
 
 The panorama viewer and its alignment are ported from main's
 scripts/align_panos.py: a WebGL equirect projection you turn by dragging
@@ -44,11 +47,12 @@ PROJ = Path("/projects") / PROJECT
 DREAM = PROJ / "dreamworld"
 PREVIEW_W = 2048        # main's number: wide enough to aim by, light enough
 
-# the splat viewer minimap's palette: its dark ground and wall stroke, the
-# dashboard's lane, door and label colors — the family look from main
+# the splat viewer minimap's palette for the drawing, the dashboard's for
+# lanes, doors and labels; vertex state in the traffic-light trio
 C_BG, C_WALL = "#0a0d12", "#3a4757"
 C_LANE, C_DOOR = "#58a6ff", "#e0a030"
-C_VERT, C_INK, C_LABEL, C_SEL = "#7aa2f7", "#0d1117", "#7d8590", "#4ea1ff"
+C_INK, C_LABEL, C_SEL = "#0d1117", "#7d8590", "#4ea1ff"
+C_RED, C_YEL, C_GRN = "#f85149", "#e3b341", "#3fb950"
 
 DREAM.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/files", str(DREAM))
@@ -121,10 +125,22 @@ def load_dream() -> dict:
                 applied = float(json.loads(rec.read_text())["degrees"])
             except (OSError, ValueError, KeyError):
                 pass
+        splat = d / "splat"
         out[d.name] = {"level": v.get("level", ""), "x": float(v["x"]),
                        "y": float(v["y"]), "pano": pano_of(d.name) is not None,
-                       "applied": applied}
+                       "applied": applied,
+                       "splat": splat.is_dir() and any(splat.iterdir())}
     return out
+
+
+def state_color(v: dict) -> str:
+    """Red until the panorama is up, green once everything is done —
+    aligned and a splat generated — yellow while work remains."""
+    if not v["pano"]:
+        return C_RED
+    if v["applied"] is not None and v["splat"]:
+        return C_GRN
+    return C_YEL
 
 
 def new_vertex(level: str, x: float, y: float) -> str:
@@ -140,14 +156,52 @@ def new_vertex(level: str, x: float, y: float) -> str:
     return name
 
 
+# ---- edges, kept in one file beside the vertex folders ----------------------
+
+EDGES = DREAM / "edges.json"
+
+
+def load_edges() -> list:
+    try:
+        return [tuple(e) for e in json.loads(EDGES.read_text())]
+    except (OSError, ValueError):
+        return []
+
+
+def save_edges(edges: list) -> None:
+    EDGES.write_text(json.dumps([list(e) for e in edges], indent=1))
+
+
+def add_edge(a: str, b: str) -> str:
+    edges = load_edges()
+    if (a, b) in edges or (b, a) in edges:
+        return f"{a} and {b} are already connected"
+    edges.append((a, b))
+    save_edges(edges)
+    return f"connected {a} — {b}"
+
+
+def rename_in_edges(old: str, new: str) -> None:
+    save_edges([(new if a == old else a, new if b == old else b)
+                for a, b in load_edges()])
+
+
+def drop_from_edges(name: str) -> None:
+    save_edges([(a, b) for a, b in load_edges() if name not in (a, b)])
+
+
 def bearings_from(dream: dict, name: str, scale) -> list:
-    """Where the other vertices of this level lie, as compass bearings —
-    the things a panorama can be aimed by. Main aimed by lanes; before any
-    lanes exist, every neighbouring vertex is a landmark."""
+    """Where to aim the panorama: the vertices this one is connected to, as
+    compass bearings — main aimed by lanes, and an edge is this tree's lane.
+    Before any edges exist here, every vertex on the level is a landmark."""
     me = dream[name]
+    linked = {b if a == name else a
+              for a, b in load_edges() if name in (a, b)}
     out = []
     for other, v in dream.items():
         if other == name or v["level"] != me["level"]:
+            continue
+        if linked and other not in linked:
             continue
         dx, dy = v["x"] - me["x"], v["y"] - me["y"]
         d = math.hypot(dx, dy)
@@ -209,12 +263,15 @@ def signature():
                 sig.append(d.name)
                 sig.extend(f"{x.name}:{x.stat().st_mtime}"
                            for x in sorted(d.iterdir()))
+            else:
+                sig.append(f"{d.name}:{d.stat().st_mtime}")
     return hash(tuple(sig))
 
 
 # ---- the drawing -------------------------------------------------------------
 
-def level_scene(lv: dict, dream: dict, level: str, selected):
+def level_scene(lv: dict, dream: dict, edges: list, level: str,
+                selected, pending):
     """(svg, width, height, shift) for one level's line drawing. The yaml's
     pixel frame is shifted to the drawing's own bounding box, so the image
     is exactly as big as the building plus a margin."""
@@ -243,6 +300,12 @@ def level_scene(lv: dict, dream: dict, level: str, selected):
     for x1, y1, x2, y2 in lv["lanes"]:
         parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
                      f'stroke="{C_LANE}" stroke-width="2.5" opacity="0.85"/>')
+    for a, b in edges:
+        if a in mine and b in mine:
+            parts.append(f'<line x1="{mine[a]["x"]}" y1="{mine[a]["y"]}" '
+                         f'x2="{mine[b]["x"]}" y2="{mine[b]["y"]}" '
+                         f'stroke="{C_LANE}" stroke-width="2.5" '
+                         f'opacity="0.85"/>')
 
     def label(x, y, text, color):
         import html as _h
@@ -250,7 +313,7 @@ def level_scene(lv: dict, dream: dict, level: str, selected):
                 f'text-anchor="middle" fill="{color}">{_h.escape(text)}</text>')
 
     for name, x, y in lv["verts"]:
-        parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_VERT}" '
+        parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_LABEL}" '
                      f'stroke="{C_INK}" stroke-width="1.5"/>')
         parts.append(label(x, y, name, C_LABEL))
     for name, v in mine.items():
@@ -258,14 +321,13 @@ def level_scene(lv: dict, dream: dict, level: str, selected):
         if name == selected:
             parts.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" '
                          f'stroke="{C_SEL}" stroke-width="2.5"/>')
-        # filled once its panorama is up, hollow while it waits — the same
-        # ring the dashboard uses for a waypoint with no world built
-        if v["pano"]:
-            parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_VERT}" '
-                         f'stroke="{C_INK}" stroke-width="1.5"/>')
-        else:
-            parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_BG}" '
-                         f'stroke="{C_VERT}" stroke-width="2"/>')
+        if name == pending:
+            parts.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" '
+                         f'stroke="{C_LANE}" stroke-width="2" '
+                         f'stroke-dasharray="4 3"/>')
+        parts.append(f'<circle cx="{x}" cy="{y}" r="6" '
+                     f'fill="{state_color(v)}" stroke="{C_INK}" '
+                     f'stroke-width="1.5"/>')
         parts.append(label(x, y, name,
                            C_SEL if name == selected else C_LABEL))
     parts.append('</g>')
@@ -276,8 +338,14 @@ def level_scene(lv: dict, dream: dict, level: str, selected):
 # on the drawing inside a clipping box. Wheel pans (a touchpad's two-finger
 # scroll), pinch or ctrl+wheel zooms toward the cursor (a touchpad pinch
 # arrives as exactly that), dragging pans, double-click refits. offsetX-based
-# hit-testing is computed in the element's local frame, so the click-to-name
-# handler keeps working untouched under any transform.
+# hit-testing is computed in the element's local frame, so click handlers
+# keep working untouched under any transform.
+#
+# NO pointer capture here: capturing on pointerdown redirects the matching
+# mouseup away from the image element, and the click handler — which needs
+# both halves to tell a click from a pan — never hears the second one. The
+# drag listens on the window instead, swapping any previous pair out first
+# so refreshes don't stack them.
 DW_VIEW_JS = """<script>
 window.dwView = (id, w, h) => {
   const box = document.getElementById('c' + id);
@@ -306,11 +374,17 @@ window.dwView = (id, w, h) => {
     } else { px -= e.deltaX; py -= e.deltaY; }
     apply(); }, {passive: false});
   box.addEventListener('pointerdown', e => {
-    drag = [e.clientX, e.clientY]; box.setPointerCapture(e.pointerId); });
-  box.addEventListener('pointermove', e => { if (!drag) return;
+    drag = [e.clientX, e.clientY]; });
+  if (window._dwvMove) {
+    removeEventListener('pointermove', window._dwvMove);
+    removeEventListener('pointerup', window._dwvUp);
+  }
+  window._dwvMove = e => { if (!drag || !box.isConnected) return;
     px += e.clientX - drag[0]; py += e.clientY - drag[1];
-    drag = [e.clientX, e.clientY]; apply(); });
-  box.addEventListener('pointerup', () => drag = null);
+    drag = [e.clientX, e.clientY]; apply(); };
+  window._dwvUp = () => drag = null;
+  addEventListener('pointermove', window._dwvMove);
+  addEventListener('pointerup', window._dwvUp);
   box.addEventListener('dblclick', fit);
 };
 </script>"""
@@ -401,22 +475,26 @@ def chip(color: str, text: str) -> None:
             f'background:{color}"></span>{text}</span>')
 
 
+CURSOR = {None: "grab", "add": "crosshair", "edge": "cell"}
+
+
 @ui.page("/")
 def index():
     # inside the page builder, not at module level: head html added outside
     # a page lands on NiceGUI's auto-index client, and this page never sees it
     ui.add_head_html(DW_VIEW_JS)
     ui.add_head_html(DW_PANO_JS)
-    sel = {"level": None, "vertex": None, "add": False}
+    sel = {"level": None, "vertex": None, "mode": None, "edge_from": None}
 
     with ui.header().classes("items-center bg-[#0b0e13] gap-6"):
         ui.label("dreamworld editor").classes("text-lg font-bold text-[#4ea1ff]")
         ui.label(PROJECT).classes("text-sm text-gray-500")
         with ui.row().classes("gap-4 text-xs text-gray-400 items-center"):
-            chip(C_LANE, "lane")
+            chip(C_RED, "no panorama")
+            chip(C_YEL, "in progress")
+            chip(C_GRN, "aligned + splat")
+            chip(C_LANE, "edge")
             chip(C_DOOR, "door")
-            chip(C_WALL, "wall")
-            chip(C_VERT, "vertex (hollow = no panorama)")
 
     def refresh_all():
         state["sig"] = signature()
@@ -426,19 +504,46 @@ def index():
     # ---- toolbar ----
     names = list(load_levels())
     sel["level"] = names[0] if names else None
-    with ui.row().classes("items-center px-4 gap-6"):
+    with ui.row().classes("items-center px-4 gap-4"):
         picker = ui.select(names, value=sel["level"], label="level",
                            on_change=lambda e: (sel.update(level=e.value),
                                                 board.refresh())
                            ).classes("w-40")
-        ui.switch("add vertex",
-                  on_change=lambda e: sel.update(add=e.value))
-        ui.label("click the plan to drop one · click a vertex to select it"
-                 ).classes("text-xs text-gray-600")
+
+        HINT = {None: "click a vertex to select it",
+                "add": "click the plan to drop a vertex",
+                "edge": "click one vertex, then the other"}
+
+        @ui.refreshable
+        def tools():
+            def switch(mode):
+                sel["mode"] = None if sel["mode"] == mode else mode
+                sel["edge_from"] = None
+                tools.refresh()
+                board.refresh()
+
+            for mode, text, icon in (("add", "add vertex", "add_location_alt"),
+                                     ("edge", "connect edge", "timeline")):
+                on = sel["mode"] == mode
+                ui.button(text, icon=icon,
+                          on_click=lambda m=mode: switch(m)).props(
+                    "dense no-caps" + ("" if on else " outline"))
+            ui.label(HINT[sel["mode"]]).classes("text-xs text-gray-600")
+        tools()
 
     # ---- the plan and the two boxes beside it ----
     def on_map_mouse(dream, shift):
         down = {}
+
+        def nearest(x, y):
+            best, bd = None, 15.0
+            for nm, v in dream.items():
+                if v["level"] != sel["level"]:
+                    continue
+                d = math.hypot(v["x"] - x, v["y"] - y)
+                if d < bd:
+                    best, bd = nm, d
+            return best
 
         def handler(e):
             x, y = e.image_x - shift[0], e.image_y - shift[1]
@@ -451,18 +556,21 @@ def index():
             down.clear()
             if moved > 5:            # that was a pan, not a click
                 return
-            if sel["add"]:
+            if sel["mode"] == "add":
                 sel["vertex"] = new_vertex(sel["level"], x, y)
                 ui.notify(f"dropped {sel['vertex']}")
+            elif sel["mode"] == "edge":
+                near = nearest(x, y)
+                if near is None or near == sel["edge_from"]:
+                    sel["edge_from"] = None
+                elif sel["edge_from"] is None:
+                    sel["edge_from"] = near
+                    ui.notify(f"{near} — now click the other end")
+                else:
+                    ui.notify(add_edge(sel["edge_from"], near))
+                    sel["edge_from"] = None
             else:
-                best, bd = None, 15.0
-                for nm, v in dream.items():
-                    if v["level"] != sel["level"]:
-                        continue
-                    d = math.hypot(v["x"] - x, v["y"] - y)
-                    if d < bd:
-                        best, bd = nm, d
-                sel["vertex"] = best
+                sel["vertex"] = nearest(x, y)
             refresh_all()
         return handler
 
@@ -479,11 +587,13 @@ def index():
                 if sel["level"] not in levels:
                     sel["level"] = next(iter(levels))
                 dream = load_dream()
-                svg, w, h, shift = level_scene(levels[sel["level"]], dream,
-                                               sel["level"], sel["vertex"])
+                svg, w, h, shift = level_scene(
+                    levels[sel["level"]], dream, load_edges(), sel["level"],
+                    sel["vertex"], sel["edge_from"])
                 box = ui.element("div").classes("w-full").style(
                     f"height:78vh;overflow:hidden;touch-action:none;"
-                    f"background:{C_BG};border-radius:8px;cursor:grab")
+                    f"background:{C_BG};border-radius:8px;"
+                    f"cursor:{CURSOR[sel['mode']]}")
                 with box:
                     ui.interactive_image(
                         size=(w, h), content=svg,
@@ -504,7 +614,7 @@ def index():
                 name = sel["vertex"] if sel["vertex"] in dream else None
                 if not name:
                     ui.label("no vertex selected — click one on the plan, "
-                             "or switch on add vertex and click a spot"
+                             "or use add vertex and click a spot"
                              ).classes("text-sm text-gray-500 mt-2")
                     return
                 v = dream[name]
@@ -513,6 +623,9 @@ def index():
                 # -- the vertex itself: rename, delete --
                 with ui.card().classes("w-full bg-[#11151c]"):
                     with ui.row().classes("w-full items-center gap-2"):
+                        ui.html(f'<span style="width:12px;height:12px;'
+                                f'border-radius:6px;display:inline-block;'
+                                f'background:{state_color(v)}"></span>')
                         ui.label(name).classes("font-bold text-[#7aa2f7]")
                         ui.label(f"{v['level']} · ({v['x']:.0f}, {v['y']:.0f})"
                                  ).classes("text-xs text-gray-500")
@@ -533,6 +646,7 @@ def index():
                                           type="negative")
                                 return
                             (DREAM / name).rename(DREAM / new)
+                            rename_in_edges(name, new)
                             sel["vertex"] = new
                             refresh_all()
 
@@ -540,11 +654,12 @@ def index():
 
                         def delete():
                             with ui.dialog() as dlg, ui.card():
-                                ui.label(f"delete {name} and everything "
-                                         f"under it?")
+                                ui.label(f"delete {name}, its edges, and "
+                                         f"everything under it?")
                                 with ui.row():
                                     def yes():
                                         shutil.rmtree(DREAM / name)
+                                        drop_from_edges(name)
                                         sel["vertex"] = None
                                         dlg.close()
                                         refresh_all()
