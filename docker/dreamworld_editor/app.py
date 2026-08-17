@@ -32,6 +32,33 @@ def graph():
     """The dreamworld, for the walkthrough viewer at /dreamworld_viewer."""
     return store.graph_doc()
 
+
+# ---- where the viewer is, for the harness to come ---------------------------
+# The viewer pushes its state here (main's truth-protocol shape: the walker
+# reports, the broker holds, anyone may ask). RMF owns the building's
+# infrastructure; the walkthrough is the viewer's; this is the seam between
+# them — a harness reads /viewer/state to know where the camera stands, which
+# vertex it left, which edge it is crossing, and coordinates doors and lifts
+# through RMF accordingly.
+
+import time as _time
+
+VIEWER = {"state": None, "stamp": 0.0}
+
+
+@app.post("/viewer/state")
+def viewer_state_post(doc: dict):
+    VIEWER["state"] = doc
+    VIEWER["stamp"] = _time.time()
+    return {"ok": True}
+
+
+@app.get("/viewer/state")
+def viewer_state_get():
+    age = (_time.time() - VIEWER["stamp"]) if VIEWER["state"] else None
+    return {"state": VIEWER["state"], "age": age,
+            "live": age is not None and age < 2.0}
+
 fastapi_app = FastAPI()
 ui.run_with(fastapi_app, mount_path=MOUNT, title="dreamworld editor",
             dark=True, favicon="🌐")

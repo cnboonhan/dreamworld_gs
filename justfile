@@ -37,6 +37,10 @@ _env:
     grep -q "^DW_UID=" {{repo}}/.env 2>/dev/null || \
         printf 'DW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" >> {{repo}}/.env
 
+# Rebuild the Gazebo world + nav graph from building.yaml (after map edits).
+world: _env
+    docker compose run --rm --no-deps rmfsim world {{project}}
+
 # Start everything behind the one forwarded port.
 up: _env
     docker compose up -d --build --remove-orphans
@@ -44,3 +48,4 @@ up: _env
     @echo "  http://localhost:8080/sim_editor          trace the building map"
     @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
     @echo "  http://localhost:8080/dreamworld_viewer   walk the dreamworld"
+    @echo "  http://localhost:8080/rmfsim              the building under simulation"

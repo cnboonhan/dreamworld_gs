@@ -193,7 +193,35 @@ const st = {
   cam: { eye: [0, 0, 0], yaw: 0, pitch: 0 },
   basis: null,           // {east, north, up} of the CURRENT world
   vertexCount: 0,
+  transition: null,      // {to, look, phase} while crossing an edge
 };
+
+// ---- where we are, told to the editor for the harness to read -------------
+// Main's truth-protocol shape, inverted for v2: the walker reports, the
+// broker holds, anyone may ask. Pushed on change and heartbeaten each
+// second, so /dreamworld_editor/viewer/state is never more than a beat old.
+let lastPush = 0, lastSent = '';
+function pushState(force) {
+  if (!graph || !st.at) return;
+  const now = performance.now();
+  if (!force && now - lastPush < 250) return;
+  const me = graph.vertices[st.at];
+  const doc = {
+    at: st.at, look: st.look, level: me.level, x: me.x, y: me.y,
+    lift: me.lift || null,
+    yaw_deg: Math.round(st.cam.yaw * 1800 / Math.PI) / 10,
+    pitch_deg: Math.round(st.cam.pitch * 1800 / Math.PI) / 10,
+    moving: st.moving,
+    transition: st.transition,
+  };
+  const s = JSON.stringify(doc);
+  if (!force && s === lastSent && now - lastPush < 1000) return;
+  lastSent = s;
+  lastPush = now;
+  fetch('/dreamworld_editor/viewer/state', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: s }).catch(() => {});
+}
 
 function basisOf(meta) {
   const up = unit(meta.up), east = unit(meta.east);
@@ -361,7 +389,7 @@ function drawPlan() {
   const P = (x, y) => [cx2 + (x - me.x) / far * R,
                        cy2 + (y - me.y) / far * R];
   px.fillStyle = '#0a0d12';
-  px.fillRect(0, 0, 280, 220);
+  px.fillRect(0, 0, 320, 220);
   px.strokeStyle = '#3a4757'; px.lineWidth = 2; px.beginPath();
   for (const w of L.walls) {
     const a = P(w[0], w[1]), b = P(w[2], w[3]);
@@ -391,8 +419,12 @@ function drawPlan() {
     }
     px.fillStyle = built ? '#9cc7ff' : '#ff9d97';
     px.font = '11px system-ui';
-    px.fillText(n.split('.').pop(),
-                cx2 + (x - cx2) * 0.62 + 3, cy2 + (y - cy2) * 0.62 - 3);
+    // clamped to the canvas: long names near the right edge used to
+    // vanish into the clip
+    const label = n.split('.').pop();
+    const lx = Math.min(cx2 + (x - cx2) * 0.62 + 3,
+                        316 - px.measureText(label).width);
+    px.fillText(label, lx, cy2 + (y - cy2) * 0.62 - 3);
     if (built) hits.push({ n, x, y });
   }
   // us: a green triangle carrying the heading, as the dashboard drew it
@@ -505,10 +537,14 @@ async function go() {
   // both — so by the time the last frame holds, the world is waiting
   const loading = fetchRecords(to, look);
   // 1. spin in place to face the way we will walk
+  st.transition = { to, look, phase: 'spin' };
+  pushState(true);
   await spinTo(bearing, 800);
   // 2. the crossing video covers the canvas
   const key = tagOf(st.at, st.look) + '__' + tagOf(to, look);
   const hasVideo = graph.crossings.includes(key);
+  st.transition = { to, look, phase: 'crossing' };
+  pushState(true);
   if (hasVideo) {
     await playVideo(`${FILES}/.crossings/${key}/crossing.mp4`);
   } else {
@@ -533,8 +569,10 @@ async function go() {
   $('shade').style.opacity = '0';
   st.at = to;
   st.look = look;
+  st.transition = null;
   updateBar();
   st.moving = false;
+  pushState(true);
 }
 
 function updateBar() {
@@ -546,8 +584,10 @@ function updateBar() {
 // ---- frame loop -----------------------------------------------------------
 function frame() {
   if (keys.size && !st.moving) {
-    if (keys.has('KeyA')) st.cam.yaw -= 0.02;
-    if (keys.has('KeyD')) st.cam.yaw += 0.02;
+    // yaw grows east-toward-north (counter-clockwise), so turning LEFT
+    // is yaw increasing — A adds, D subtracts
+    if (keys.has('KeyA')) st.cam.yaw += 0.02;
+    if (keys.has('KeyD')) st.cam.yaw -= 0.02;
     if (keys.has('KeyW')) st.cam.pitch = Math.min(1.45, st.cam.pitch + 0.01);
     if (keys.has('KeyS')) st.cam.pitch = Math.max(-1.45, st.cam.pitch - 0.01);
     if (keys.has('ArrowUp')) walk(0.05);
@@ -566,6 +606,7 @@ function frame() {
     }
   }
   drawPlan();
+  pushState(false);
   requestAnimationFrame(frame);
 }
 
