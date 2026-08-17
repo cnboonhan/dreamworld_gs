@@ -2,9 +2,11 @@
 
 The flow this page will carry: panorama -> splat -> align -> walkthrough.
 Minimal first: a minimap of each level, read straight from the project's
-building.yaml. Vertices there are already in floorplan pixels (the map's
-coordinate_system is reference_image), so unlike the main-branch dashboard
-there is no metres->pixels affine to fit — the file IS the picture.
+building.yaml and drawn the way the splat viewer's picker draws its plan —
+an abstract line drawing on a dark ground, no floorplan raster. Vertices in
+the yaml are already in a single pixel frame (coordinate_system is
+reference_image), so the geometry needs no projection, only a shift to the
+drawing's own bounding box.
 
 The page reflects the map as it is traced next door in /sim_editor: a watcher
 rereads the yaml when it changes. Everything the flow produces — uploaded
@@ -27,12 +29,11 @@ MOUNT = "/dreamworld_editor"
 PROJECT = os.environ.get("DW_PROJECT", "multilevel_office")
 PROJ = Path("/projects") / PROJECT
 
-# lanes and doors in the dashboard's palette, walls in the splat viewer
-# minimap's — each ported from the surface that drew that thing on main
-C_LANE, C_DOOR, C_WALL = "#58a6ff", "#e0a030", "#3a4757"
-C_VERT, C_INK = "#7aa2f7", "#0d1117"
-
-app.add_static_files("/maps", str(PROJ / "maps"))
+# the splat viewer minimap's palette: its dark ground and wall stroke, the
+# dashboard's lane, door and label colors — the family look from main
+C_BG, C_WALL = "#0a0d12", "#3a4757"
+C_LANE, C_DOOR = "#58a6ff", "#e0a030"
+C_VERT, C_INK, C_LABEL = "#7aa2f7", "#0d1117", "#7d8590"
 
 
 def building_file():
@@ -53,7 +54,6 @@ def load_levels() -> dict:
                     for e in edges or []]
 
         levels[name] = {
-            "drawing": (L.get("drawing") or {}).get("filename", ""),
             "walls": seg(L.get("walls")),
             "doors": seg(L.get("doors")),
             "lanes": seg(L.get("lanes")),
@@ -68,8 +68,24 @@ def signature():
     return f.stat().st_mtime if f else 0
 
 
-def level_svg(lv: dict) -> str:
-    parts = []
+def level_scene(lv: dict):
+    """(svg, width, height, shift) for one level's line drawing. The yaml's
+    pixel frame is shifted to the drawing's own bounding box, so the image
+    is exactly as big as the building plus a margin."""
+    pts = [(x, y) for seg in ("walls", "doors", "lanes")
+           for x1, y1, x2, y2 in lv[seg] for x, y in ((x1, y1), (x2, y2))]
+    pts += [(x, y) for _, x, y in lv["verts"]]
+    if not pts:
+        return ('<text x="200" y="150" font-size="14" text-anchor="middle" '
+                f'fill="{C_LABEL}">nothing on this level yet</text>', 400, 300,
+                (0, 0))
+    pad = 40
+    tx = pad - min(x for x, _ in pts)
+    ty = pad - min(y for _, y in pts)
+    w = int(max(x for x, _ in pts) + tx + pad + 1)
+    h = int(max(y for _, y in pts) + ty + pad + 1)
+    parts = [f'<rect x="0" y="0" width="{w}" height="{h}" fill="{C_BG}"/>',
+             f'<g transform="translate({tx},{ty})">']
     for x1, y1, x2, y2 in lv["walls"]:
         parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
                      f'stroke="{C_WALL}" stroke-width="2"/>')
@@ -80,14 +96,13 @@ def level_svg(lv: dict) -> str:
         parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
                      f'stroke="{C_LANE}" stroke-width="2.5" opacity="0.85"/>')
     for name, x, y in lv["verts"]:
-        label = html.escape(name)
         parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_VERT}" '
                      f'stroke="{C_INK}" stroke-width="1.5"/>')
-        # a white halo keeps the label readable on the drawing's own linework
         parts.append(f'<text x="{x}" y="{y - 9}" font-size="12" '
-                     f'text-anchor="middle" fill="{C_INK}" stroke="#ffffff" '
-                     f'stroke-width="3" paint-order="stroke">{label}</text>')
-    return "".join(parts)
+                     f'text-anchor="middle" fill="{C_LABEL}">'
+                     f'{html.escape(name)}</text>')
+    parts.append('</g>')
+    return "".join(parts), w, h, (tx, ty)
 
 
 def chip(color: str, text: str) -> None:
@@ -100,11 +115,12 @@ def chip(color: str, text: str) -> None:
 def index():
     sel = {"level": None}
 
-    def on_click(lv):
+    def on_click(lv, shift):
         def handler(e):
             best, dist = None, 20.0
             for name, x, y in lv["verts"]:
-                d = ((e.image_x - x) ** 2 + (e.image_y - y) ** 2) ** 0.5
+                d = ((e.image_x - shift[0] - x) ** 2 +
+                     (e.image_y - shift[1] - y) ** 2) ** 0.5
                 if d < dist:
                     best, dist = name, d
             if best:
@@ -136,15 +152,14 @@ def index():
         if sel["level"] not in levels:
             sel["level"] = next(iter(levels))
         lv = levels[sel["level"]]
+        svg, w, h, shift = level_scene(lv)
         with ui.column().classes("w-full px-4"):
-            # root-relative, NOT mount-prefixed: NiceGUI's frontend prepends
-            # the mount path itself, so prefixing here doubled it into
-            # /dreamworld_editor/dreamworld_editor/maps/... and a 404
+            # no source image at all — the plan IS the drawing; size gives
+            # the SVG its coordinate frame
             ui.interactive_image(
-                f"/maps/{lv['drawing']}",
-                content=level_svg(lv),
-                events=["mousedown"], on_mouse=on_click(lv),
-            ).classes("w-full")
+                size=(w, h), content=svg,
+                events=["mousedown"], on_mouse=on_click(lv, shift),
+            ).classes("w-full max-w-4xl")
 
     board()
 
