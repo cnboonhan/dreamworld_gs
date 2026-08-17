@@ -43,7 +43,9 @@
 /* Same shape as save and clear, third colour: the three are one column of
    full-width buttons, and a native datalist popup anchored itself nowhere near
    the panel — a select opens where it belongs. */
-#goTo, #variantSel { width: 100%; margin-top: 8px; background: #0e1218; color: #cfd8e3;
+.ctl { display: block; text-align: left; font-size: 10px; letter-spacing: .12em;
+       text-transform: uppercase; color: #8b98a8; margin: 10px 0 0; }
+#goTo, #variantSel { width: 100%; margin-top: 4px; background: #0e1218; color: #cfd8e3;
         border: 1px solid #2f3a49; border-radius: 6px; padding: 6px 9px;
         font: inherit; cursor: pointer; }
 #goBtn { width: 100%; margin-top: 6px; background: #2a4a6e; color: #dfe6ef;
@@ -87,13 +89,6 @@ canvas { transition: opacity .32s ease; }
 body.edgesFolded #tour { display: none !important; }
 #edgePlan { display: block; background: #0a0d12; border: 1px solid #232c38;
             border-radius: 6px; }
-#spotRow { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
-#spotRow button { background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
-                  border-radius: 5px; padding: 4px 8px; font: inherit; cursor: pointer; }
-#spotRow button:hover { background: #273040; }
-#spotRow button.set { border-color: #3f7d55; color: #8fd6a6; }
-#spotRow button.on { background: #4ea1ff; color: #08121e; border-color: #4ea1ff;
-                     font-weight: 600; }
 #saveSpot { width: 100%; margin-top: 8px; background: #2c6e3f; color: #dfe6ef;
             border: 1px solid #3a8a52; border-radius: 6px; padding: 6px 9px;
             font: inherit; cursor: pointer; }

@@ -856,15 +856,15 @@ async function edgePicker(doc, choose, facing, keepPose) {
 
         <div class="hint" id="edgeTitle"></div>
         <canvas id="edgePlan" width="220" height="220"></canvas>
-        <div id="spotRow"></div>
-        <select id="variantSel"></select>
+        <label class="ctl" for="goTo">position</label>
         <select id="goTo"></select>
         <button id="goBtn">go to position</button>
+        <label class="ctl" for="variantSel">variant</label>
+        <select id="variantSel"></select>
         <button id="saveSpot"></button>
         <button id="clearSpot" disabled>clear saved position</button>
         <div id="cacheNote"></div>`;
     document.body.appendChild(box);
-    const spotRow = box.querySelector("#spotRow");
     const saveSpot = box.querySelector("#saveSpot");
     const clearSpot = box.querySelector("#clearSpot");
     const plan = box.querySelector("#edgePlan");
@@ -952,10 +952,10 @@ async function edgePicker(doc, choose, facing, keepPose) {
             const b = P([here[0] + Math.cos(l.bearing) * l.metres,
                          here[1] + Math.sin(l.bearing) * l.metres]);
             const live = spots[target] === l.to;
-            cx.strokeStyle = live ? "#4ea1ff" : (placed[l.to] ? "#3f7d55" : "#5d6b7d");
+            cx.strokeStyle = live ? "#4ea1ff" : (placed[l.to] ? "#3a5f8f" : "#7d4348");
             cx.lineWidth = live ? 3 : 1.5;
             cx.beginPath(); cx.moveTo(110, 110); cx.lineTo(b[0], b[1]); cx.stroke();
-            cx.fillStyle = live ? "#4ea1ff" : (placed[l.to] ? "#8fd6a6" : "#8b98a8");
+            cx.fillStyle = live ? "#4ea1ff" : (placed[l.to] ? "#9cc7ff" : "#ff9d97");
             cx.font = "11px system-ui";
             cx.fillText(l.to, 110 + (b[0] - 110) * 0.62 + 3,
                         110 + (b[1] - 110) * 0.62 - 3);
@@ -972,10 +972,13 @@ async function edgePicker(doc, choose, facing, keepPose) {
             const i = spots.indexOf(l.to);
             hits.push({i: i < 0 ? j + 1 : i, x: b[0], y: b[1]});
             const on = spots[target] === l.to;
+            // Alignment at a glance: blue is marked, red is not yet. The
+            // selected vertex wears a white ring rather than a colour of its
+            // own, so the two facts never fight over one dot.
             cx.beginPath(); cx.arc(b[0], b[1], on ? 7 : 5.5, 0, 7);
-            if (placed[l.to]) { cx.fillStyle = on ? "#4ea1ff" : "#7aa2f7"; cx.fill(); }
-            else { cx.strokeStyle = on ? "#4ea1ff" : "#7aa2f7"; cx.lineWidth = 2;
-                   cx.stroke(); cx.lineWidth = 1; }
+            cx.fillStyle = placed[l.to] ? "#4ea1ff" : "#f85149"; cx.fill();
+            if (on) { cx.strokeStyle = "#ffffff"; cx.lineWidth = 2;
+                      cx.stroke(); cx.lineWidth = 1; }
         });
         // You are here, in the dashboard's green.
         hits.push({i: 0, x: 110, y: 110});
@@ -1040,8 +1043,7 @@ async function edgePicker(doc, choose, facing, keepPose) {
         const sel = box.querySelector("#goTo");
         const scene = `${doc.waypoint.split(".")[0]}.${spots[best.i]}`;
         if (sel && [...sel.options].some((o) => o.value === scene)) sel.value = scene;
-        const b = spotRow.querySelector(`button[data-i="${best.i}"]`);
-        if (b) b.click();
+        pick(best.i);
     };
 
     // Variants of this waypoint's world — splats/<id>@<name>/ siblings of the
@@ -1054,7 +1056,7 @@ async function edgePicker(doc, choose, facing, keepPose) {
         if (!vs) return;
         const cur = (decodeURIComponent(location.search)
             .match(/splats\/([^/]+)\/world\.ply/) || [])[1];
-        if (!proj || !cur) { vs.remove(); return; }
+        if (!proj || !cur) { vs.disabled = true; return; }
         const base = cur.split("@")[0];
         let index = [];
         try {
@@ -1064,12 +1066,13 @@ async function edgePicker(doc, choose, facing, keepPose) {
         } catch (err) { /* no index, no dropdown */ }
         const kin = index.map((x) => x.scene)
             .filter((s) => s === base || s.startsWith(base + "@"));
-        if (kin.length < 2) { vs.remove(); return; }
+        if (!kin.length) kin.push(base);
         vs.innerHTML = kin.map((s) => {
             const name = s.includes("@") ? s.split("@")[1] : "original";
             return `<option value="${s}"${s === cur ? " selected" : ""}>` +
-                   `variant: ${name}</option>`;
+                   `${name}</option>`;
         }).join("");
+        vs.disabled = kin.length < 2;   // labelled fixture; greyed when alone
         vs.onchange = async () => {
             const scene = vs.value;
             if (scene === cur) return;
@@ -1083,10 +1086,9 @@ async function edgePicker(doc, choose, facing, keepPose) {
     })();
 
     const paintSpots = () => {
-        spotRow.innerHTML = spots.map((v, i) =>
-            `<button data-i="${i}" class="${i === target ? "on" : ""}${
-                placed[v] ? " set" : ""}">${placed[v] ? "\u2713 " : ""}${v}${
-                i === 0 ? " (here)" : ""}</button>`).join("");
+        // The buttons that used to sit here are gone: the minimap IS the
+        // picker now — blue means aligned, red means not yet — and this only
+        // keeps the save/clear pair honest about the selected vertex.
         saveSpot.textContent = "save position";
         // Always shown, disabled when there is nothing to clear. Hiding it meant
         // it never appeared at all until a waypoint had been marked — so the way
@@ -1200,10 +1202,8 @@ async function edgePicker(doc, choose, facing, keepPose) {
         return true;
     };
 
-    spotRow.onclick = e => {
-        const b = e.target.closest("button");
-        if (!b) return;
-        target = +b.dataset.i;
+    const pick = (i) => {
+        target = i;
         paintSpots();
         const play = document.getElementById("tourPlay");
         if (target === 0) {
@@ -1284,7 +1284,8 @@ async function edgePicker(doc, choose, facing, keepPose) {
                                           location.href).href);
             scenes = r.ok ? (await r.json()).map((x) => x.scene) : [];
         } catch (err) { return; }
-        box2.innerHTML = scenes.map((sc) =>
+        // Positions, not looks: the variant dropdown owns which look shows.
+        box2.innerHTML = scenes.filter((sc) => !sc.includes("@")).map((sc) =>
             `<option value="${sc}"${sc === doc.waypoint ? " selected" : ""}>${sc}</option>`
         ).join("");
         const go = () => {
@@ -1292,6 +1293,9 @@ async function edgePicker(doc, choose, facing, keepPose) {
             if (!want || want === doc.waypoint) return;
             const u = new URL(location.href);
             u.searchParams.set("url", `files/${proj[1]}/splats/${want}/world.ply`);
+            // No from: a jump is not an arrival along an edge, and the target
+            // may not even connect to here — a stale from would claim it does.
+            u.searchParams.delete("from");
             location.assign(u.href);       // a real navigation, not a state swap
         };
         btn.onclick = go;
