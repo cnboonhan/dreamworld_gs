@@ -121,6 +121,13 @@ def new_vertex(level: str, x: float, y: float) -> str:
     return name
 
 
+def move_vertex(name: str, x: float, y: float) -> None:
+    vj = DREAM / name / "vertex.json"
+    v = json.loads(vj.read_text())
+    v["x"], v["y"] = round(x, 2), round(y, 2)
+    vj.write_text(json.dumps(v, indent=1))
+
+
 def rename_vertex(old: str, new: str) -> None:
     (DREAM / old).rename(DREAM / new)
     rename_in_edges(old, new)

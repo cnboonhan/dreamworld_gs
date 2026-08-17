@@ -40,6 +40,8 @@ window.dwView = (id, w, h, key) => {
     } else { px -= e.deltaX; py -= e.deltaY; }
     apply(); }, {passive: false});
   box.addEventListener('pointerdown', e => {
+    // in move mode the drag belongs to the vertex, not the pan
+    if (box.style.cursor === 'move') return;
     drag = [e.clientX, e.clientY]; });
   if (window._dwvMove) {
     removeEventListener('pointermove', window._dwvMove);

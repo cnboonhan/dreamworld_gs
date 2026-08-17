@@ -54,7 +54,8 @@ def index():
 
         HINT = {None: "click a vertex to select it",
                 "add": "click the plan to drop a vertex",
-                "edge": "click one vertex, then the other"}
+                "edge": "click one vertex, then the other",
+                "move": "drag a vertex to its new spot"}
 
         @ui.refreshable
         def tools():
@@ -65,7 +66,8 @@ def index():
                 board.refresh()
 
             for mode, text, icon in (("add", "vertex", "add_location_alt"),
-                                     ("edge", "edge", "timeline")):
+                                     ("edge", "edge", "timeline"),
+                                     ("move", "move", "open_with")):
                 on = sel["mode"] == mode
                 ui.button(text, icon=icon,
                           on_click=lambda m=mode: switch(m)).props(
@@ -87,16 +89,31 @@ def index():
                     best, bd = nm, d
             return best
 
-        def handler(e):
+        async def handler(e):
             x, y = e.image_x - shift[0], e.image_y - shift[1]
             if e.type == "mousedown":
                 down["at"] = (x, y)
+                down["vertex"] = nearest(x, y)
                 return
             if e.type != "mouseup" or "at" not in down:
                 return
-            moved = math.hypot(x - down["at"][0], y - down["at"][1])
+            # movement judged in SCREEN pixels: image units shrink with
+            # zoom, so a fixed image-unit threshold read a small pan at
+            # high zoom as a click — which deselected the vertex
+            level = (sel["level"] or "").replace("'", "")
+            k = float(await ui.run_javascript(
+                f"(window._dwvMem && window._dwvMem['{level}']) "
+                f"? window._dwvMem['{level}'].k : 1") or 1)
+            moved = math.hypot(x - down["at"][0], y - down["at"][1]) * k
+            grabbed = down.get("vertex")
             down.clear()
-            if moved > 5:            # that was a pan, not a click
+            if sel["mode"] == "move":
+                if grabbed and moved > 6:
+                    store.move_vertex(grabbed, x, y)
+                    sel["vertex"] = grabbed
+                    refresh_all()
+                return
+            if moved > 6:            # that was a pan, not a click
                 return
             if sel["mode"] == "add":
                 sel["vertex"] = store.new_vertex(sel["level"], x, y)
@@ -114,7 +131,9 @@ def index():
                     ui.notify(store.add_edge(sel["edge_from"], near))
                     sel["edge_from"] = None
             else:
-                sel["vertex"] = nearest(x, y)
+                near = nearest(x, y)
+                if near:             # empty space keeps the selection
+                    sel["vertex"] = near
             refresh_all()
         return handler
 
@@ -234,8 +253,8 @@ def vertex_card(name, v, sel, refresh_all):
                         ui.button("keep", on_click=dlg.close)
                 dlg.open()
 
-            ui.button("delete", on_click=delete).props(
-                "dense flat color=negative")
+            ui.button("delete", color="negative",
+                      on_click=delete).props("dense")
 
 
 def pano_card(name, v, dream, scale, refresh_all):
