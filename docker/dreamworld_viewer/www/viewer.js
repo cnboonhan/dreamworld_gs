@@ -218,7 +218,7 @@ function pushState(force) {
   if (!force && s === lastSent && now - lastPush < 1000) return;
   lastSent = s;
   lastPush = now;
-  fetch('/dreamworld_editor/viewer/state', {
+  fetch('/dreamworld_core/viewer/state', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: s }).catch(() => {});
 }

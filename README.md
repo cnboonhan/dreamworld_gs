@@ -108,6 +108,7 @@ docker/
   rmf-tools/               traffic editor, world build, Gazebo+RMF sim
   dreamworld_editor/       the NiceGUI editor and its store
   dreamworld_viewer/       the walkthrough (static, fed by the editor)
+  dreamworld_core/         the state holder — the seam's fixed address
   splatgen/                HY-World 2.0 behind a one-job queue
   qwen/                    Qwen-Image-Edit-2509 (panorama variants)
   wangen/                  Wan 2.2 (crossing videos) behind the same queue
@@ -128,9 +129,10 @@ harness coordinates by reading one and speaking to the other.
 every second:
 
 ```
-GET /dreamworld_viewer/state          (held by the editor — the
-                                       state lives in the browser tab,
-                                       which can only push)
+GET /dreamworld_viewer/state          (held by dreamworld_core, the
+                                       stack's state holder — the state
+                                       is born in a browser tab, which
+                                       can only push)
 { "state": { "at": "L11.v0.apex_lab", "look": "original",
              "level": "L11", "x": 734.5, "y": 65.9, "lift": null,
              "yaw_deg": 0.8, "pitch_deg": 0.0, "moving": false,

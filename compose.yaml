@@ -120,6 +120,16 @@ services:
               device_ids: ["${DW_WAN_GPU:-6}"]
     restart: unless-stopped
 
+  # The state holder — the seam between the walk and the building. The
+  # viewer pushes where it stands; the harness (and anyone else) asks.
+  dreamworld_core:
+    build:
+      context: ./docker
+      dockerfile: dreamworld_core/dreamworld_core.Dockerfile
+    image: dreamworld/dreamworld_core:latest
+    container_name: dreamworld-core
+    restart: unless-stopped
+
   # The walkthrough — main's splat viewer rebuilt on the dreamworld tree,
   # at /dreamworld_viewer. Static nginx: the graph and every asset come
   # through the editor's routes.
