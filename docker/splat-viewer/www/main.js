@@ -1288,15 +1288,21 @@ async function edgePicker(doc, choose, facing, keepPose) {
         box2.innerHTML = scenes.filter((sc) => !sc.includes("@")).map((sc) =>
             `<option value="${sc}"${sc === doc.waypoint ? " selected" : ""}>${sc}</option>`
         ).join("");
-        const go = () => {
+        const go = async () => {
             const want = box2.value;
             if (!want || want === doc.waypoint) return;
-            const u = new URL(location.href);
-            u.searchParams.set("url", `files/${proj[1]}/splats/${want}/world.ply`);
-            // No from: a jump is not an arrival along an edge, and the target
-            // may not even connect to here — a stale from would claim it does.
-            u.searchParams.delete("from");
-            location.assign(u.href);       // a real navigation, not a state swap
+            // By hand: the agent lets go first, exactly as a walkthrough click
+            // does, so the dashboard cannot pull the camera back to where the
+            // model still stands.
+            if (window.__handsOff) window.__handsOff();
+            // In place, not a navigation: the preheated records make the jump
+            // instant, where a reload paid the whole page again. And no
+            // cameFrom — a jump is not an arrival along an edge, and the
+            // target may not even connect to here; a stale from would claim
+            // it does.
+            window.__cameFrom = null;
+            await window.prepareArrival(proj[1], want, want.split(".").pop());
+            if (window.stepThrough && !window.stepThrough()) tour.waiting = true;
         };
         btn.onclick = go;
     })();
