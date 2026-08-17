@@ -340,17 +340,18 @@ def edge_direction_card(frm, to, dream, tag):
                         f"touch-action:none;background:{C_BG};"
                         "border-radius:6px")
                     ns = f"ep_{tag}_{nm}"
-                    # solo: faced once at the edge's bearing, uncoupled
-                    # from the vertex viewers' shared heading
+                    # grouped per direction card: the pair starts on the
+                    # edge's bearing and pans together, apart from the
+                    # vertex viewers' own shared heading
                     ui.timer(0.15, lambda cv=cv, url=url, ns=ns:
                              ui.run_javascript(
                                  f"dwPano({cv.id}, '{url}', -1, '{ns}', "
-                                 f"{{free:true, solo:true}});"
+                                 f"{{free:true, group:'ep_{tag}'}});"
                                  f"dwp('{ns}','face',{bearing})"),
                              once=True)
-        ui.label("both panoramas face the direction of travel — aligned "
-                 "ends should show the same corridor from its two ends"
-                 ).classes("text-xs text-gray-500")
+        ui.label("both panoramas face the direction of travel and pan "
+                 "together — aligned ends show the same corridor from its "
+                 "two ends").classes("text-xs text-gray-500")
 
         pa, pb = store.splat_of(frm), store.splat_of(to)
         if not (pa and pb):

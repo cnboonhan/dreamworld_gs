@@ -65,11 +65,17 @@ window.dwPano = (id, url, offId, ns, opts) => {
       ar.style.setProperty('--dwrot',
         (st.off - st.look * 180 / Math.PI) + 'deg'); }
   };
-  // one heading for every viewer: whoever the user turns, tells the rest.
-  // lookAt() sets without re-broadcasting, so this cannot ring.
+  // one heading per GROUP of viewers: whoever the user turns tells its
+  // peers — the vertex's align and edit viewers share the default group,
+  // each edge card's panorama pair shares its own — and lookAt() sets
+  // without re-broadcasting, so this cannot ring. Free-look peers follow
+  // pitch too; the alignment view keeps its locked horizon.
+  const grp = opts.group || 'main';
   const share = () => {
     for (const k in window._dwp) {
-      if (k !== ns && window._dwp[k].lookAt) window._dwp[k].lookAt(st.look);
+      const a = window._dwp[k];
+      if (k !== ns && a._grp === grp && a.lookAt)
+        a.lookAt(st.look, st.pitch);
     }
   };
   cv.addEventListener('pointerdown', e => {
@@ -82,7 +88,7 @@ window.dwPano = (id, url, offId, ns, opts) => {
       const s = st.fov / Math.max(1, cv.clientWidth);
       st.look += dx * s;
       st.pitch = Math.min(1.45, Math.max(-1.45, st.pitch + dy * s));
-      if (!opts.solo) share();  // the alignment view and the arrow follow
+      share();                // this viewer's group follows
     } else {                  // turn the panorama: the alignment offset
       st.off = (st.off + dx * 0.12 + 360) % 360;
     }
@@ -156,26 +162,22 @@ window.dwPano = (id, url, offId, ns, opts) => {
     requestAnimationFrame(loop);
   };
   loop();
-  // born facing where the others already face — solo viewers neither
-  // inherit nor take part in the shared heading; they are faced once,
-  // at a bearing of their own (the edge panorama pairs)
-  if (!opts.solo) {
-    for (const k in window._dwp) {
-      if (k !== ns && window._dwp[k].heading) {
-        st.look = window._dwp[k].heading();
-        break;
-      }
+  // born facing where its group already faces
+  for (const k in window._dwp) {
+    const a = window._dwp[k];
+    if (k !== ns && a._grp === grp && a.heading) {
+      st.look = a.heading();
+      break;
     }
   }
   window._dwp[ns] = {
-    face: r => { st.look = r; st.pitch = 0; readout();
-      if (!opts.solo) share(); },
+    _grp: grp,
+    face: r => { st.look = r; st.pitch = 0; readout(); share(); },
     nudge: d => { st.off = (st.off + d + 360) % 360; readout(); },
-    ...(opts.solo ? {} : {
-      heading: () => st.look,
-      lookAt: r => { st.look = r; if (!opts.free) st.pitch = 0;
-        readout(); },
-    }),
+    heading: () => st.look,
+    lookAt: (r, p) => { st.look = r;
+      st.pitch = (opts.free && p != null) ? p : (opts.free ? st.pitch : 0);
+      readout(); },
     // back to the last SAVED alignment: the saved roll lives in the file,
     // so discarding the pending turn is all a reset is
     reset: () => { st.off = 0; readout(); },
