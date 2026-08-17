@@ -76,8 +76,8 @@ def pack(assets: Path, project: str, dest: Path) -> int:
     if not files:
         print(f"{project} is empty — nothing to pack", file=sys.stderr)
         return 1
-    # Say what travels, by drawer, BEFORE the slow part: the moment to notice
-    # a surprise is before the minutes of gzip, not after.
+    # Say what travels, by drawer, BEFORE the archive is written: the moment
+    # to notice a surprise is before the copy, not after.
     sizes: dict[str, int] = {}
     for f in files:
         top = f.relative_to(proj).parts[0]
@@ -88,9 +88,12 @@ def pack(assets: Path, project: str, dest: Path) -> int:
     for k in sorted(sizes, key=lambda k: -sizes[k]):
         print(f"  {sizes[k] / 1e6:10.1f} MB  {k}")
     dest.mkdir(parents=True, exist_ok=True)
-    out = dest.resolve() / f"{project}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    out = dest.resolve() / f"{project}-{time.strftime('%Y%m%d-%H%M%S')}.tar"
     bar = Bar(total, "packing  ")
-    with tarfile.open(out, "w:gz") as tar:
+    # Plain tar, no compression: panoramas, plys and videos are already
+    # compressed formats, so gzip bought a few percent at a tenth of the
+    # speed — the archive now writes at disk rate.
+    with tarfile.open(out, "w:") as tar:
         for f in files:
             info = tar.gettarinfo(f, arcname=str(f.relative_to(root)))
             with open(f, "rb") as fh:
@@ -116,11 +119,12 @@ def unpack(repo: Path, tarball: Path) -> int:
                and first.name.count("/") >= 2 else None)
     if landing and (repo / "assets" / "projects" / landing).is_dir():
         print(f"note: assets/projects/{landing} exists and will be merged into")
-    # Progress over COMPRESSED bytes in stream mode: one pass, smooth, and
-    # the total is simply the file's size on disk.
+    # Progress over the ARCHIVE's bytes in stream mode: one pass, smooth,
+    # and the total is simply the file's size on disk. r|* keeps old
+    # compressed archives unpackable beside the new plain ones.
     bar = Bar(f.stat().st_size, "unpacking")
     with open(f, "rb") as raw:
-        with tarfile.open(fileobj=Counted(raw, bar), mode="r|gz") as tar:
+        with tarfile.open(fileobj=Counted(raw, bar), mode="r|*") as tar:
             tar.extractall(repo, filter="data")
     bar.close()
     print(f"unpacked into {repo}/assets/projects" +
