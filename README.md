@@ -128,7 +128,9 @@ harness coordinates by reading one and speaking to the other.
 every second:
 
 ```
-GET /dreamworld_editor/viewer/state
+GET /dreamworld_viewer/state          (held by the editor — the
+                                       state lives in the browser tab,
+                                       which can only push)
 { "state": { "at": "L11.v0.apex_lab", "look": "original",
              "level": "L11", "x": 734.5, "y": 65.9, "lift": null,
              "yaw_deg": 0.8, "pitch_deg": 0.0, "moving": false,
