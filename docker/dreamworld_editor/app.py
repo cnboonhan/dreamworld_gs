@@ -7,9 +7,9 @@ coordinate_system is reference_image), so unlike the main-branch dashboard
 there is no metres->pixels affine to fit — the file IS the picture.
 
 The page reflects the map as it is traced next door in /sim_editor: a watcher
-rereads the yaml when it changes, and a named vertex shows blue once a
-panorama with its name lands in panos/, red while one is missing — the
-main-branch picker's convention, blue means done, red means not yet.
+rereads the yaml when it changes. Everything the flow produces — uploaded
+panoramas, splats, alignment — will live under the project's dreamworld/
+tree and be written through this UI; nothing here reads the legacy folders.
 
 NiceGUI mounts ITSELF at /dreamworld_editor, so the proxy passes the prefix
 through unstripped and page, assets and socket all agree on where they live.
@@ -27,9 +27,10 @@ MOUNT = "/dreamworld_editor"
 PROJECT = os.environ.get("DW_PROJECT", "multilevel_office")
 PROJ = Path("/projects") / PROJECT
 
-# the main-branch minimap's palette, so the two read as one family
-C_LANE, C_DOOR, C_WALL = "#58a6ff", "#e0a030", "#2f4568"
-C_HAVE, C_MISS, C_INK = "#7aa2f7", "#f85149", "#0d1117"
+# lanes and doors in the dashboard's palette, walls in the splat viewer
+# minimap's — each ported from the surface that drew that thing on main
+C_LANE, C_DOOR, C_WALL = "#58a6ff", "#e0a030", "#3a4757"
+C_VERT, C_INK = "#7aa2f7", "#0d1117"
 
 app.add_static_files("/maps", str(PROJ / "maps"))
 
@@ -37,17 +38,6 @@ app.add_static_files("/maps", str(PROJ / "maps"))
 def building_file():
     hits = sorted((PROJ / "maps").glob("*.building.yaml"))
     return hits[0] if hits else None
-
-
-def pano_names() -> set[str]:
-    """Base names with a panorama on disk. A variant (name@look) counts for
-    its base — a look is not a new place."""
-    d = PROJ / "panos"
-    if not d.is_dir():
-        return set()
-    return {f.stem.split("@")[0] for f in d.iterdir()
-            if f.is_file() and not f.name.startswith(".")
-            and f.suffix.lower() in (".jpg", ".jpeg", ".png")}
 
 
 def load_levels() -> dict:
@@ -74,17 +64,15 @@ def load_levels() -> dict:
 
 
 def signature():
-    """Cheap change detector for the watcher: the map file's mtime and the
-    set of panorama names. Either moving means the board is stale."""
     f = building_file()
-    return (f.stat().st_mtime if f else 0, frozenset(pano_names()))
+    return f.stat().st_mtime if f else 0
 
 
-def level_svg(lv: dict, have: set[str]) -> str:
+def level_svg(lv: dict) -> str:
     parts = []
     for x1, y1, x2, y2 in lv["walls"]:
         parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
-                     f'stroke="{C_WALL}" stroke-width="1.5" opacity="0.55"/>')
+                     f'stroke="{C_WALL}" stroke-width="2"/>')
     for x1, y1, x2, y2 in lv["doors"]:
         parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
                      f'stroke="{C_DOOR}" stroke-width="3.5"/>')
@@ -92,9 +80,8 @@ def level_svg(lv: dict, have: set[str]) -> str:
         parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
                      f'stroke="{C_LANE}" stroke-width="2.5" opacity="0.85"/>')
     for name, x, y in lv["verts"]:
-        color = C_HAVE if name in have else C_MISS
         label = html.escape(name)
-        parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{color}" '
+        parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_VERT}" '
                      f'stroke="{C_INK}" stroke-width="1.5"/>')
         # a white halo keeps the label readable on the drawing's own linework
         parts.append(f'<text x="{x}" y="{y - 9}" font-size="12" '
@@ -111,7 +98,7 @@ def chip(color: str, text: str) -> None:
 
 @ui.page("/")
 def index():
-    sel = {"tab": None}
+    sel = {"level": None}
 
     def on_click(lv):
         def handler(e):
@@ -121,55 +108,44 @@ def index():
                 if d < dist:
                     best, dist = name, d
             if best:
-                state = "has a panorama" if best in pano_names() \
-                    else "no panorama yet"
-                ui.notify(f"{best} — {state}")
+                ui.notify(best)
         return handler
 
     with ui.header().classes("items-center bg-[#0b0e13] gap-6"):
         ui.label("dreamworld editor").classes("text-lg font-bold text-[#4ea1ff]")
         ui.label(PROJECT).classes("text-sm text-gray-500")
         with ui.row().classes("gap-4 text-xs text-gray-400 items-center"):
-            chip(C_HAVE, "pano captured")
-            chip(C_MISS, "pano missing")
             chip(C_LANE, "lane")
             chip(C_DOOR, "door")
+            chip(C_WALL, "wall")
+
+    names = list(load_levels())
+    sel["level"] = names[0] if names else None
+    picker = ui.select(names, value=sel["level"], label="level",
+                       on_change=lambda e: (sel.update(level=e.value),
+                                            board.refresh())
+                       ).classes("w-40 mx-4")
 
     @ui.refreshable
     def board():
-        levels, have = load_levels(), pano_names()
+        levels = load_levels()
         if not levels:
             ui.label(f"no *.building.yaml under {PROJ}/maps — "
                      f"trace one in /sim_editor first").classes("m-4")
             return
-        names = list(levels)
-        if sel["tab"] not in names:
-            sel["tab"] = names[0]
-        with ui.tabs(value=sel["tab"],
-                     on_change=lambda e: sel.update(tab=e.value)) as tabs:
-            for n in names:
-                ui.tab(n)
-        with ui.tab_panels(tabs, value=sel["tab"]).classes("w-full"):
-            for n in names:
-                lv = levels[n]
-                with ui.tab_panel(n):
-                    done = sum(v[0] in have for v in lv["verts"])
-                    ui.label(f"{len(lv['verts'])} vertices "
-                             f"({done} with panoramas) · "
-                             f"{len(lv['lanes'])} lanes · "
-                             f"{len(lv['doors'])} doors").classes(
-                        "text-xs text-gray-500")
-                    ui.interactive_image(
-                        f"{MOUNT}/maps/{lv['drawing']}",
-                        content=level_svg(lv, have),
-                        events=["mousedown"], on_mouse=on_click(lv),
-                    ).classes("w-full")
-        placed = {v[0] for lv in levels.values() for v in lv["verts"]}
-        waiting = sorted(have - placed)
-        if waiting:
-            ui.label(f"{len(waiting)} panorama(s) not yet placed — name a "
-                     f"vertex after one to place it: " + ", ".join(waiting)
-                     ).classes("text-xs text-gray-500 m-2")
+        if sel["level"] not in levels:
+            sel["level"] = next(iter(levels))
+        lv = levels[sel["level"]]
+        with ui.column().classes("w-full px-4"):
+            ui.label(f"{len(lv['verts'])} vertices · "
+                     f"{len(lv['lanes'])} lanes · "
+                     f"{len(lv['doors'])} doors").classes(
+                "text-xs text-gray-500")
+            ui.interactive_image(
+                f"{MOUNT}/maps/{lv['drawing']}",
+                content=level_svg(lv),
+                events=["mousedown"], on_mouse=on_click(lv),
+            ).classes("w-full")
 
     board()
 
@@ -179,6 +155,10 @@ def index():
         sig = signature()
         if sig != state["sig"]:
             state["sig"] = sig
+            fresh = list(load_levels())
+            if fresh != picker.options:
+                picker.options = fresh
+                picker.update()
             board.refresh()
 
     ui.timer(2.0, poll)
