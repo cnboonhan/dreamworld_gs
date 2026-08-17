@@ -23,6 +23,7 @@ ssh -L 8080:localhost:8080 <box>         one tunnel carries it all
 | `/dreamworld_editor` | grow the dreamworld: vertices, edges, panoramas, alignment, variants, splats, crossings |
 | `/dreamworld_viewer` | walk it: splat worlds, spin-and-cross edge transitions |
 | `/rmfsim` | the building under simulation (Gazebo + RMF) over noVNC |
+| `/harness` | drive it by tool call: dashboard, tools, the mission agent |
 
 Fetch the model weights once (network needed, ~600 GB — the manifest is
 `scripts/models.txt`):
@@ -70,6 +71,14 @@ just fetch
    capture point facing the way you walked. Worlds and crossings preheat
    in the background after the first load.
 
+9. **Drive** in `/harness`: main's interactive dashboard on the v2
+   seams. Tools (`go_to`, `face`, `open_door`, `take_lift`, `pick` …)
+   move the walker by commanding `dreamworld_core` and work the building
+   through the sim's infra bridge; `go_to` refuses a door-blocked edge
+   until the door is opened. The mission agent (Qwen3-VL via the vLLM)
+   takes an instruction, plans with the same tools, and is gated by the
+   same movement lock. A viewer tab, if one is open, walks every move.
+
 Vertex colors on the plan: **red** — panorama missing or alignment never
 saved; **yellow** — work remains; **green** — every look, original and
 each variant, has its splat.
@@ -109,6 +118,7 @@ docker/
   dreamworld_editor/       the NiceGUI editor and its store
   dreamworld_viewer/       the walkthrough (static, fed by the editor)
   dreamworld_core/         the state holder — the seam's fixed address
+  harness/                 the dashboard, tools and mission agent
   splatgen/                HY-World 2.0 behind a one-job queue
   qwen/                    Qwen-Image-Edit-2509 (panorama variants)
   wangen/                  Wan 2.2 (crossing videos) behind the same queue
@@ -116,14 +126,30 @@ scripts/                   fetch_assets.py, models.txt, pack.py
 assets/                    gitignored: weights (hf/, models/), projects/
 ```
 
-GPUs on this box: **0** vLLM (Qwen3-VL — trajectory planning, the future
-agent) · **1–4** splat generation · **5** qwen image edit ·
+GPUs on this box: **0** vLLM (Qwen3-VL — trajectory planning and the
+mission agent) · **1–4** splat generation · **5** qwen image edit ·
 **6** wan video · **7** free.
 
 ## The harness seam
 
-RMF owns the building's infrastructure; the viewer owns the walk. A
-harness coordinates by reading one and speaking to the other.
+RMF owns the building's infrastructure; the viewer owns the walk; the
+core owns the truth of where the walker stands. `/harness` is the
+reference consumer of all three, but the seams are plain HTTP and
+anything may speak them.
+
+**Moving the walker** — command the core, monitor the viewer's report.
+The core is the ONE writer of position; the viewer follows it (spin,
+crossing video, arrive), and reports back:
+
+```
+POST /dreamworld_core/position        { "at": "L11.v0.apex_lab",
+                                        "look": "original",
+                                        "yaw_deg": 90.0 }   (optional;
+                                       same-at + yaw = turn in place)
+```
+
+A command lands whether or not a viewer tab is open — the core's truth
+advances either way, and a tab that attaches later teleports to it.
 
 **Where the walker is** — the viewer reports on change and heartbeats
 every second:
@@ -141,10 +167,13 @@ GET /dreamworld_viewer/state          (held by dreamworld_core, the
   "age": 0.4, "live": true }
 ```
 
-**The building's levers** — inside the sim's ROS graph, the same four
-topics main's bridge spoke:
+**The building's levers** — the infra bridge runs beside the sim
+(inside its ROS graph, `rmfsim:8090` on the compose network) and turns
+HTTP into the same four topics main's bridge spoke:
 
 ```
+POST /door  /call_lift  /pick  /place    GET /door_state  /lift_state
+          ↓ inside the sim ↓
 publish   /door_requests   rmf_door_msgs/DoorRequest   (mode 2 = open)
 publish   /lift_requests   rmf_lift_msgs/LiftRequest   (destination_floor)
 subscribe /door_states, /lift_states

@@ -103,6 +103,15 @@ sim)
     exec /app/with_display.sh bash -c '
         ros2 launch "'"${world_dir}"'/sim.launch.xml" &
         LAUNCH=$!
+        # doors, lifts and items over HTTP for the harness, beside the sim
+        # so the ROS graph is the same one. NOTE: this whole block is one
+        # single-quoted string, so no apostrophes in these comments.
+        python3 /app/infra_bridge.py \
+            --building "'"${maps}/${MAP}.building.yaml"'" \
+            --level "${DW_LEVEL:-L11}" \
+            --world-file "'"${world_dir}/${MAP}.world"'" \
+            --interactables "'"/projects/${PROJECT}/interactable_items.json"'" \
+            --port 8090 2>&1 | sed "s/^/[infra] /" &
         trap "kill $LAUNCH 2>/dev/null || true" EXIT
         # let the server advertise before the client looks for it
         for _ in $(seq 1 60); do

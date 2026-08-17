@@ -49,7 +49,7 @@ WORKDIR /app
 COPY rmf-tools/entrypoint.sh rmf-tools/with_display.sh rmf-tools/generate_world.sh \
      rmf-tools/postprocess_world.py rmf-tools/sim.launch.xml.template \
      rmf-tools/world_flow.py rmf-tools/texturize.py \
-     rmf-tools/robot_bridge.py rmf-tools/galaxea.sh /app/
+     rmf-tools/robot_bridge.py rmf-tools/infra_bridge.py rmf-tools/galaxea.sh /app/
 RUN chmod +x /app/entrypoint.sh /app/with_display.sh /app/generate_world.sh \
              /app/galaxea.sh
 

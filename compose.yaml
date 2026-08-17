@@ -141,6 +141,39 @@ services:
     container_name: dreamworld-viewer
     restart: unless-stopped
 
+  # The harness — main's interactive dashboard and mission agent on the v2
+  # seams: movement through dreamworld_core, doors and lifts through the
+  # infra bridge in the sim, the agent against the vLLM. At /harness.
+  harness:
+    <<: *as-caller
+    build:
+      context: ./docker
+      dockerfile: harness/harness.Dockerfile
+    image: dreamworld/harness:latest
+    container_name: dreamworld-harness
+    command:
+      - "--nav"
+      - "/projects/${DW_PROJECT:-multilevel_office}/worlds/${DW_MAP:-multilevel_office}/nav_graphs/0.yaml"
+      - "--building"
+      - "/projects/${DW_PROJECT:-multilevel_office}/maps/${DW_MAP:-multilevel_office}.building.yaml"
+      - "--project"
+      - "${DW_PROJECT:-multilevel_office}"
+      - "--level"
+      - "${DW_LEVEL:-L11}"
+      - "--start"
+      - "${DW_START:-L11.v0.apex_lab}"
+      - "--port"
+      - "8086"
+    volumes:
+      - ./assets/projects:/projects:ro
+    environment:
+      HOME: /tmp
+      CORE_URL: "http://dreamworld_core:8000"
+      EDITOR_URL: "http://dreamworld_editor:8080/dreamworld_editor"
+      BRIDGE_URL: "http://rmfsim:8090"
+      VLM_BASE_URL: "http://vlm:8000/v1"
+    restart: unless-stopped
+
   # Qwen3-VL — the trajectory planner's eyes during splat generation (and
   # later the mission agent's). ~17GB loaded, a card of its own.
   vlm:

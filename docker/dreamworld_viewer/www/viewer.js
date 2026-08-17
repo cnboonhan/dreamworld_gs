@@ -249,11 +249,21 @@ function followTruth(pos, seq) {
   if (!st.follow || st.moving || !graph) return;
   if (!(seq > lastSeq)) return;
   lastSeq = seq;
-  enact(pos.at, pos.look);
+  enact(pos.at, pos.look, pos.yaw_deg);
 }
-async function enact(to, look) {
+async function enact(to, look, yawDeg) {
   if (!graph.vertices[to] || !graph.vertices[to].looks[look]) return;
-  if (to === st.at && look === st.look) return;
+  if (to === st.at && look === st.look) {
+    // same place: the command is a TURN — the harness's face and turn
+    // tools ride the position's yaw
+    if (yawDeg != null) {
+      st.moving = true;
+      await spinTo(yawDeg * Math.PI / 180, 600);
+      st.moving = false;
+      pushState(true);
+    }
+    return;
+  }
   if (to !== st.at && neighbours(st.at).includes(to)) {
     await runGo(to, look);
   } else {

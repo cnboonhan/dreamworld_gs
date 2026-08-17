@@ -49,3 +49,4 @@ up: _env
     @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
     @echo "  http://localhost:8080/dreamworld_viewer   walk the dreamworld"
     @echo "  http://localhost:8080/rmfsim              the building under simulation"
+    @echo "  http://localhost:8080/harness             drive it by tool call"

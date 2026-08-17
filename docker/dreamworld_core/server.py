@@ -73,9 +73,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/position":
             if not doc.get("at"):
                 return self._send(400, {"error": "no at"})
+            pos = {"at": doc["at"], "look": doc.get("look", "original")}
+            if doc.get("yaw_deg") is not None:
+                pos["yaw_deg"] = float(doc["yaw_deg"])
             with LOCK:
-                STATE["position"] = {"at": doc["at"],
-                                     "look": doc.get("look", "original")}
+                STATE["position"] = pos
                 STATE["seq"] += 1
                 STATE["pos_stamp"] = time.time()
                 seq = STATE["seq"]
