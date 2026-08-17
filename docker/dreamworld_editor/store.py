@@ -9,6 +9,7 @@ never written.
 
 import json
 import math
+import re
 import shutil
 from pathlib import Path
 
@@ -109,11 +110,11 @@ def state_color(v: dict) -> str:
 
 
 def new_vertex(level: str, x: float, y: float) -> str:
-    dream = load_dream()
-    n = 0
-    while f"{level}.v{n}" in dream:
-        n += 1
-    name = f"{level}.v{n}"
+    # one past the highest, never the smallest gap: a number freed by a
+    # deletion stays retired, so names keep meaning what they meant
+    used = [int(m.group(1)) for name in load_dream()
+            if (m := re.fullmatch(re.escape(level) + r"\.v(\d+)", name))]
+    name = f"{level}.v{max(used) + 1 if used else 0}"
     d = DREAM / name
     d.mkdir(parents=True)
     (d / "vertex.json").write_text(json.dumps(
