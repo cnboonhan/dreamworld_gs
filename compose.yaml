@@ -214,6 +214,37 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # Capture: the one surface for getting a 360 into the building — click the
+  # waypoint, drop the photo, drag it into alignment, press generate. Replaces
+  # the hand-run flow of naming files, the :8085 aligner, and a terminal
+  # `just generate`; jobs go straight to the Prefect queue.
+  capture:
+    <<: *as-caller
+    build:
+      context: ./docker
+      dockerfile: capture/capture.Dockerfile
+    image: dreamworld/capture:latest
+    container_name: dreamworld-capture
+    command:
+      - "--base"
+      - "/projects/${DW_PROJECT:-multilevel_office}"
+      - "--level"
+      - "${DW_LEVEL:-L11}"
+      - "--port"
+      - "8089"
+    ports:
+      - "${DW_CAPTURE_PORT:-8089}:8089"
+    volumes:
+      - ./assets/projects:/projects        # writable: uploads and alignment
+    environment:
+      HOME: /tmp
+      PREFECT_API_URL: http://prefect:4200/api
+      GPUS: "4"
+    depends_on:
+      prefect:
+        condition: service_started
+    restart: unless-stopped
+
   # The tool surface: one HTTP API that walks the splat viewer and the robot
   # together. Host networking so it can reach the galaxea bridge and so the
   # browser's own localhost:8086 is the same server the viewer talks to.

@@ -79,6 +79,7 @@ Seven web UIs come up and stay up:
 | http://localhost:8084 | the traffic editor — author the map (over noVNC) |
 | http://localhost:8086 | the dashboard — tools, mission agent, minimap |
 | http://localhost:8087 | the panorama editor — face a view, prompt an edit, save |
+| http://localhost:8089 | capture — drop a 360 on a waypoint, align it, generate |
 
 (Twelve containers: those seven plus the robot bridge, the editor's model, the
 VLM and the two job workers.)
@@ -215,6 +216,16 @@ and belongs on the queue, not inside a click.
 
 The model needs ~45 GB and gets a card of its own — `DW_EDIT_GPU`, default 5,
 which is off the four world generation uses.
+
+**Getting a 360 into the building** is one page now — **capture**, at
+**http://localhost:8089**: click the waypoint you photographed on the
+floorplan (its colour says what it still needs: red = photo but not aligned,
+blue = aligned, green = world built), drop the stitched 360 on it, drag the
+strip until each corridor sits under its bearing marker, press generate. The
+job goes straight to the queue at :4200. Reshooting is dropping a new photo
+(the replaced one is kept under `panos/.replaced/`); a variant look is the
+same drop with a name in the variant field. The standalone aligner below
+still exists for batch passes.
 
 **Facing the right way.** A 360 records no heading, so a panorama arrives turned
 by whatever way the photographer happened to be standing, and the world
