@@ -283,7 +283,7 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
         var = sel["variant"]
         with ui.row().classes("w-full items-center gap-2"):
             ui.label("panorama").classes("font-bold")
-            applied = store.applied_of(name, var)
+            applied = store.applied_of(name)
             if not v["pano"]:
                 ui.label("none yet").classes("text-xs text-gray-500")
             elif applied is not None:
@@ -366,8 +366,8 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
                 if min(off, 360 - off) < 0.05:
                     ui.notify("no turn to save")
                     return
-                px = await run.io_bound(store.apply_roll, name, off, var)
-                ui.notify(f"rolled {px} px into the file")
+                px = await run.io_bound(store.apply_roll, name, off)
+                ui.notify(f"rolled {px} px — original and variants together")
                 refresh_all()
 
             ui.button("save alignment", on_click=save_alignment).props(
@@ -498,7 +498,7 @@ def variants_card(name, v, sel, refresh_all):
                 if png is None:
                     ui.notify(f"edit failed: {msg}", type="negative")
                 else:
-                    store.save_variant(name, var, png, keep_alignment=True)
+                    store.save_variant(name, var, png)
                     ui.notify(f"variant {var} updated")
             except Exception as err:      # surfaced in the page, like main
                 ui.notify(f"edit failed: {err}", type="negative")
@@ -538,8 +538,8 @@ def variants_card(name, v, sel, refresh_all):
                       on_click=delete_variant).props("dense")
         ui.label("drag to look, scroll to zoom, place the rectangle over "
                  "the spot to change — the edit lands inside it, in place; "
-                 "the variant's alignment survives").classes(
-            "text-xs text-gray-500")
+                 "alignment belongs to the vertex and never moves here"
+                 ).classes("text-xs text-gray-500")
 
 
 def splat_card():

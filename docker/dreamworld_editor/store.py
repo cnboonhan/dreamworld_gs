@@ -96,36 +96,28 @@ def variants_of(name: str) -> list:
 
 
 def create_variant(name: str, variant: str) -> None:
-    """A new variant IS the original, copied — pixels, preview and alignment
-    record alike. It only becomes a different look when edited."""
+    """A new variant IS the original, copied. It shares the vertex's one
+    alignment — a variant is a look, not a place, so there is nothing of
+    its own to record. It only becomes a different look when edited."""
     src = pano_of(name)
     shutil.copy2(src, DREAM / name / f"{_stem(variant)}{src.suffix}")
     preview_of(name, variant)
-    rec = _aligned_rec(name, None)
-    if rec.is_file():
-        shutil.copy2(rec, _aligned_rec(name, variant))
 
 
-def save_variant(name: str, variant: str, png: bytes,
-                 keep_alignment: bool = False) -> None:
-    """A fresh generation replaces the variant entire. An EDIT keeps its
-    alignment record — it was built on the variant's rolled pixels — and
-    stashes the previous image as the undo step."""
+def save_variant(name: str, variant: str, png: bytes) -> None:
+    """An edit replaces the variant's pixels and stashes the previous image
+    as the undo step. Orientation is untouched: the edit was built on the
+    variant's rolled pixels, and the vertex's one alignment record already
+    describes them."""
     d = DREAM / name
-    rec = _aligned_rec(name, variant)
-    aligned = rec.read_text() if (keep_alignment and rec.is_file()) else None
-    prev = pano_of(name, variant) if keep_alignment else None
+    prev = pano_of(name, variant)
     if prev:
         for old in d.glob(f"{_stem(variant)}.undo.*"):
             old.unlink()
         prev.rename(d / f"{_stem(variant)}.undo{prev.suffix}")
-        if aligned is not None:
-            (d / f"aligned@{variant}.undo.json").write_text(aligned)
     delete_variant(name, variant, keep_undo=True)
     (d / f"{_stem(variant)}.png").write_bytes(png)
     preview_of(name, variant)
-    if aligned is not None:
-        rec.write_text(aligned)
 
 
 def has_undo(name: str, variant: str) -> bool:
@@ -134,7 +126,8 @@ def has_undo(name: str, variant: str) -> bool:
 
 def undo_variant(name: str, variant: str) -> bool:
     """Swap the variant with its pre-edit self — so undo twice is redo.
-    The alignment records ride along with their images."""
+    Nothing of alignment moves: rolls turn the undo stash along with
+    everything else, so both sides of the swap share the vertex's frame."""
     d = DREAM / name
     und = next(iter(d.glob(f"{_stem(variant)}.undo.*")), None)
     if und is None:
@@ -145,12 +138,6 @@ def undo_variant(name: str, variant: str) -> bool:
     und.rename(d / f"{_stem(variant)}{und.suffix}")
     for s in d.glob(f"{_stem(variant)}.swap.*"):
         s.rename(d / f"{_stem(variant)}.undo{s.suffix}")
-    rec = _aligned_rec(name, variant)
-    urec = d / f"aligned@{variant}.undo.json"
-    cur_txt = rec.read_text() if rec.is_file() else None
-    und_txt = urec.read_text() if urec.is_file() else None
-    for f, txt in ((rec, und_txt), (urec, cur_txt)):
-        f.write_text(txt) if txt is not None else f.unlink(missing_ok=True)
     (d / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
     preview_of(name, variant)
     return True
@@ -291,16 +278,16 @@ def bearings_from(dream: dict, name: str, scale) -> list:
 
 
 # ---- the panorama itself ------------------------------------------------------
-# Every operation takes an optional variant and works on that file alone:
-# a variant aligns exactly the way the original does, with its own record.
+# Alignment belongs to the VERTEX, not to a file: one record, and a roll
+# turns the original, every variant and every undo stash together, so the
+# offsets can never drift apart.
 
-def _aligned_rec(name: str, variant: str | None) -> Path:
-    return DREAM / name / (f"aligned@{variant}.json" if variant
-                           else "aligned.json")
+def _aligned_rec(name: str) -> Path:
+    return DREAM / name / "aligned.json"
 
 
-def applied_of(name: str, variant: str | None = None):
-    rec = _aligned_rec(name, variant)
+def applied_of(name: str):
+    rec = _aligned_rec(name)
     if rec.is_file():
         try:
             return float(json.loads(rec.read_text())["degrees"])
@@ -320,8 +307,10 @@ def preview_of(name: str, variant: str | None = None) -> Path:
     return p
 
 
-def apply_roll(name: str, degrees: float, variant: str | None = None) -> int:
-    """Roll the panorama by `degrees` and record the running total.
+def apply_roll(name: str, degrees: float) -> int:
+    """Roll the PLACE by `degrees`: the original, every variant, and every
+    undo stash turn together, each by its own pixel count for the same
+    angle, and one record keeps the running total for them all.
 
     The shift is NEGATIVE, and that sign is the whole bug main already paid
     for: the preview shows content at longitude L appearing at L + corr,
@@ -329,18 +318,28 @@ def apply_roll(name: str, degrees: float, variant: str | None = None) -> int:
     save with the wrong one and a panorama turned until it looked right
     comes back with the corridor at twice the angle on the wrong side.
     """
-    f = pano_of(name, variant)
-    im = np.asarray(Image.open(f).convert("RGB"))
-    shift = -int(round(degrees / 360.0 * im.shape[1]))
-    Image.fromarray(np.roll(im, shift, axis=1)).save(
-        f, **({"quality": 95} if f.suffix.lower() != ".png" else {}))
-    (DREAM / name / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
-    preview_of(name, variant)
-    rec = _aligned_rec(name, variant)
-    old = applied_of(name, variant) or 0.0
-    rec.write_text(json.dumps({"degrees": round((old + degrees) % 360.0, 2),
-                               "last": round(degrees, 2)}, indent=1))
-    return abs(shift)
+    d = DREAM / name
+    rolled = 0
+    for f in sorted(d.iterdir()):
+        if not f.name.startswith("pano") or ".preview" in f.name \
+                or f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
+        im = np.asarray(Image.open(f).convert("RGB"))
+        shift = -int(round(degrees / 360.0 * im.shape[1]))
+        Image.fromarray(np.roll(im, shift, axis=1)).save(
+            f, **({"quality": 95} if f.suffix.lower() != ".png" else {}))
+        if f == pano_of(name):
+            rolled = abs(shift)
+    for p in d.glob("pano*.preview.jpg"):
+        p.unlink()
+    preview_of(name)
+    for v in variants_of(name):
+        preview_of(name, v)
+    old = applied_of(name) or 0.0
+    _aligned_rec(name).write_text(
+        json.dumps({"degrees": round((old + degrees) % 360.0, 2),
+                    "last": round(degrees, 2)}, indent=1))
+    return rolled
 
 
 def signature():
