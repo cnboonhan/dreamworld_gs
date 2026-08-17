@@ -200,7 +200,18 @@ const st = {
 // Main's truth-protocol shape, inverted for v2: the walker reports, the
 // broker holds, anyone may ask. Pushed on change and heartbeaten each
 // second, so /dreamworld_editor/viewer/state is never more than a beat old.
-let lastPush = 0, lastSent = '';
+let lastPush = 0, lastSent = '', coreOk = 0;
+// the bar says whether dreamworld_core is hearing us: green while pushes
+// land, red within seconds of them failing — the harness's view of this
+// walker is only as good as this light
+function coreMark() {
+  const el = $('core');
+  if (!el) return;
+  const live = performance.now() - coreOk < 3000;
+  el.textContent = live ? '\u25cf core synced' : '\u25cb core unreachable';
+  el.style.color = live ? '#3fb950' : '#f85149';
+}
+setInterval(coreMark, 1000);
 function pushState(force) {
   if (!graph || !st.at) return;
   const now = performance.now();
@@ -220,7 +231,8 @@ function pushState(force) {
   lastPush = now;
   fetch('/dreamworld_core/viewer/state', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: s }).catch(() => {});
+    body: s }).then(r => { if (r.ok) coreOk = performance.now();
+      coreMark(); }).catch(() => coreMark());
 }
 
 function basisOf(meta) {
