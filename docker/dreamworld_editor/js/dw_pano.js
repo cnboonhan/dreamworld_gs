@@ -65,6 +65,13 @@ window.dwPano = (id, url, offId, ns, opts) => {
       ar.style.setProperty('--dwrot',
         (st.off - st.look * 180 / Math.PI) + 'deg'); }
   };
+  // one heading for every viewer: whoever the user turns, tells the rest.
+  // lookAt() sets without re-broadcasting, so this cannot ring.
+  const share = () => {
+    for (const k in window._dwp) {
+      if (k !== ns && window._dwp[k].lookAt) window._dwp[k].lookAt(st.look);
+    }
+  };
   cv.addEventListener('pointerdown', e => {
     st.drag = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); });
   cv.addEventListener('pointermove', e => {
@@ -75,6 +82,7 @@ window.dwPano = (id, url, offId, ns, opts) => {
       const s = st.fov / Math.max(1, cv.clientWidth);
       st.look += dx * s;
       st.pitch = Math.min(1.45, Math.max(-1.45, st.pitch + dy * s));
+      share();                // the alignment view and the arrow follow
     } else {                  // turn the panorama: the alignment offset
       st.off = (st.off + dx * 0.12 + 360) % 360;
     }
@@ -148,8 +156,17 @@ window.dwPano = (id, url, offId, ns, opts) => {
     requestAnimationFrame(loop);
   };
   loop();
+  // born facing where the others already face
+  for (const k in window._dwp) {
+    if (k !== ns && window._dwp[k].heading) {
+      st.look = window._dwp[k].heading();
+      break;
+    }
+  }
   window._dwp[ns] = {
-    face: r => { st.look = r; st.pitch = 0; readout(); },
+    face: r => { st.look = r; st.pitch = 0; readout(); share(); },
+    heading: () => st.look,
+    lookAt: r => { st.look = r; if (!opts.free) st.pitch = 0; readout(); },
     nudge: d => { st.off = (st.off + d + 360) % 360; readout(); },
     // back to the last SAVED alignment: the saved roll lives in the file,
     // so discarding the pending turn is all a reset is
