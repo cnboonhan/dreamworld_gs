@@ -117,6 +117,11 @@ window.dwView = (id, w, h) => {
   if (!box || box.dataset.dw) return;
   box.dataset.dw = 1;
   const kid = box.firstElementChild;
+  // the imageless interactive_image has NO intrinsic size — just an
+  // aspect-ratio and width:100%, so it lays out as wide as this box and
+  // the fit math scales garbage. Pin its width and the aspect-ratio makes
+  // layout size equal declared size, which the math assumes.
+  kid.style.width = w + 'px';
   kid.style.transformOrigin = '0 0';
   let k = 1, px = 0, py = 0, drag = null;
   const apply = () => kid.style.transform =
