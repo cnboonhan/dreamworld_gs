@@ -236,8 +236,11 @@ def index():
                                           for e in store.load_edges()]:
                     edge_card(edge, dream, sel, refresh_all)
                     a, b = edge
+                    la, lb = _elook(sel, a), _elook(sel, b)
                     edge_direction_card(a, b, dream, "ab", sel, refresh_all)
+                    transition_box(a, la, b, lb, refresh_all)
                     edge_direction_card(b, a, dream, "ba", sel, refresh_all)
+                    transition_box(b, lb, a, la, refresh_all)
                     return
                 sel["edge"] = None
                 name = sel["vertex"] if sel["vertex"] in dream else None
@@ -318,6 +321,11 @@ def edge_card(edge, dream, sel, refresh_all):
             "dense flat")
 
 
+def _elook(sel, nm):
+    lk = sel["elook"].get(nm)
+    return lk if lk in store.variants_of(nm) else None
+
+
 def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
     """One direction of the crossing: both panoramas faced along the walk's
     own bearing — standing at each end, looking the way you would travel —
@@ -328,12 +336,7 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
     is a nominal straight line along each spawn's forward axis until
     splat-to-building placement gives it the real corridor."""
     va, vb = dream[frm], dream[to]
-
-    def look_of(nm):
-        lk = sel["elook"].get(nm)
-        return lk if lk in store.variants_of(nm) else None
-
-    la, lb = look_of(frm), look_of(to)
+    la, lb = _elook(sel, frm), _elook(sel, to)
     # drawing pixels run y-down; bearings live in the y-up compass frame
     bearing = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
     with ui.card().classes("w-full bg-[#11151c]"):
@@ -387,7 +390,6 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                                 if not p)
             ui.label(f"splat walkthrough needs a splat at both ends — "
                      f"missing: {missing}").classes("text-xs text-[#f0a35e]")
-            transition_section(frm, la, to, lb, sel, refresh_all)
             return
         with ui.element("div").classes("w-full relative").style(
                 "height:260px"):
@@ -432,17 +434,24 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                       lambda e: ui.run_javascript(
                           f"window.dwWalk && dwWalk('{tag}','t',{e.args})"),
                       throttle=0.05)
-        transition_section(frm, la, to, lb, sel, refresh_all)
 
 
-def transition_section(frm, la, to, lb, sel, refresh_all):
-    """The generated crossing, below the splat walkthrough: a Wan 2.2
-    first+last-frame video whose endpoints are the two aligned panoramas
-    faced along the edge — the seconds reality hides from both photographs.
-    The prompt defaults by what the map says the walk passes through (a
-    door, a lift, open corridor), is editable, and is saved with the job."""
+def transition_box(frm, la, to, lb, refresh_all):
+    """The generated crossing, its own box below the walkthrough card: a
+    Wan 2.2 first+last-frame video whose endpoints are the two aligned
+    panoramas faced along the edge — the seconds reality hides from both
+    photographs. The prompt defaults by what the map says the walk passes
+    through (a door, a lift, open corridor), is editable, and is saved
+    with the job."""
     vid = crossing.output(frm, la, to, lb)
-    ui.label("video transition").classes("font-bold text-sm mt-2")
+    with ui.card().classes("w-full bg-[#11151c]"):
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.label("Video Transition").classes("font-bold")
+            ui.label(f"{frm} → {to}").classes("text-xs text-gray-500")
+        transition_body(frm, la, to, lb, refresh_all, vid)
+
+
+def transition_body(frm, la, to, lb, refresh_all, vid):
     if vid:
         ui.html(f'<video src="{MOUNT}/files/.crossings/{vid.parent.name}/'
                 f'crossing.mp4?t={int(vid.stat().st_mtime)}" controls loop '
