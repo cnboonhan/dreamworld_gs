@@ -234,6 +234,51 @@ window.dwSplat = (id, plyUrl, camUrl, ns) => {
   if (!cv || cv.dataset.dw) return;
   cv.dataset.dw = 1;
 
+  // main's loading marker, ported with its stylesheet: the blue cube
+  // turns while the ply downloads and unpacks, and leaves with the
+  // first sorted frame
+  if (!document.getElementById('dwsp-style')) {
+    const st = document.createElement('style');
+    st.id = 'dwsp-style';
+    st.textContent = `
+.dwsp-spin{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;pointer-events:none;z-index:3}
+.dwsp-spin .cube-wrapper{transform-style:preserve-3d}
+.dwsp-spin .cube{transform-style:preserve-3d;
+  transform:rotateX(45deg) rotateZ(45deg);animation:dwsp-rot 2s infinite}
+.dwsp-spin .cube-faces{transform-style:preserve-3d;height:40px;width:40px;
+  position:relative;transform-origin:0 0;
+  transform:translateX(0) translateY(0) translateZ(-20px)}
+.dwsp-spin .cube-face{position:absolute;inset:0;background:#0017ff;
+  border:solid 1px #ffffff}
+.dwsp-spin .cube-face.top{transform:translateZ(40px)}
+.dwsp-spin .cube-face.front{transform-origin:0 50%;transform:rotateY(-90deg)}
+.dwsp-spin .cube-face.back{transform-origin:0 50%;
+  transform:rotateY(-90deg) translateZ(-40px)}
+.dwsp-spin .cube-face.right{transform-origin:50% 0;
+  transform:rotateX(-90deg) translateY(-40px)}
+.dwsp-spin .cube-face.left{transform-origin:50% 0;
+  transform:rotateX(-90deg) translateY(-40px) translateZ(40px)}
+@keyframes dwsp-rot{
+  0%{transform:rotateX(45deg) rotateY(0) rotateZ(45deg);
+    animation-timing-function:cubic-bezier(.17,.84,.44,1)}
+  50%{transform:rotateX(45deg) rotateY(0) rotateZ(225deg);
+    animation-timing-function:cubic-bezier(.76,.05,.86,.06)}
+  100%{transform:rotateX(45deg) rotateY(0) rotateZ(405deg)}}`;
+    document.head.appendChild(st);
+  }
+  const wrap = cv.parentElement;
+  if (getComputedStyle(wrap).position === 'static')
+    wrap.style.position = 'relative';
+  const spinner = document.createElement('div');
+  spinner.className = 'dwsp-spin';
+  spinner.innerHTML =
+    '<div class="cube-wrapper"><div class="cube"><div class="cube-faces">' +
+    ['bottom', 'top', 'left', 'right', 'back', 'front'].map(
+      f => `<div class="cube-face ${f}"></div>`).join('') +
+    '</div></div></div>';
+  wrap.appendChild(spinner);
+
   const VERT = `#version 300 es
 precision highp float;
 precision highp int;
@@ -444,6 +489,7 @@ void main () {
       gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, e.data.depthIndex, gl.DYNAMIC_DRAW);
       vertexCount = e.data.vertexCount;
+      if (vertexCount > 0) spinner.remove();
     } else if (e.data.vertexCount) {
       vertexCount = 0;               // texture arrives with the first sort
     }
@@ -501,7 +547,11 @@ void main () {
     if (cv.width !== cv.clientWidth) resize();
     const viewProj = multiply4(projectionMatrix, viewMatrix);
     worker.postMessage({ view: viewProj });
-    gl.clearColor(0.04, 0.05, 0.07, 1);
+    // alpha ZERO, as main clears: front-to-back blending scales every
+    // splat by ONE_MINUS_DST_ALPHA, and a framebuffer cleared to alpha 1
+    // multiplies them all by nothing — the whole canvas stays black.
+    // The dark ground is the canvas CSS background behind it.
+    gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (vertexCount > 0) {
       gl.uniformMatrix4fv(u_view, false, viewMatrix);
