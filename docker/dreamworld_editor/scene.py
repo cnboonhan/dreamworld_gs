@@ -70,15 +70,8 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
                             f'<circle r="6" fill="{C_LABEL}" '
                             f'stroke="{C_INK}" stroke-width="1.5"/>'
                             + label(name, C_LABEL)))
-    # lift cabins wear a diamond, not a dot: a different KIND of waypoint —
-    # the same name on another level is the same cabin, so these are where
-    # the building connects vertically
-    for name, x, y in lv.get("lifts") or []:
-        parts.append(marker(x, y,
-                            f'<rect x="-6" y="-6" width="12" height="12" '
-                            f'transform="rotate(45)" fill="{C_LIFT}" '
-                            f'stroke="{C_INK}" stroke-width="1.5"/>'
-                            + label(name, C_LIFT)))
+    # lift stops are materialized into the dream tree by the store, so they
+    # draw with everything else below — diamonds among the dots
     for name, v in mine.items():
         inner = ""
         if name == selected:
@@ -98,9 +91,18 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
         if name == pending:
             inner += (f'<circle r="11" fill="none" stroke="{C_LANE}" '
                       f'stroke-width="2" stroke-dasharray="4 3"/>')
-        inner += (f'<circle r="6" fill="{state_color(v)}" '
-                  f'stroke="{C_INK}" stroke-width="1.5"/>')
-        inner += label(name, C_SEL if name == selected else C_LABEL)
+        if v.get("lift"):
+            # a lift stop wears a diamond — a different KIND of waypoint,
+            # and the same lift's diamond on another level is the same
+            # cabin. Its fill is its work state, its magenta ring its nature.
+            inner += (f'<rect x="-6" y="-6" width="12" height="12" '
+                      f'transform="rotate(45)" fill="{state_color(v)}" '
+                      f'stroke="{C_LIFT}" stroke-width="2"/>')
+        else:
+            inner += (f'<circle r="6" fill="{state_color(v)}" '
+                      f'stroke="{C_INK}" stroke-width="1.5"/>')
+        inner += label(name, C_SEL if name == selected
+                       else (C_LIFT if v.get("lift") else C_LABEL))
         parts.append(marker(v["x"], v["y"], inner))
     parts.append('</g>')
     return "".join(parts), w, h, (tx, ty)

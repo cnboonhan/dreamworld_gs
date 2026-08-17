@@ -143,6 +143,10 @@ def index():
             grabbed = nearest(*down["at"], hit)
             down.clear()
             if sel["mode"] == "move":
+                if grabbed and dream.get(grabbed, {}).get("lift"):
+                    ui.notify("lift waypoints are placed by the building "
+                              "map — move the lift in /sim_editor")
+                    return
                 if grabbed and moved > 6:
                     store.move_vertex(grabbed, x, y)
                     select_vertex(grabbed)
@@ -441,6 +445,14 @@ def vertex_card(name, v, sel, refresh_all):
                 ui.tooltip(STATE_TIP)
             ui.label(f"{v['level']} · ({v['x']:.0f}, {v['y']:.0f})"
                      ).classes("text-xs text-gray-500")
+        if v.get("lift"):
+            # a lift stop: place and name belong to the building map; the
+            # same lift on another level is the same cabin
+            ui.label(f"lift waypoint — {v['lift']}'s stop on {v['level']}. "
+                     f"Named and placed by the building map; panoramas, "
+                     f"variants, splats and edges work as anywhere."
+                     ).classes("text-xs text-[#d24dcf]")
+            return
         with ui.row().classes("w-full items-end gap-2"):
             field = ui.input("rename to", value=name).classes(
                 "grow").props("dense")

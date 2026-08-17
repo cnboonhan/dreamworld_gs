@@ -61,7 +61,9 @@ def load_levels() -> dict:
             "doors": seg(L.get("doors")),
             "lanes": seg(L.get("lanes")),
             "verts": [(v[3], v[0], v[1]) for v in V
-                      if len(v) > 3 and isinstance(v[3], str) and v[3]],
+                      if len(v) > 3 and isinstance(v[3], str) and v[3]
+                      and not (len(v) > 4 and isinstance(v[4], dict)
+                               and "lift_cabin" in v[4])],
             # lift cabin waypoints: traffic editor writes one per lift per
             # level, unnamed, identified by the lift_cabin param. The SAME
             # lift name on two levels is the same cabin — the building's
@@ -167,7 +169,31 @@ def delete_variant(name: str, variant: str, keep_undo: bool = False) -> None:
         (d / f"aligned@{variant}.undo.json").unlink(missing_ok=True)
 
 
+def materialize_lifts() -> None:
+    """Every lift cabin stop becomes a dream vertex named <level>.<lift>,
+    so a lift stop can carry panoramas, variants, splats and edges like any
+    other place. Its position and identity stay the building map's: the
+    folder is (re)written from building.yaml whenever they differ, and the
+    UI refuses to move, rename or delete it. The same lift's stops on
+    different levels are the same cabin — the vertical edges routing will
+    ride."""
+    for lvl, L in load_levels().items():
+        for lift, x, y in L.get("lifts") or []:
+            name = f"{lvl}.{lift}"
+            vj = DREAM / name / "vertex.json"
+            want = {"level": lvl, "x": round(float(x), 2),
+                    "y": round(float(y), 2), "lift": lift}
+            try:
+                if vj.is_file() and json.loads(vj.read_text()) == want:
+                    continue
+            except (OSError, ValueError):
+                pass
+            vj.parent.mkdir(parents=True, exist_ok=True)
+            vj.write_text(json.dumps(want, indent=1))
+
+
 def load_dream() -> dict:
+    materialize_lifts()
     out = {}
     if not DREAM.is_dir():
         return out
@@ -189,7 +215,7 @@ def load_dream() -> dict:
         looks = [None] + variants_of(d.name)
         out[d.name] = {"level": v.get("level", ""), "x": float(v["x"]),
                        "y": float(v["y"]), "pano": pano_of(d.name) is not None,
-                       "applied": applied,
+                       "applied": applied, "lift": v.get("lift"),
                        "splat": splat_of(d.name) is not None,
                        "all_splats": all(splat_of(d.name, lk) is not None
                                          for lk in looks)}
@@ -484,6 +510,12 @@ def sync_nav() -> None:
     edges = load_edges()
     for lname, L in (B.get("levels") or {}).items():
         V = L.get("vertices") or []
+        # lift cabins are named IN PLACE: the cabin vertex is the traffic
+        # editor's (position, lift_cabin param), so it keeps its row and
+        # only its name comes and goes with the dream vertex that wears it
+        for v in V:
+            if len(v) > 4 and isinstance(v[4], dict) and "lift_cabin" in v[4]:
+                v[3] = ""
         named = {i for i, v in enumerate(V)
                  if len(v) > 3 and isinstance(v[3], str) and v[3]}
         refs = set()
@@ -504,11 +536,20 @@ def sync_nav() -> None:
         for key in ("floors", "holes"):
             for poly in L.get(key) or []:
                 poly["vertices"] = [remap[i] for i in poly["vertices"]]
+        cabin_idx = {v[4]["lift_cabin"][1]: i
+                     for i, v in enumerate(L["vertices"])
+                     if len(v) > 4 and isinstance(v[4], dict)
+                     and "lift_cabin" in v[4]}
         index = {}
         for nm in sorted(n for n, v in dream.items() if v["level"] == lname):
-            index[nm] = len(L["vertices"])
             v = dream[nm]
-            L["vertices"].append([v["x"], v["y"], 0, nm])
+            if v.get("lift") in cabin_idx:
+                i = cabin_idx[v["lift"]]
+                L["vertices"][i][3] = nm
+                index[nm] = i
+            else:
+                index[nm] = len(L["vertices"])
+                L["vertices"].append([v["x"], v["y"], 0, nm])
         # traffic editor's lane record: endpoint indices and typed params —
         # 4 is bool, 2 is int, 1 is string; graph_idx 0 is the nav graph
         # everything downstream reads
