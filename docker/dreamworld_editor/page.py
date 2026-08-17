@@ -9,6 +9,7 @@ dreamworld tree changes under it.
 
 import math
 import time
+from html import escape as html_escape
 from pathlib import Path
 
 from nicegui import run, ui
@@ -39,6 +40,7 @@ def index():
     ui.add_head_html(_script("dw_pano.js"))
     ui.add_head_html(_script("dw_splat.js"))
     ui.add_head_html(_script("dw_walk.js"))
+    ui.add_head_html(_script("dw_upload.js"))
     sel = {"level": None, "vertex": None, "mode": None, "edge_from": None,
            "variant": None, "splat_var": None, "edge": None, "elook": {},
            "busy": False}
@@ -657,19 +659,21 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
             ui.label(var or "original").classes("text-xs text-[#7aa2f7]")
 
         if not v["pano"]:
-            async def on_upload(e):
-                suffix = Path(e.name).suffix.lower()
-                if suffix not in (".jpg", ".jpeg", ".png"):
-                    ui.notify("jpg or png only", type="negative")
-                    return
-                data = e.content.read()
-                (DREAM / name / f"pano{suffix}").write_bytes(data)
-                await run.io_bound(store.preview_of, name)
-                ui.notify(f"panorama saved — {len(data) / 1e6:.1f} MB")
-                refresh_all()
-
-            ui.upload(on_upload=on_upload, auto_upload=True).props(
-                'accept=".jpg,.jpeg,.png" flat').classes("w-full")
+            # NOT ui.upload: that fires the whole file as one full-rate
+            # burst, which starves an SSH tunnel until VS Code gives up.
+            # dw_upload.js sends it in paced slices to /upload_pano, the
+            # 2-second watcher redraws this card when the panorama lands.
+            safe = html_escape(name, quote=True)
+            ui.html(
+                f'<label style="display:block;text-align:center;'
+                f'padding:10px;border:1px dashed #4ea1ff;border-radius:6px;'
+                f'cursor:pointer;color:#4ea1ff">choose panorama'
+                f'<input type="file" accept=".jpg,.jpeg,.png" '
+                f'data-vertex="{safe}" style="display:none" '
+                f'onchange="dwUpload(this, this.dataset.vertex)"></label>'
+                f'<div id="dwup-{safe}" class="text-xs text-gray-500" '
+                f'style="margin-top:4px;min-height:1em"></div>'
+            ).classes("w-full")
             ui.label("upload the equirectangular panorama shot at this "
                      "vertex").classes("text-xs text-gray-500")
             return

@@ -16,8 +16,14 @@ NiceGUI mounts ITSELF at MOUNT, so the proxy passes the prefix through
 unstripped and page, assets and socket all agree on where they live.
 """
 
-from fastapi import FastAPI
-from nicegui import app, ui
+import re
+import shutil
+import tempfile
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
+from nicegui import app, run, ui
 
 import page  # noqa: F401 — importing registers the @ui.page routes
 import store
@@ -31,6 +37,38 @@ app.add_static_files("/files", str(DREAM))
 def graph():
     """The dreamworld, for the walkthrough viewer at /dreamworld_viewer."""
     return store.graph_doc()
+
+
+@app.post("/upload_pano")
+async def upload_pano(request: Request):
+    """One slice of a paced panorama upload (js/dw_upload.js is the sender).
+
+    The slices accumulate OUTSIDE the dreamworld tree so the 2-second
+    change watcher stays quiet until the finished panorama lands — then it
+    fires once and every open page picks the vertex up."""
+    q = request.query_params
+    name = q.get("vertex", "")
+    uid = q.get("id", "")
+    suffix = Path(q.get("name", "")).suffix.lower()
+    if suffix not in (".jpg", ".jpeg", ".png"):
+        return PlainTextResponse("jpg or png only", status_code=400)
+    if not re.fullmatch(r"[a-z0-9]{1,16}", uid):
+        return PlainTextResponse("bad upload id", status_code=400)
+    if ("/" in name or ".." in name
+            or not (DREAM / name / "vertex.json").is_file()):
+        return PlainTextResponse(f"no such vertex: {name}", status_code=404)
+    if store.pano_of(name):
+        return PlainTextResponse(f"{name} already has a panorama",
+                                 status_code=409)
+    part = Path(tempfile.gettempdir()) / f"dw_upload_{uid}.part"
+    data = await request.body()
+    with part.open("wb" if q.get("seq") == "0" else "ab") as f:
+        f.write(data)
+    if q.get("last") == "1":
+        await run.io_bound(shutil.move, str(part),
+                           str(DREAM / name / f"pano{suffix}"))
+        await run.io_bound(store.preview_of, name)
+    return {"ok": True}
 
 fastapi_app = FastAPI()
 ui.run_with(fastapi_app, mount_path=MOUNT, title="dreamworld editor",
