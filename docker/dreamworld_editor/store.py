@@ -390,6 +390,33 @@ def remove_edge(a: str, b: str) -> None:
     sync_nav()
 
 
+def _segments_cross(ax, ay, bx, by, cx, cy, dx, dy) -> bool:
+    def o(px, py, qx, qy, rx, ry):
+        v = (qx - px) * (ry - py) - (qy - py) * (rx - px)
+        return 0 if abs(v) < 1e-9 else (1 if v > 0 else -1)
+    return (o(ax, ay, bx, by, cx, cy) != o(ax, ay, bx, by, dx, dy)
+            and o(cx, cy, dx, dy, ax, ay) != o(cx, cy, dx, dy, bx, by))
+
+
+def edge_kind(frm: str, to: str) -> str:
+    """What a walk from frm to to passes through, read from the map: into
+    or out of a lift cabin, across a door segment, or nothing at all —
+    the difference between crossing prompts."""
+    dream = load_dream()
+    if dream.get(to, {}).get("lift"):
+        return "lift_in"
+    if dream.get(frm, {}).get("lift"):
+        return "lift_out"
+    a, b = dream.get(frm), dream.get(to)
+    if not (a and b):
+        return "open"
+    lv = load_levels().get(a["level"]) or {}
+    for x1, y1, x2, y2 in lv.get("doors") or []:
+        if _segments_cross(a["x"], a["y"], b["x"], b["y"], x1, y1, x2, y2):
+            return "door"
+    return "open"
+
+
 def bearings_from(dream: dict, name: str, scale) -> list:
     """Where to aim the panorama: the vertices this one is connected to, as
     compass bearings — main aimed by lanes, and an edge is this tree's lane.

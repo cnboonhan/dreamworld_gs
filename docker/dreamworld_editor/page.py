@@ -14,6 +14,7 @@ from pathlib import Path
 from nicegui import run, ui
 
 from config import C_BG, C_WALL, CURSOR, DREAM, MOUNT, PROJ, PROJECT
+import crossing
 import restyle
 import splatgen
 import store
@@ -384,8 +385,9 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
             missing = ", ".join(f"{n} ({lk or 'original'})"
                                 for n, lk, p in ((frm, la, pa), (to, lb, pb))
                                 if not p)
-            ui.label(f"transition needs a splat at both ends — missing: "
-                     f"{missing}").classes("text-xs text-[#f0a35e]")
+            ui.label(f"splat walkthrough needs a splat at both ends — "
+                     f"missing: {missing}").classes("text-xs text-[#f0a35e]")
+            transition_section(frm, la, to, lb, sel, refresh_all)
             return
         with ui.element("div").classes("w-full relative").style(
                 "height:260px"):
@@ -430,6 +432,104 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                       lambda e: ui.run_javascript(
                           f"window.dwWalk && dwWalk('{tag}','t',{e.args})"),
                       throttle=0.05)
+        transition_section(frm, la, to, lb, sel, refresh_all)
+
+
+def transition_section(frm, la, to, lb, sel, refresh_all):
+    """The generated crossing, below the splat walkthrough: a Wan 2.2
+    first+last-frame video whose endpoints are the two aligned panoramas
+    faced along the edge — the seconds reality hides from both photographs.
+    The prompt defaults by what the map says the walk passes through (a
+    door, a lift, open corridor), is editable, and is saved with the job."""
+    vid = crossing.output(frm, la, to, lb)
+    ui.label("video transition").classes("font-bold text-sm mt-2")
+    if vid:
+        ui.html(f'<video src="{MOUNT}/files/.crossings/{vid.parent.name}/'
+                f'crossing.mp4?t={int(vid.stat().st_mtime)}" controls loop '
+                f'style="width:100%;border-radius:6px;background:{C_BG}">'
+                f'</video>')
+
+    pbox = ui.textarea("transition prompt",
+                       value=crossing.saved_prompt(frm, la, to, lb)
+                       or crossing.default_prompt(frm, to)).classes(
+        "w-full").props("dense autogrow")
+
+    wstat = crossing.status() or {}
+    wq = [x.rstrip("/") for x in wstat.get("queue") or []]
+    wmine = str(crossing.job_dir(frm, la, to, lb)).rstrip("/")
+    wrun = (wstat.get("scene") or "").rstrip("/")
+
+    if wstat.get("busy") and wrun == wmine:
+        ui.linear_progress(show_value=False).props(
+            "indeterminate").classes("w-full")
+        note = "" if wstat.get("loaded") else \
+            " (first job loads the model, ~2 minutes)"
+        el_lb = ui.label(f"generating{note}").classes(
+            "text-xs text-gray-500")
+
+        def tick():
+            s = crossing.status() or {}
+            if not s.get("busy") or (s.get("scene") or "").rstrip("/") \
+                    != wmine:
+                refresh_all()
+                return
+            el_lb.set_text(f"generating — {s.get('elapsed', 0) // 60}m"
+                           f"{s.get('elapsed', 0) % 60:02d}s{note}")
+        ui.timer(5.0, tick)
+        return
+
+    if wmine in wq:
+        ui.label(f"queued — position {wq.index(wmine) + 1} · generating "
+                 f"now: {crossing.short(wrun)}" if wrun else
+                 f"queued — position {wq.index(wmine) + 1}").classes(
+            "text-xs text-[#f0a35e]")
+
+        def tick_q():
+            s = crossing.status() or {}
+            if wmine not in [x.rstrip("/") for x in (s.get("queue") or [])]:
+                refresh_all()
+        ui.timer(5.0, tick_q)
+        return
+
+    done = wstat.get("done")
+    if done and (done.get("scene") or "").rstrip("/") == wmine \
+            and not done.get("ok"):
+        ui.label(f"last generation failed: {done.get('error')}").classes(
+            "text-xs text-[#f85149]")
+
+    have_panos = bool(store.pano_of(frm, la) and store.pano_of(to, lb))
+    with ui.row().classes("w-full items-center gap-2"):
+        async def gen_video():
+            prompt = (pbox.value or "").strip()
+            if not prompt:
+                ui.notify("say what the crossing should do",
+                          type="negative")
+                return
+            if not crossing.ready():
+                ui.notify("wangen is not ready — still starting, or not "
+                          "running", type="negative")
+                return
+            try:
+                doc = await run.io_bound(crossing.submit, frm, la, to, lb,
+                                         prompt)
+            except Exception as err:
+                ui.notify(str(err), type="negative")
+                return
+            pos = doc.get("position", 1)
+            ui.notify("crossing started — a few minutes" if pos <= 1
+                      else f"queued at position {pos}")
+            refresh_all()
+
+        ui.button("regenerate transition" if vid else
+                  "generate transition", color="primary",
+                  on_click=gen_video).props(
+            "dense" + ("" if have_panos else " disable"))
+        if not have_panos:
+            ui.label("both looks need panoramas first").classes(
+                "text-xs text-gray-500")
+        elif wstat.get("busy"):
+            ui.label(f"will queue behind {crossing.short(wrun)}").classes(
+                "text-xs text-gray-500")
 
 
 # ---- the three vertex boxes ------------------------------------------------------

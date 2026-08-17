@@ -25,3 +25,7 @@ facebook/dinov2-base
 
 # VLM that plans the camera trajectories (and drives the mission agent)
 Qwen/Qwen3-VL-8B-Instruct
+
+# edge transitions: first+last-frame video generation (door openings, lift
+# rides) — ~118GB, a two-expert MoE
+Wan-AI/Wan2.2-I2V-A14B-Diffusers
