@@ -82,5 +82,9 @@ window.dwPano = (id, url, offId) => {
   // back to the last SAVED alignment: the saved roll lives in the file,
   // so discarding the pending turn is all a reset is
   window.dwPanoReset = () => { st.off = 0; readout(); };
+  // what the viewer is facing, for the perspective edit: the crop it
+  // aims is decided by this exact frustum
+  window.dwPanoView = () => ({ yaw: st.look, pitch: st.pitch, fov: st.fov,
+    off: st.off, aspect: cv.clientHeight / Math.max(1, cv.clientWidth) });
   window.dwPanoOff = () => st.off;
 };

@@ -93,12 +93,18 @@ def variants_of(name: str) -> list:
     return sorted(out)
 
 
-def save_variant(name: str, variant: str, png: bytes) -> None:
-    """A fresh restyle replaces the variant entire: its old image, preview
-    and alignment record all describe a picture that no longer exists."""
+def save_variant(name: str, variant: str, png: bytes,
+                 keep_alignment: bool = False) -> None:
+    """A fresh generation replaces the variant entire. An EDIT keeps its
+    alignment record: the edit was built on the variant's rolled pixels,
+    so the orientation the record describes survives in the new image."""
+    rec = _aligned_rec(name, variant)
+    aligned = rec.read_text() if (keep_alignment and rec.is_file()) else None
     delete_variant(name, variant)
     (DREAM / name / f"{_stem(variant)}.png").write_bytes(png)
     preview_of(name, variant)
+    if aligned is not None:
+        rec.write_text(aligned)
 
 
 def delete_variant(name: str, variant: str) -> None:

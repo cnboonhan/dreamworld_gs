@@ -291,13 +291,7 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
             else:
                 ui.label("not yet aligned").classes("text-xs text-[#f0a35e]")
             ui.space()
-            if v["pano"] and variants:
-                ui.select(["original"] + variants, value=var or "original",
-                          label="variant",
-                          on_change=lambda e: (sel.update(
-                              variant=None if e.value == "original"
-                              else e.value), refresh_all())
-                          ).classes("w-36").props("dense options-dense")
+            ui.label(var or "original").classes("text-xs text-[#7aa2f7]")
 
         if not v["pano"]:
             async def on_upload(e):
@@ -393,24 +387,32 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
 
 
 def variants_card(name, v, sel, refresh_all):
-    """New looks for the same place, out of a prompt — main's pano editor
-    reborn on the dreamworld tree. The original is the base truth: it can
-    be neither edited nor deleted, only departed from."""
+    """New looks for the same place, out of a prompt aimed with the viewer —
+    main's perspective edit reborn on the dreamworld tree. The edit lands
+    where the panorama box is facing. The original is the base truth: with
+    it selected there is only new; a variant selected offers only edit and
+    delete."""
     if not v["pano"]:
         return
     with ui.card().classes("w-full bg-[#11151c]"):
+        variants = store.variants_of(name)
         with ui.row().classes("w-full items-center gap-2"):
             ui.label("variants").classes("font-bold")
-            ui.label(f"working on {sel['variant'] or 'the original'}"
-                     ).classes("text-xs text-gray-500")
+            ui.space()
+            ui.select(["original"] + variants,
+                      value=sel["variant"] or "original", label="variant",
+                      on_change=lambda e: (sel.update(
+                          variant=None if e.value == "original"
+                          else e.value), refresh_all())
+                      ).classes("w-40").props("dense options-dense")
         prompt_box = ui.textarea(
-            "how to modify the panorama",
-            placeholder="e.g. the corridor is on fire, smoke along the "
+            "how to modify what the viewer is facing",
+            placeholder="e.g. the door stands open, smoke along the "
                         "ceiling").classes("w-full").props("dense autogrow")
 
-        async def generate(target, source):
+        async def generate(target, source, keep_alignment):
             if sel["busy"]:
-                ui.notify("a restyle is already running")
+                ui.notify("an edit is already running")
                 return
             prompt = (prompt_box.value or "").strip()
             if not prompt:
@@ -420,66 +422,81 @@ def variants_card(name, v, sel, refresh_all):
                 ui.notify("qwen is not ready — still loading, or not "
                           "running", type="negative")
                 return
+            view = await ui.run_javascript(
+                "window.dwPanoView ? dwPanoView() : null")
+            if not view:
+                ui.notify("open the panorama viewer first", type="negative")
+                return
             sel["busy"] = True
-            note = ui.notification(f"restyling {name} → {target} … "
-                                   f"(a minute or two)", spinner=True,
+            note = ui.notification(f"editing what you are facing → {target} "
+                                   f"… (a minute or two)", spinner=True,
                                    timeout=None)
             try:
-                png = await run.io_bound(
-                    restyle.restyle,
-                    store.pano_of(name, source).read_bytes(), prompt)
-                store.save_variant(name, target, png)
-                sel["variant"] = target
-                ui.notify(f"variant {target} ready")
+                png, msg = await run.io_bound(
+                    restyle.perspective_edit,
+                    store.pano_of(name, source), prompt, view)
+                if png is None:
+                    ui.notify(f"edit failed: {msg}", type="negative")
+                else:
+                    store.save_variant(name, target, png,
+                                       keep_alignment=keep_alignment)
+                    sel["variant"] = target
+                    ui.notify(f"variant {target} ready")
             except Exception as err:      # surfaced in the page, like main
-                ui.notify(f"restyle failed: {err}", type="negative")
+                ui.notify(f"edit failed: {err}", type="negative")
             finally:
                 sel["busy"] = False
                 note.dismiss()
             refresh_all()
 
-        with ui.row().classes("w-full items-end gap-2"):
-            name_box = ui.input("new variant name").classes("grow").props(
-                "dense")
+        if sel["variant"] is None:
+            with ui.row().classes("w-full items-end gap-2"):
+                name_box = ui.input("new variant name").classes(
+                    "grow").props("dense")
 
-            async def new_variant():
-                target = (name_box.value or "").strip()
-                if not store.VARIANT_OK.fullmatch(target) \
-                        or target == "original":
-                    ui.notify("variant names: letters, digits, - or _",
-                              type="negative")
-                    return
-                if target in store.variants_of(name):
-                    ui.notify(f"{target} exists — select it and use edit",
-                              type="negative")
-                    return
-                await generate(target, sel["variant"])
+                async def new_variant():
+                    target = (name_box.value or "").strip()
+                    if not store.VARIANT_OK.fullmatch(target) \
+                            or target == "original":
+                        ui.notify("variant names: letters, digits, - or _",
+                                  type="negative")
+                        return
+                    if target in store.variants_of(name):
+                        ui.notify(f"{target} exists — select it and use "
+                                  f"edit", type="negative")
+                        return
+                    await generate(target, None, False)
 
-            async def edit_variant():
-                await generate(sel["variant"], sel["variant"])
+                ui.button("new", on_click=new_variant).props("dense")
+            ui.label("aim the panorama at the spot to change, then new — "
+                     "the edit lands where you look").classes(
+                "text-xs text-gray-500")
+        else:
+            with ui.row().classes("w-full items-center gap-2"):
+                async def edit_variant():
+                    await generate(sel["variant"], sel["variant"], True)
 
-            def delete_variant():
-                var = sel["variant"]
-                with ui.dialog() as dlg, ui.card():
-                    ui.label(f"delete variant {var} of {name}?")
-                    with ui.row():
-                        def yes():
-                            store.delete_variant(name, var)
-                            sel["variant"] = None
-                            dlg.close()
-                            refresh_all()
-                        ui.button("delete", color="negative", on_click=yes)
-                        ui.button("keep", on_click=dlg.close)
-                dlg.open()
+                def delete_variant():
+                    var = sel["variant"]
+                    with ui.dialog() as dlg, ui.card():
+                        ui.label(f"delete variant {var} of {name}?")
+                        with ui.row():
+                            def yes():
+                                store.delete_variant(name, var)
+                                sel["variant"] = None
+                                dlg.close()
+                                refresh_all()
+                            ui.button("delete", color="negative",
+                                      on_click=yes)
+                            ui.button("keep", on_click=dlg.close)
+                    dlg.open()
 
-            locked = " disable" if not sel["variant"] else ""
-            ui.button("new", on_click=new_variant).props("dense")
-            ui.button("edit", on_click=edit_variant).props("dense" + locked)
-            ui.button("delete", color="negative",
-                      on_click=delete_variant).props("dense" + locked)
-        ui.label("new restyles what you are viewing into a fresh variant · "
-                 "edit and delete act on the selected variant, never the "
-                 "original").classes("text-xs text-gray-500")
+                ui.button("edit", on_click=edit_variant).props("dense")
+                ui.button("delete", color="negative",
+                          on_click=delete_variant).props("dense")
+            ui.label("edit regenerates where you are looking, in place — "
+                     "its alignment survives · the original is never "
+                     "touched").classes("text-xs text-gray-500")
 
 
 def splat_card():
