@@ -1,12 +1,25 @@
 // The panorama viewer, ported from main's align_panos.py: the same fragment
 // shader (our convention: column c holds lon = pi - 2pi(c+0.5)/W), the same
-// drag-to-turn at 0.12 degrees per pixel, the same fov wheel. `corr` previews
-// the roll that saving will bake into the file. Controls stay in Python;
-// this only renders, turns, and answers dwPanoOff() when asked.
-window.dwPano = (id, url, offId) => {
+// fov wheel. `corr` previews the roll that saving will bake into the file.
+//
+// Instanced, not a singleton: the alignment box and the variants box each
+// run their own camera, so aiming an edit never turns the alignment. Every
+// instance registers under a namespace and Python calls through
+// dwp(ns, fn, arg). Two modes: the default drags the PANORAMA (off, the
+// alignment turn, pitch locked, 0.12 deg/px — main's numbers); {free:true}
+// drags the CAMERA (look and pitch), which is how an edit is aimed.
+// {arrow:true} lets this instance drive the map's facing arrow — the
+// alignment's privilege, so the edit camera never swings it.
+window._dwp = window._dwp || {};
+window.dwp = (ns, fn, arg) => {
+  const a = window._dwp[ns];
+  return a && a[fn] ? a[fn](arg) : null;
+};
+window.dwPano = (id, url, offId, ns, opts) => {
   const cv = document.getElementById('c' + id);
   if (!cv || cv.dataset.dw) return;
   cv.dataset.dw = 1;
+  opts = opts || {};
   const st = { off: 0, look: 0, pitch: 0, fov: 1.6, drag: null, ready: false };
   const gl = cv.getContext('webgl', { antialias: true });
   const VS = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
@@ -40,20 +53,32 @@ window.dwPano = (id, url, offId) => {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  const readout = () => { const el = document.getElementById('c' + offId);
+  const readout = () => {
+    const el = document.getElementById('c' + offId);
     if (el) el.textContent = st.off.toFixed(1) + '°';
+    if (!opts.arrow) return;
     // swing the map's facing arrow with the turn: the content under the
     // centre line sits at bearing look - off until the roll is saved.
-    // Negated for the drawing's y-down frame; visible from the first turn.
+    // Negated for the drawing's y-down frame.
     const ar = document.getElementById('dwface');
     if (ar) { ar.style.visibility = 'visible';
       ar.style.setProperty('--dwrot',
-        (st.off - st.look * 180 / Math.PI) + 'deg'); } };
+        (st.off - st.look * 180 / Math.PI) + 'deg'); }
+  };
   cv.addEventListener('pointerdown', e => {
-    st.drag = e.clientX; cv.setPointerCapture(e.pointerId); });
-  cv.addEventListener('pointermove', e => { if (st.drag === null) return;
-    st.off = (st.off + (e.clientX - st.drag) * 0.12 + 360) % 360;
-    st.drag = e.clientX; readout(); });
+    st.drag = [e.clientX, e.clientY]; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove', e => {
+    if (st.drag === null) return;
+    const dx = e.clientX - st.drag[0], dy = e.clientY - st.drag[1];
+    st.drag = [e.clientX, e.clientY];
+    if (opts.free) {          // aim the camera: content follows the pointer
+      const s = st.fov / Math.max(1, cv.clientWidth);
+      st.look += dx * s;
+      st.pitch = Math.min(1.45, Math.max(-1.45, st.pitch + dy * s));
+    } else {                  // turn the panorama: the alignment offset
+      st.off = (st.off + dx * 0.12 + 360) % 360;
+    }
+    readout(); });
   cv.addEventListener('pointerup', () => st.drag = null);
   cv.addEventListener('wheel', e => { e.preventDefault();
     st.fov = Math.max(0.5, Math.min(2.6, st.fov * (1 + e.deltaY * 0.001)));
@@ -77,14 +102,15 @@ window.dwPano = (id, url, offId) => {
     requestAnimationFrame(loop);
   };
   loop();
-  window.dwPanoFace = r => { st.look = r; st.pitch = 0; readout(); };
-  window.dwPanoNudge = d => { st.off = (st.off + d + 360) % 360; readout(); };
-  // back to the last SAVED alignment: the saved roll lives in the file,
-  // so discarding the pending turn is all a reset is
-  window.dwPanoReset = () => { st.off = 0; readout(); };
-  // what the viewer is facing, for the perspective edit: the crop it
-  // aims is decided by this exact frustum
-  window.dwPanoView = () => ({ yaw: st.look, pitch: st.pitch, fov: st.fov,
-    off: st.off, aspect: cv.clientHeight / Math.max(1, cv.clientWidth) });
-  window.dwPanoOff = () => st.off;
+  window._dwp[ns] = {
+    face: r => { st.look = r; st.pitch = 0; readout(); },
+    nudge: d => { st.off = (st.off + d + 360) % 360; readout(); },
+    // back to the last SAVED alignment: the saved roll lives in the file,
+    // so discarding the pending turn is all a reset is
+    reset: () => { st.off = 0; readout(); },
+    off: () => st.off,
+    // what this camera is facing, for the perspective edit
+    view: () => ({ yaw: st.look, pitch: st.pitch, fov: st.fov, off: st.off,
+                   aspect: cv.clientHeight / Math.max(1, cv.clientWidth) }),
+  };
 };

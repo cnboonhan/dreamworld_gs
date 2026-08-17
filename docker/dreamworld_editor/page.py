@@ -333,8 +333,8 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
                     d = f"{b['dist']:.1f}m" if scale else f"{b['dist']:.0f}px"
 
                     def face(b=b):
-                        ui.run_javascript("window.dwPanoFace && "
-                                          f"dwPanoFace({b['bearing']})")
+                        ui.run_javascript("window.dwp && "
+                                          f"dwp('align','face',{b['bearing']})")
                         facing.set_text(f"should be {b['to']}")
 
                     ui.button(f"{b['to']} · {d}", on_click=face).props(
@@ -349,19 +349,19 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
         with ui.row().classes("w-full items-center gap-1"):
             for lbl, d in (("←5°", -5), ("←1°", -1)):
                 ui.button(lbl, on_click=lambda d=d: ui.run_javascript(
-                    f"window.dwPanoNudge && dwPanoNudge({d})")).props(
+                    f"window.dwp && dwp('align','nudge',{d})")).props(
                     "dense flat")
             off_lb = ui.label("0.0°").classes(
                 "text-sm font-semibold tabular-nums")
             for lbl, d in (("1°→", 1), ("5°→", 5)):
                 ui.button(lbl, on_click=lambda d=d: ui.run_javascript(
-                    f"window.dwPanoNudge && dwPanoNudge({d})")).props(
+                    f"window.dwp && dwp('align','nudge',{d})")).props(
                     "dense flat")
             ui.space()
 
             async def save_alignment():
                 off = float(await ui.run_javascript(
-                    "window.dwPanoOff ? dwPanoOff() : 0") or 0)
+                    "window.dwp ? (dwp('align','off') || 0) : 0") or 0)
                 if min(off, 360 - off) < 0.05:
                     ui.notify("no turn to save")
                     return
@@ -373,7 +373,7 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
                 "dense").classes("bg-[#2c6e3f]")
 
             with ui.button("reset", on_click=lambda: ui.run_javascript(
-                    "window.dwPanoReset && dwPanoReset()")).props(
+                    "window.dwp && dwp('align','reset')")).props(
                     "dense flat"):
                 ui.tooltip("discard the unsaved turn — back to the last "
                            "saved alignment")
@@ -382,8 +382,9 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
         if first:
             facing.set_text(f"should be {first['to']}")
         ui.timer(0.15, lambda: ui.run_javascript(
-            f"dwPano({cv.id}, '{url}', {off_lb.id});" +
-            (f"dwPanoFace({first['bearing']})" if first else "")), once=True)
+            f"dwPano({cv.id}, '{url}', {off_lb.id}, 'align', {{arrow:true}});"
+            + (f"dwp('align','face',{first['bearing']})" if first else "")),
+            once=True)
 
 
 def variants_card(name, v, sel, refresh_all):
@@ -435,8 +436,26 @@ def variants_card(name, v, sel, refresh_all):
                 "text-xs text-gray-500")
             return
 
+        # the variant's own viewer, on its own camera: aiming an edit here
+        # never turns the alignment view above. Free-look — drag looks
+        # around, pitch included; the ring marks where the edit will land.
+        var = sel["variant"]
+        p = store.preview_of(name, var)
+        url = f"{MOUNT}/files/{name}/{p.name}?t={int(p.stat().st_mtime)}"
+        with ui.element("div").classes("w-full relative"):
+            cv = ui.element("canvas").classes("w-full").style(
+                f"height:260px;display:block;cursor:grab;"
+                f"touch-action:none;background:{C_BG};border-radius:6px")
+            ui.html('<div style="position:absolute;left:50%;top:50%;'
+                    'width:16px;height:16px;margin:-8px;border:1.5px solid '
+                    '#4ea1ff;border-radius:8px;opacity:.8;'
+                    'pointer-events:none"></div>')
+        ui.timer(0.15, lambda: ui.run_javascript(
+            f"dwPano({cv.id}, '{url}', -1, 'edit', {{free:true}})"),
+            once=True)
+
         prompt_box = ui.textarea(
-            "how to modify what the viewer is facing",
+            "how to modify what this viewer is facing",
             placeholder="e.g. the door stands open, smoke along the "
                         "ceiling").classes("w-full").props("dense autogrow")
 
@@ -454,9 +473,10 @@ def variants_card(name, v, sel, refresh_all):
                           "running", type="negative")
                 return
             view = await ui.run_javascript(
-                "window.dwPanoView ? dwPanoView() : null")
+                "window.dwp ? dwp('edit','view') : null")
             if not view:
-                ui.notify("open the panorama viewer first", type="negative")
+                ui.notify("the variant viewer is not up yet",
+                          type="negative")
                 return
             sel["busy"] = True
             note = ui.notification(f"editing what you are facing → {var} … "
@@ -497,9 +517,9 @@ def variants_card(name, v, sel, refresh_all):
                       on_click=edit_variant).props("dense")
             ui.button("delete", color="negative",
                       on_click=delete_variant).props("dense")
-        ui.label("aim the panorama at the spot to change, then edit — the "
-                 "change lands where you look, in place, and the variant's "
-                 "alignment survives").classes("text-xs text-gray-500")
+        ui.label("drag to look, scroll to zoom — the edit lands on what "
+                 "the ring is over, in place; the variant's alignment "
+                 "survives").classes("text-xs text-gray-500")
 
 
 def splat_card():
