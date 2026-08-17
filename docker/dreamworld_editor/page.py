@@ -809,15 +809,31 @@ def splat_card(name, v, sel, refresh_all):
                             ui.button(icon="close", on_click=dlg.close
                                       ).props("flat round dense").classes(
                                 "absolute top-2 right-2 z-10")
+                            with ui.button(
+                                    icon="my_location",
+                                    on_click=lambda: ui.run_javascript(
+                                        "window._dws && "
+                                        "window._dws.vsplat_big && "
+                                        "window._dws.vsplat_big.reset()")
+                                    ).props("flat round dense").classes(
+                                    "absolute top-2 right-12 z-10"):
+                                ui.tooltip("back to the spawn camera")
                             ui.timer(0.2, lambda: ui.run_javascript(
                                 f"dwSplat({big.id}, '{u}', "
-                                f"'{base}/world.cam.json?t={t}')"),
-                                once=True)
+                                f"'{base}/world.cam.json?t={t}', "
+                                f"'vsplat_big')"), once=True)
                     dlg.open()
 
                 ui.button(icon="fullscreen", on_click=open_big).props(
                     "flat round dense").classes(
                     "absolute top-1 right-1 z-10")
+                with ui.button(icon="my_location",
+                               on_click=lambda: ui.run_javascript(
+                                   "window._dws && window._dws.vsplat && "
+                                   "window._dws.vsplat.reset()")).props(
+                        "flat round dense").classes(
+                        "absolute top-1 right-9 z-10"):
+                    ui.tooltip("back to the spawn camera")
             ui.label("drag to look · wheel to walk · shift-drag to pan · "
                      "after a click: A/D turn, W/S tilt, Q/E roll, "
                      "arrows move").classes("text-xs text-gray-500")
@@ -829,7 +845,7 @@ def splat_card(name, v, sel, refresh_all):
                 ui.run_javascript(
                     f"dwSplat({cv.id}, "
                     f"'{base}/{rec.name}?t={int(rec.stat().st_mtime)}', "
-                    f"'{base}/world.cam.json?t={t}')")
+                    f"'{base}/world.cam.json?t={t}', 'vsplat')")
             ui.timer(0.15, boot, once=True)
 
         if busy_here:

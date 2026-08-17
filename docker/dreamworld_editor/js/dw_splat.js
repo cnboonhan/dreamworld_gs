@@ -549,15 +549,16 @@ void main () {
   if (Array.isArray(camUrl)) applyCam(camUrl);
   else fetch(camUrl).then(r => r.ok ? r.json() : null)
     .then(applyCam).catch(() => {});
-  // a named instance can be walked from outside: offset(z) places the
-  // camera z units along the spawn view's own forward axis — what the
-  // edge transition drives
+  // a named instance can be driven from outside: offset(z) places the
+  // camera z units along the base view's own forward axis (what the edge
+  // transition rides), reset() returns to the base view entirely
   if (ns) {
     window._dws = window._dws || {};
     window._dws[ns] = {
       offset: z => {
         viewMatrix = invert4(translate4(invert4(baseView), 0, 0, z));
       },
+      reset: () => { viewMatrix = baseView; },
     };
   }
   fetch(plyUrl).then(r => {
