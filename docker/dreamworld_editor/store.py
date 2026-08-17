@@ -64,12 +64,49 @@ def load_levels() -> dict:
 
 # ---- vertices ----------------------------------------------------------------
 
-def pano_of(name: str):
+# main's convention, kept: the unsuffixed file is the original, a variant is
+# pano@<name> beside it — a variant is a look, not a new place
+VARIANT_OK = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _stem(variant: str | None) -> str:
+    return f"pano@{variant}" if variant else "pano"
+
+
+def pano_of(name: str, variant: str | None = None):
     d = DREAM / name
     for ext in (".jpg", ".jpeg", ".png"):
-        if (d / f"pano{ext}").is_file():
-            return d / f"pano{ext}"
+        if (d / f"{_stem(variant)}{ext}").is_file():
+            return d / f"{_stem(variant)}{ext}"
     return None
+
+
+def variants_of(name: str) -> list:
+    d = DREAM / name
+    if not d.is_dir():
+        return []
+    out = set()
+    for f in d.glob("pano@*"):
+        stem = f.stem.split("@", 1)[1]
+        if not stem.endswith(".preview"):
+            out.add(stem)
+    return sorted(out)
+
+
+def save_variant(name: str, variant: str, png: bytes) -> None:
+    """A fresh restyle replaces the variant entire: its old image, preview
+    and alignment record all describe a picture that no longer exists."""
+    delete_variant(name, variant)
+    (DREAM / name / f"{_stem(variant)}.png").write_bytes(png)
+    preview_of(name, variant)
+
+
+def delete_variant(name: str, variant: str) -> None:
+    d = DREAM / name
+    for ext in (".jpg", ".jpeg", ".png"):
+        (d / f"{_stem(variant)}{ext}").unlink(missing_ok=True)
+    (d / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
+    (d / f"aligned@{variant}.json").unlink(missing_ok=True)
 
 
 def load_dream() -> dict:
@@ -195,19 +232,36 @@ def bearings_from(dream: dict, name: str, scale) -> list:
 
 
 # ---- the panorama itself ------------------------------------------------------
+# Every operation takes an optional variant and works on that file alone:
+# a variant aligns exactly the way the original does, with its own record.
 
-def preview_of(name: str) -> Path:
+def _aligned_rec(name: str, variant: str | None) -> Path:
+    return DREAM / name / (f"aligned@{variant}.json" if variant
+                           else "aligned.json")
+
+
+def applied_of(name: str, variant: str | None = None):
+    rec = _aligned_rec(name, variant)
+    if rec.is_file():
+        try:
+            return float(json.loads(rec.read_text())["degrees"])
+        except (OSError, ValueError, KeyError):
+            pass
+    return None
+
+
+def preview_of(name: str, variant: str | None = None) -> Path:
     """The downscaled copy the browser gets, made on first ask — main's
     pattern, sized to main's width."""
-    src = pano_of(name)
-    p = DREAM / name / "pano.preview.jpg"
+    src = pano_of(name, variant)
+    p = DREAM / name / f"{_stem(variant)}.preview.jpg"
     if src and (not p.is_file() or p.stat().st_mtime < src.stat().st_mtime):
         Image.open(src).convert("RGB").resize(
             (PREVIEW_W, PREVIEW_W // 2), Image.LANCZOS).save(p, quality=88)
     return p
 
 
-def apply_roll(name: str, degrees: float) -> int:
+def apply_roll(name: str, degrees: float, variant: str | None = None) -> int:
     """Roll the panorama by `degrees` and record the running total.
 
     The shift is NEGATIVE, and that sign is the whole bug main already paid
@@ -216,22 +270,37 @@ def apply_roll(name: str, degrees: float) -> int:
     save with the wrong one and a panorama turned until it looked right
     comes back with the corridor at twice the angle on the wrong side.
     """
-    f = pano_of(name)
+    f = pano_of(name, variant)
     im = np.asarray(Image.open(f).convert("RGB"))
     shift = -int(round(degrees / 360.0 * im.shape[1]))
-    Image.fromarray(np.roll(im, shift, axis=1)).save(f, quality=95)
-    (DREAM / name / "pano.preview.jpg").unlink(missing_ok=True)
-    preview_of(name)
-    rec = DREAM / name / "aligned.json"
-    old = 0.0
-    if rec.is_file():
-        try:
-            old = float(json.loads(rec.read_text())["degrees"])
-        except (OSError, ValueError, KeyError):
-            pass
+    Image.fromarray(np.roll(im, shift, axis=1)).save(
+        f, **({"quality": 95} if f.suffix.lower() != ".png" else {}))
+    (DREAM / name / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
+    preview_of(name, variant)
+    rec = _aligned_rec(name, variant)
+    old = applied_of(name, variant) or 0.0
     rec.write_text(json.dumps({"degrees": round((old + degrees) % 360.0, 2),
                                "last": round(degrees, 2)}, indent=1))
     return abs(shift)
+
+
+def reset_roll(name: str, variant: str | None = None) -> float:
+    """Undo the saved roll entire: the panorama returns to the orientation
+    it was uploaded in, and the record of having been turned goes with it.
+    Possible only because aligned.json keeps the cumulative degrees —
+    the file itself carries no memory of the turn."""
+    applied = applied_of(name, variant)
+    if not applied:
+        return 0.0
+    f = pano_of(name, variant)
+    im = np.asarray(Image.open(f).convert("RGB"))
+    shift = int(round(applied / 360.0 * im.shape[1]))    # apply_roll, negated
+    Image.fromarray(np.roll(im, shift, axis=1)).save(
+        f, **({"quality": 95} if f.suffix.lower() != ".png" else {}))
+    (DREAM / name / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
+    preview_of(name, variant)
+    _aligned_rec(name, variant).unlink(missing_ok=True)
+    return applied
 
 
 def signature():

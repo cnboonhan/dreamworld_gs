@@ -13,6 +13,7 @@ from pathlib import Path
 from nicegui import run, ui
 
 from config import C_BG, C_WALL, CURSOR, DREAM, MOUNT, PROJ, PROJECT
+import restyle
 import store
 from scene import level_scene
 
@@ -32,7 +33,13 @@ def index():
     # a page lands on NiceGUI's auto-index client, and this page never sees it
     ui.add_head_html(_script("dw_view.js"))
     ui.add_head_html(_script("dw_pano.js"))
-    sel = {"level": None, "vertex": None, "mode": None, "edge_from": None}
+    sel = {"level": None, "vertex": None, "mode": None, "edge_from": None,
+           "variant": None, "busy": False}
+
+    def select_vertex(nm):
+        if nm != sel["vertex"]:
+            sel["variant"] = None       # the dropdown belongs to one vertex
+        sel["vertex"] = nm
 
     with ui.header().classes("items-center bg-[#0b0e13] gap-6"):
         ui.label("dreamworld editor").classes("text-lg font-bold text-[#4ea1ff]")
@@ -115,13 +122,13 @@ def index():
             if sel["mode"] == "move":
                 if grabbed and moved > 6:
                     store.move_vertex(grabbed, x, y)
-                    sel["vertex"] = grabbed
+                    select_vertex(grabbed)
                     refresh_all()
                 return
             if moved > 6:            # that was a pan, not a click
                 return
             if sel["mode"] == "add":
-                sel["vertex"] = store.new_vertex(sel["level"], x, y)
+                select_vertex(store.new_vertex(sel["level"], x, y))
                 ui.notify(f"dropped {sel['vertex']}")
                 sel["mode"] = None      # one drop per press of the button
                 tools.refresh()
@@ -138,7 +145,7 @@ def index():
             else:
                 near = nearest(x, y, hit)
                 if near:             # empty space keeps the selection
-                    sel["vertex"] = near
+                    select_vertex(near)
             refresh_all()
         return handler
 
@@ -179,7 +186,9 @@ def index():
                     f"dwView({box.id}, {w}, {h}, '{level}')"), once=True)
             board()
 
-        with split.after, ui.column().classes("w-full pl-2 gap-4"):
+        # its own scroll region: the side boxes scroll, the plan stays put
+        with split.after, ui.column().classes("w-full pl-2 gap-4").style(
+                "height:82vh;overflow-y:auto"):
             @ui.refreshable
             def side():
                 dream = store.load_dream()
@@ -192,7 +201,8 @@ def index():
                 v = dream[name]
                 scale = (store.load_levels().get(v["level"]) or {}).get("scale")
                 vertex_card(name, v, sel, refresh_all)
-                pano_card(name, v, dream, scale, refresh_all)
+                pano_card(name, v, dream, scale, sel, refresh_all)
+                variants_card(name, v, sel, refresh_all)
                 splat_card()
             side()
 
@@ -216,6 +226,7 @@ def index():
 
 def vertex_card(name, v, sel, refresh_all):
     with ui.card().classes("w-full bg-[#11151c]"):
+        ui.label("Vertex Name").classes("font-bold")
         with ui.row().classes("w-full items-center gap-2"):
             ui.html(f'<span style="width:12px;height:12px;border-radius:6px;'
                     f'display:inline-block;'
@@ -263,17 +274,30 @@ def vertex_card(name, v, sel, refresh_all):
                       on_click=delete).props("dense")
 
 
-def pano_card(name, v, dream, scale, refresh_all):
+def pano_card(name, v, dream, scale, sel, refresh_all):
     with ui.card().classes("w-full bg-[#11151c]"):
+        variants = store.variants_of(name)
+        if sel["variant"] not in variants:
+            sel["variant"] = None
+        var = sel["variant"]
         with ui.row().classes("w-full items-center gap-2"):
             ui.label("panorama").classes("font-bold")
+            applied = store.applied_of(name, var)
             if not v["pano"]:
                 ui.label("none yet").classes("text-xs text-gray-500")
-            elif v["applied"] is not None:
-                ui.label(f"✓ {v['applied']:.1f}° rolled in").classes(
+            elif applied is not None:
+                ui.label(f"✓ {applied:.1f}° rolled in").classes(
                     "text-xs text-[#6c6]")
             else:
                 ui.label("not yet aligned").classes("text-xs text-[#f0a35e]")
+            ui.space()
+            if v["pano"] and variants:
+                ui.select(["original"] + variants, value=var or "original",
+                          label="variant",
+                          on_change=lambda e: (sel.update(
+                              variant=None if e.value == "original"
+                              else e.value), refresh_all())
+                          ).classes("w-36").props("dense options-dense")
 
         if not v["pano"]:
             async def on_upload(e):
@@ -293,8 +317,8 @@ def pano_card(name, v, dream, scale, refresh_all):
                      "vertex").classes("text-xs text-gray-500")
             return
 
-        p = store.preview_of(name)
-        url = (f"{MOUNT}/files/{name}/pano.preview.jpg"
+        p = store.preview_of(name, var)
+        url = (f"{MOUNT}/files/{name}/{p.name}"
                f"?t={int(p.stat().st_mtime)}")
         brs = store.bearings_from(dream, name, scale)
 
@@ -347,12 +371,22 @@ def pano_card(name, v, dream, scale, refresh_all):
                 if min(off, 360 - off) < 0.05:
                     ui.notify("no turn to save")
                     return
-                px = await run.io_bound(store.apply_roll, name, off)
+                px = await run.io_bound(store.apply_roll, name, off, var)
                 ui.notify(f"rolled {px} px into the file")
                 refresh_all()
 
             ui.button("save alignment", on_click=save_alignment).props(
                 "dense").classes("bg-[#2c6e3f]")
+
+            async def reset_view():
+                undone = await run.io_bound(store.reset_roll, name, var)
+                ui.notify(f"unrolled {undone:.1f}° — back to the upload"
+                          if undone else "nothing to reset")
+                refresh_all()
+
+            with ui.button("reset", on_click=reset_view).props(
+                    "dense flat" + (" disable" if applied is None else "")):
+                ui.tooltip("undo the saved roll — the panorama as uploaded")
 
         first = brs[0] if brs else None
         if first:
@@ -360,6 +394,96 @@ def pano_card(name, v, dream, scale, refresh_all):
         ui.timer(0.15, lambda: ui.run_javascript(
             f"dwPano({cv.id}, '{url}', {off_lb.id});" +
             (f"dwPanoFace({first['bearing']})" if first else "")), once=True)
+
+
+def variants_card(name, v, sel, refresh_all):
+    """New looks for the same place, out of a prompt — main's pano editor
+    reborn on the dreamworld tree. The original is the base truth: it can
+    be neither edited nor deleted, only departed from."""
+    if not v["pano"]:
+        return
+    with ui.card().classes("w-full bg-[#11151c]"):
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.label("variants").classes("font-bold")
+            ui.label(f"working on {sel['variant'] or 'the original'}"
+                     ).classes("text-xs text-gray-500")
+        prompt_box = ui.textarea(
+            "how to modify the panorama",
+            placeholder="e.g. the corridor is on fire, smoke along the "
+                        "ceiling").classes("w-full").props("dense autogrow")
+
+        async def generate(target, source):
+            if sel["busy"]:
+                ui.notify("a restyle is already running")
+                return
+            prompt = (prompt_box.value or "").strip()
+            if not prompt:
+                ui.notify("say how to modify the panorama", type="negative")
+                return
+            if not restyle.ready():
+                ui.notify("qwen is not ready — still loading, or not "
+                          "running", type="negative")
+                return
+            sel["busy"] = True
+            note = ui.notification(f"restyling {name} → {target} … "
+                                   f"(a minute or two)", spinner=True,
+                                   timeout=None)
+            try:
+                png = await run.io_bound(
+                    restyle.restyle,
+                    store.pano_of(name, source).read_bytes(), prompt)
+                store.save_variant(name, target, png)
+                sel["variant"] = target
+                ui.notify(f"variant {target} ready")
+            except Exception as err:      # surfaced in the page, like main
+                ui.notify(f"restyle failed: {err}", type="negative")
+            finally:
+                sel["busy"] = False
+                note.dismiss()
+            refresh_all()
+
+        with ui.row().classes("w-full items-end gap-2"):
+            name_box = ui.input("new variant name").classes("grow").props(
+                "dense")
+
+            async def new_variant():
+                target = (name_box.value or "").strip()
+                if not store.VARIANT_OK.fullmatch(target) \
+                        or target == "original":
+                    ui.notify("variant names: letters, digits, - or _",
+                              type="negative")
+                    return
+                if target in store.variants_of(name):
+                    ui.notify(f"{target} exists — select it and use edit",
+                              type="negative")
+                    return
+                await generate(target, sel["variant"])
+
+            async def edit_variant():
+                await generate(sel["variant"], sel["variant"])
+
+            def delete_variant():
+                var = sel["variant"]
+                with ui.dialog() as dlg, ui.card():
+                    ui.label(f"delete variant {var} of {name}?")
+                    with ui.row():
+                        def yes():
+                            store.delete_variant(name, var)
+                            sel["variant"] = None
+                            dlg.close()
+                            refresh_all()
+                        ui.button("delete", color="negative", on_click=yes)
+                        ui.button("keep", on_click=dlg.close)
+                dlg.open()
+
+            locked = " disable" if not sel["variant"] else ""
+            ui.button("new", on_click=new_variant).props("dense")
+            ui.button("edit", on_click=edit_variant).props("dense" + locked)
+            ui.button("delete", color="negative",
+                      on_click=delete_variant).props("dense" + locked)
+        ui.label("new restyles what you are viewing into a fresh variant · "
+                 "edit and delete act on the selected variant, never the "
+                 "original").classes("text-xs text-gray-500")
 
 
 def splat_card():
