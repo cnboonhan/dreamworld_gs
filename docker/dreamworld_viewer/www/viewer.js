@@ -218,12 +218,23 @@ function coreMark() {
 }
 setInterval(coreMark, 1000);
 // the chip IS the toggle: click to walk free of the core, click again
-// to follow — and catch up to wherever it went meanwhile
+// to follow. Rejoining catches up by TELEPORT — wherever the core went
+// meanwhile is not a walk you took, so a fade says so honestly
 addEventListener('DOMContentLoaded', () => {
-  $('core').onclick = () => {
+  $('core').onclick = async () => {
     st.follow = !st.follow;
-    if (st.follow) lastSeq = 0;
     coreMark();
+    if (!st.follow || st.moving) return;
+    try {
+      const doc = await (await fetch('/dreamworld_core/position')).json();
+      lastSeq = doc.seq || 0;
+      const p2 = doc.position;
+      if (p2 && (p2.at !== st.at || p2.look !== st.look)
+          && graph.vertices[p2.at]
+          && graph.vertices[p2.at].looks[p2.look]) {
+        await jumpTo(p2.at, p2.look);
+      }
+    } catch (e) {}
   };
 });
 
