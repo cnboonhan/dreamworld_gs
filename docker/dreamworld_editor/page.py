@@ -306,18 +306,18 @@ def edge_card(edge, dream, sel, refresh_all):
 
         def delete():
             with ui.dialog() as dlg, ui.card():
-                ui.label(f"disconnect {a} — {b}?")
+                ui.label(f"delete the edge {a} — {b}?")
                 with ui.row():
                     def yes():
                         store.remove_edge(a, b)
                         sel["edge"] = None
                         dlg.close()
                         refresh_all()
-                    ui.button("disconnect", color="negative", on_click=yes)
+                    ui.button("delete", color="negative", on_click=yes)
                     ui.button("keep", on_click=dlg.close)
             dlg.open()
 
-        ui.button("disconnect", color="negative", on_click=delete).props(
+        ui.button("delete", color="negative", on_click=delete).props(
             "dense flat")
 
 
