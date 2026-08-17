@@ -582,9 +582,11 @@ def splat_card(name, v, sel, refresh_all):
                       ).classes("w-40").props("dense options-dense")
 
         gen = splatgen.status() or {}
-        queue = gen.get("queue") or []
-        busy_here = bool(gen.get("busy") and gen.get("scene") == str(scene))
-        queued_here = str(scene) in queue
+        queue = [q.rstrip("/") for q in (gen.get("queue") or [])]
+        mine = str(scene).rstrip("/")
+        running = (gen.get("scene") or "").rstrip("/")
+        busy_here = bool(gen.get("busy") and running == mine)
+        queued_here = mine in queue
 
         if ply:
             # the world itself: main's renderer, minimal. Drag looks,
@@ -626,17 +628,18 @@ def splat_card(name, v, sel, refresh_all):
 
         if queued_here:
             # waiting its turn: say so, and say whose turn it is
-            pos = queue.index(str(scene)) + 1
+            pos = queue.index(mine) + 1
             ui.label(f"queued — position {pos} of {len(queue)}").classes(
                 "text-xs text-[#f0a35e]")
-            if gen.get("scene"):
-                ui.label(f"generating now: {splatgen.short(gen['scene'])} "
+            if running:
+                ui.label(f"generating now: {splatgen.short(running)} "
                          f"({gen.get('stage') or 'starting'})").classes(
                     "text-xs text-gray-500")
 
             def tick_q():
                 s = splatgen.status() or {}
-                if str(scene) not in (s.get("queue") or []):
+                if mine not in [q.rstrip("/")
+                                for q in (s.get("queue") or [])]:
                     refresh_all()      # our turn came, or the queue died
             ui.timer(5.0, tick_q)
             return
@@ -673,5 +676,16 @@ def splat_card(name, v, sel, refresh_all):
                     "text-xs text-gray-500")
             elif busy_other:
                 ui.label(f"will queue behind "
-                         f"{splatgen.short(gen.get('scene', ''))}").classes(
+                         f"{splatgen.short(running)}").classes(
                     "text-xs text-gray-500")
+
+        if busy_other:
+            # a status() hiccup or a job submitted elsewhere can leave this
+            # card idle while ITS OWN world starts — watch, and become the
+            # progress bar the moment that happens
+            def tick_i():
+                s = splatgen.status() or {}
+                now = (s.get("scene") or "").rstrip("/")
+                if now == mine or not s.get("busy"):
+                    refresh_all()
+            ui.timer(5.0, tick_i)
