@@ -137,12 +137,11 @@ def index():
             sel["level"] = next(iter(levels))
         lv = levels[sel["level"]]
         with ui.column().classes("w-full px-4"):
-            ui.label(f"{len(lv['verts'])} vertices · "
-                     f"{len(lv['lanes'])} lanes · "
-                     f"{len(lv['doors'])} doors").classes(
-                "text-xs text-gray-500")
+            # root-relative, NOT mount-prefixed: NiceGUI's frontend prepends
+            # the mount path itself, so prefixing here doubled it into
+            # /dreamworld_editor/dreamworld_editor/maps/... and a 404
             ui.interactive_image(
-                f"{MOUNT}/maps/{lv['drawing']}",
+                f"/maps/{lv['drawing']}",
                 content=level_svg(lv),
                 events=["mousedown"], on_mouse=on_click(lv),
             ).classes("w-full")
