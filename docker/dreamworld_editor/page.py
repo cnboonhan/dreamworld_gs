@@ -21,8 +21,9 @@ from scene import level_scene
 
 _JS = Path(__file__).parent / "js"
 
-STATE_TIP = ("red — no panorama · yellow — in progress · "
-             "green — aligned with a splat generated")
+STATE_TIP = ("red — panorama missing or alignment never saved · "
+             "yellow — in progress · green — every look (original and "
+             "each variant) has its splat")
 
 
 def _script(name: str) -> str:
@@ -376,11 +377,13 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
             async def save_alignment():
                 off = float(await ui.run_javascript(
                     "window.dwp ? (dwp('align','off') || 0) : 0") or 0)
-                if min(off, 360 - off) < 0.05:
+                if min(off, 360 - off) < 0.05 \
+                        and store.applied_of(name) is not None:
                     ui.notify("no turn to save")
                     return
                 px = await run.io_bound(store.apply_roll, name, off)
-                ui.notify(f"rolled {px} px — original and variants together")
+                ui.notify(f"rolled {px} px — original and variants together"
+                          if px else "alignment confirmed as-is")
                 refresh_all()
 
             ui.button("save alignment", on_click=save_alignment).props(

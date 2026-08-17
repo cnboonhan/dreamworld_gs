@@ -174,10 +174,13 @@ def load_dream() -> dict:
                 applied = float(json.loads(rec.read_text())["degrees"])
             except (OSError, ValueError, KeyError):
                 pass
+        looks = [None] + variants_of(d.name)
         out[d.name] = {"level": v.get("level", ""), "x": float(v["x"]),
                        "y": float(v["y"]), "pano": pano_of(d.name) is not None,
                        "applied": applied,
-                       "splat": splat_of(d.name) is not None}
+                       "splat": splat_of(d.name) is not None,
+                       "all_splats": all(splat_of(d.name, lk) is not None
+                                         for lk in looks)}
     return out
 
 
@@ -193,11 +196,12 @@ def splat_of(name: str, variant: str | None = None):
 
 
 def state_color(v: dict) -> str:
-    """Red until the panorama is up, green once everything is done —
-    aligned and a splat generated — yellow while work remains."""
-    if not v["pano"]:
+    """Red until the panorama is ALIGNED — an unsaved alignment is not an
+    alignment — green once every look, the original and each variant, has
+    its splat built; yellow for the work in between."""
+    if not v["pano"] or v["applied"] is None:
         return C_RED
-    if v["applied"] is not None and v["splat"]:
+    if v["all_splats"]:
         return C_GRN
     return C_YEL
 
@@ -327,8 +331,17 @@ def apply_roll(name: str, degrees: float) -> int:
     while np.roll by +shift moves it from L to L - delta. Opposite signs —
     save with the wrong one and a panorama turned until it looked right
     comes back with the corridor at twice the angle on the wrong side.
+
+    Zero degrees is a legal save: it rolls nothing but writes the record —
+    how a panorama that was shot already facing right gets MARKED aligned,
+    which the vertex's color rides on.
     """
     d = DREAM / name
+    if abs(degrees) < 0.05 or abs(degrees - 360) < 0.05:
+        old = applied_of(name) or 0.0
+        _aligned_rec(name).write_text(
+            json.dumps({"degrees": round(old, 2), "last": 0.0}, indent=1))
+        return 0
     rolled = 0
     for f in sorted(d.iterdir()):
         if not f.name.startswith("pano") or ".preview" in f.name \
