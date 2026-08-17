@@ -71,6 +71,17 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
         if name == selected:
             inner += (f'<circle r="11" fill="none" stroke="{C_SEL}" '
                       f'stroke-width="2.5"/>')
+            if v["pano"]:
+                # where the panorama viewer is facing, driven live by
+                # dw_pano.js through --dwrot; hidden until the viewer
+                # first speaks. Negated there: bearings are y-up,
+                # the drawing is y-down.
+                inner += (f'<g id="dwface" style="visibility:hidden;'
+                          f'transform:rotate(var(--dwrot,0deg))">'
+                          f'<line x1="9" y1="0" x2="26" y2="0" '
+                          f'stroke="{C_SEL}" stroke-width="2.5"/>'
+                          f'<path d="M34 0 L24 -5 L24 5 Z" '
+                          f'fill="{C_SEL}"/></g>')
         if name == pending:
             inner += (f'<circle r="11" fill="none" stroke="{C_LANE}" '
                       f'stroke-width="2" stroke-dasharray="4 3"/>')

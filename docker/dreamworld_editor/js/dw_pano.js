@@ -41,7 +41,14 @@ window.dwPano = (id, url, offId) => {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   const readout = () => { const el = document.getElementById('c' + offId);
-    if (el) el.textContent = st.off.toFixed(1) + '°'; };
+    if (el) el.textContent = st.off.toFixed(1) + '°';
+    // swing the map's facing arrow with the turn: the content under the
+    // centre line sits at bearing look - off until the roll is saved.
+    // Negated for the drawing's y-down frame; visible from the first turn.
+    const ar = document.getElementById('dwface');
+    if (ar) { ar.style.visibility = 'visible';
+      ar.style.setProperty('--dwrot',
+        (st.off - st.look * 180 / Math.PI) + 'deg'); } };
   cv.addEventListener('pointerdown', e => {
     st.drag = e.clientX; cv.setPointerCapture(e.pointerId); });
   cv.addEventListener('pointermove', e => { if (st.drag === null) return;
@@ -70,7 +77,7 @@ window.dwPano = (id, url, offId) => {
     requestAnimationFrame(loop);
   };
   loop();
-  window.dwPanoFace = r => { st.look = r; st.pitch = 0; };
+  window.dwPanoFace = r => { st.look = r; st.pitch = 0; readout(); };
   window.dwPanoNudge = d => { st.off = (st.off + d + 360) % 360; readout(); };
   window.dwPanoOff = () => st.off;
 };
