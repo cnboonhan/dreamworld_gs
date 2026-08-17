@@ -2,11 +2,16 @@
 # Blank lines and #-comments ignored. Every entry is a verified runtime load;
 # an audit against the pipeline found (and removed) 138 GB that nothing loads.
 
-# world generation: HY-Pano 2.0, WorldStereo 2.0 (Wan-derived weights are
-# bundled inside it), WorldMirror 2.0
+# world generation: HY-Pano 2.0, WorldStereo 2.0, WorldMirror 2.0
 tencent/HY-World-2.0
 hanshanxue/WorldStereo
 tencent/HunyuanWorld-Mirror
+
+# WorldStereo's BASE model — named nowhere in code, only in its config
+# ("base_model": ...), resolved at runtime via snapshot_download. An audit
+# that greps for from_pretrained literals will call this unused, delete
+# 84GB, and world expansion will fail offline at stage 3. It did.
+Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
 
 # the panorama backend inside HY-Pano AND the panorama editor's model
 # (~54GB on disk, bf16 needs ~45GB VRAM)
