@@ -37,7 +37,8 @@ _env:
     grep -q "^DW_UID=" {{repo}}/.env 2>/dev/null || \
         printf 'DW_UID=%s\nDW_GID=%s\n' "$(id -u)" "$(id -g)" >> {{repo}}/.env
 
-# Author the building map in the traffic editor, over noVNC.
-editor: _env
-    docker compose up -d --build editor
-    @echo "  http://localhost:8084"
+# Start everything behind the one forwarded port.
+up: _env
+    docker compose up -d --build --remove-orphans
+    @echo "  http://localhost:8080              every surface, one port"
+    @echo "  http://localhost:8080/sim_editor   trace the building map"
