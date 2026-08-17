@@ -367,13 +367,22 @@ def edge_direction_card(frm, to, dream, tag):
                 for _ in (frm, to)]
         ua, ub = (f"{MOUNT}/files/{frm}/splat", f"{MOUNT}/files/{to}/splat")
         ta, tb = int(pa.stat().st_mtime), int(pb.stat().st_mtime)
-        ui.timer(0.15, lambda: ui.run_javascript(
-            f"dwSplat({cvs[0].id}, '{ua}/world.ply?t={ta}', "
-            f"'{ua}/world.cam.json?t={ta}', 'ws_{tag}_a');"
-            f"dwSplat({cvs[1].id}, '{ub}/world.ply?t={tb}', "
-            f"'{ub}/world.cam.json?t={tb}', 'ws_{tag}_b');"
-            f"dwWalkInit('{tag}', {cvs[0].id}, {cvs[1].id}, "
-            f"'ws_{tag}_a', 'ws_{tag}_b', 4.0)"), once=True)
+
+        async def boot():
+            ra = await run.io_bound(store.splat_records, frm, None)
+            rb = await run.io_bound(store.splat_records, to, None)
+            if not (ra and rb):
+                return
+            ui.run_javascript(
+                f"dwSplat({cvs[0].id}, "
+                f"'{ua}/{ra.name}?t={int(ra.stat().st_mtime)}', "
+                f"'{ua}/world.cam.json?t={ta}', 'ws_{tag}_a');"
+                f"dwSplat({cvs[1].id}, "
+                f"'{ub}/{rb.name}?t={int(rb.stat().st_mtime)}', "
+                f"'{ub}/world.cam.json?t={tb}', 'ws_{tag}_b');"
+                f"dwWalkInit('{tag}', {cvs[0].id}, {cvs[1].id}, "
+                f"'ws_{tag}_a', 'ws_{tag}_b', 4.0)")
+        ui.timer(0.15, boot, once=True)
         with ui.row().classes("w-full items-center gap-2"):
             ui.button(icon="play_arrow", on_click=lambda: ui.run_javascript(
                 f"window.dwWalk && dwWalk('{tag}','play',6)")).props(
@@ -743,6 +752,8 @@ def splat_card(name, v, sel, refresh_all):
         if ply:
             # the world itself: main's renderer, minimal. Drag looks,
             # wheel walks, shift-drag pans, main's keys after a click.
+            # Served as world.splat — main's 32-byte records, 40% lighter
+            # than the ply — built off the event loop on first ask.
             base = f"{MOUNT}/files/{name}/{scene.name}"
             t = int(ply.stat().st_mtime)
             with ui.element("div").classes("w-full relative"):
@@ -751,6 +762,9 @@ def splat_card(name, v, sel, refresh_all):
                     f"touch-action:none;background:{C_BG};border-radius:6px")
 
                 def open_big():
+                    rec = store.splat_records(name, svar)   # cached by boot
+                    u = (f"{base}/{rec.name}"
+                         f"?t={int(rec.stat().st_mtime)}")
                     with ui.dialog().props("maximized") as dlg:
                         with ui.element("div").classes(
                                 "w-full h-full relative").style(
@@ -763,8 +777,7 @@ def splat_card(name, v, sel, refresh_all):
                                       ).props("flat round dense").classes(
                                 "absolute top-2 right-2 z-10")
                             ui.timer(0.2, lambda: ui.run_javascript(
-                                f"dwSplat({big.id}, "
-                                f"'{base}/world.ply?t={t}', "
+                                f"dwSplat({big.id}, '{u}', "
                                 f"'{base}/world.cam.json?t={t}')"),
                                 once=True)
                     dlg.open()
@@ -775,9 +788,16 @@ def splat_card(name, v, sel, refresh_all):
             ui.label("drag to look · wheel to walk · shift-drag to pan · "
                      "after a click: A/D turn, W/S tilt, Q/E roll, "
                      "arrows move").classes("text-xs text-gray-500")
-            ui.timer(0.15, lambda: ui.run_javascript(
-                f"dwSplat({cv.id}, '{base}/world.ply?t={t}', "
-                f"'{base}/world.cam.json?t={t}')"), once=True)
+
+            async def boot(svar=svar):
+                rec = await run.io_bound(store.splat_records, name, svar)
+                if rec is None:
+                    return
+                ui.run_javascript(
+                    f"dwSplat({cv.id}, "
+                    f"'{base}/{rec.name}?t={int(rec.stat().st_mtime)}', "
+                    f"'{base}/world.cam.json?t={t}')")
+            ui.timer(0.15, boot, once=True)
 
         if busy_here:
             ui.label(f"generating {svar or 'original'} …").classes(

@@ -195,6 +195,44 @@ def splat_of(name: str, variant: str | None = None):
     return p if p.is_file() else None
 
 
+def splat_records(name: str, variant: str | None = None):
+    """world.splat beside world.ply: the viewer's 32-byte records (main's
+    format — position, scale, rgba, quaternion), importance-sorted, ~40%
+    smaller than the ply and free of client-side parsing. Built on first
+    ask, rebuilt when the ply is newer."""
+    ply = splat_of(name, variant)
+    if ply is None:
+        return None
+    out = ply.with_name("world.splat")
+    if out.is_file() and out.stat().st_mtime >= ply.stat().st_mtime:
+        return out
+    raw = ply.read_bytes()
+    end = raw.index(b"end_header\n") + len(b"end_header\n")
+    header = raw[:end].decode("ascii", "ignore")
+    n = int(re.search(r"element vertex (\d+)", header).group(1))
+    props = re.findall(r"property (\w+) (\w+)", header)
+    if any(ty != "float" for ty, _ in props):
+        raise ValueError("unexpected non-float property in world.ply")
+    v = np.frombuffer(raw, dtype=np.dtype([(nm, "<f4") for _, nm in props]),
+                      count=n, offset=end)
+    SH_C0 = 0.28209479177387814
+    scale = np.exp(np.stack([v["scale_0"], v["scale_1"], v["scale_2"]], 1))
+    opacity = 1.0 / (1.0 + np.exp(-v["opacity"]))
+    order = np.argsort(-(scale.prod(axis=1) * opacity))
+    rgb = np.stack([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], 1)[order]
+    rot = np.stack([v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], 1)[order]
+    rot /= np.maximum(np.linalg.norm(rot, axis=1, keepdims=True), 1e-9)
+    rec = np.empty(n, np.dtype([("p", "<f4", 3), ("s", "<f4", 3),
+                                ("c", "u1", 4), ("q", "u1", 4)]))
+    rec["p"] = np.stack([v["x"], v["y"], v["z"]], 1)[order]
+    rec["s"] = scale[order]
+    rec["c"][:, :3] = np.clip(np.rint((0.5 + SH_C0 * rgb) * 255), 0, 255)
+    rec["c"][:, 3] = np.clip(np.rint(opacity[order] * 255), 0, 255)
+    rec["q"] = np.clip(np.rint(rot * 128 + 128), 0, 255)
+    out.write_bytes(rec.tobytes())
+    return out
+
+
 def state_color(v: dict) -> str:
     """Red until the panorama is ALIGNED — an unsaved alignment is not an
     alignment — green once every look, the original and each variant, has

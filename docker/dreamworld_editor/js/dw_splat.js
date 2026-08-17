@@ -222,6 +222,11 @@ function dwSplatWorker(self) {
       buffer = processPlyBuffer(e.data.ply);
       vertexCount = Math.floor(buffer.byteLength / rowLength);
       self.postMessage({ vertexCount });
+    } else if (e.data.records) {
+      // pre-packed 32-byte records (world.splat) — nothing to parse
+      buffer = e.data.records;
+      vertexCount = Math.floor(buffer.byteLength / rowLength);
+      self.postMessage({ vertexCount });
     } else if (e.data.view) {
       viewProj = e.data.view;
       throttledSort();
@@ -553,8 +558,10 @@ void main () {
   fetch(plyUrl).then(r => {
     if (!r.ok) throw new Error(r.status);
     return r.arrayBuffer();
-  }).then(ab => worker.postMessage({ ply: ab }, [ab]))
-    .catch(err => console.error('splat load failed', err));
+  }).then(ab => {
+    const packed = plyUrl.split('?')[0].endsWith('.splat');
+    worker.postMessage(packed ? { records: ab } : { ply: ab }, [ab]);
+  }).catch(err => console.error('splat load failed', err));
 
   const frame = () => {
     if (!cv.isConnected) { worker.terminate(); return; }
