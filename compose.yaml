@@ -25,6 +25,7 @@ services:
       - "${DW_PORT:-8080}:80"
     depends_on:
       - sim_editor
+      - dreamworld_editor
     restart: unless-stopped
 
   # The traffic editor — author the building map, over noVNC at /sim_editor.
@@ -45,4 +46,22 @@ services:
     environment:
       HOME: /tmp
       DISPLAY: ":99"
+    restart: unless-stopped
+
+  # The dreamworld editor — the panorama -> splat -> align -> walkthrough flow
+  # will live here, at /dreamworld_editor. Minimal first: a live minimap of
+  # the levels that reflects the map as it is traced next door in /sim_editor.
+  dreamworld_editor:
+    <<: *as-caller
+    build:
+      context: ./docker
+      dockerfile: dreamworld_editor/dreamworld_editor.Dockerfile
+    image: dreamworld/dreamworld_editor:latest
+    container_name: dreamworld-editor
+    volumes:
+      # read-only: this surface only reflects, for now
+      - ./assets/projects:/projects:ro
+    environment:
+      HOME: /tmp
+      DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
     restart: unless-stopped

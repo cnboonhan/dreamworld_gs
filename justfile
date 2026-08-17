@@ -40,5 +40,6 @@ _env:
 # Start everything behind the one forwarded port.
 up: _env
     docker compose up -d --build --remove-orphans
-    @echo "  http://localhost:8080              every surface, one port"
-    @echo "  http://localhost:8080/sim_editor   trace the building map"
+    @echo "  http://localhost:8080                     every surface, one port"
+    @echo "  http://localhost:8080/sim_editor          trace the building map"
+    @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
