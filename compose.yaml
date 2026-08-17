@@ -59,8 +59,10 @@ services:
     image: dreamworld/dreamworld_editor:latest
     container_name: dreamworld-editor
     volumes:
-      # read-only: this surface only reflects, for now
-      - ./assets/projects:/projects:ro
+      # writable: this UI is the single writer of the dreamworld/ tree —
+      # vertices, uploaded panoramas, alignment. building.yaml stays the
+      # traffic editor's file and is only ever read here.
+      - ./assets/projects:/projects
     environment:
       HOME: /tmp
       DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
