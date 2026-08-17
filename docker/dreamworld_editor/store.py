@@ -2,9 +2,14 @@
 
 Everything the flow produces lives under the project's dreamworld/ tree —
 one folder per vertex (vertex.json, pano.jpg, aligned.json, splat later)
-plus edges.json — and this module is that tree's only writer. building.yaml
-stays the traffic editor's file: walls, doors and scale are read from it,
-never written.
+plus edges.json — and this module is that tree's only writer.
+
+building.yaml is shared with the traffic editor along a clean seam: its
+structure — walls, doors, floors, lifts, measurements, every unnamed
+vertex — is the traffic editor's and is only ever read here; the NAV
+layer — named vertices and graph-0 lanes — is authored here and written
+back by sync_nav() after every vertex or edge mutation, so RMF's tools
+read the same graph this page draws.
 """
 
 import json
@@ -261,6 +266,7 @@ def new_vertex(level: str, x: float, y: float) -> str:
     d.mkdir(parents=True)
     (d / "vertex.json").write_text(json.dumps(
         {"level": level, "x": round(x, 2), "y": round(y, 2)}, indent=1))
+    sync_nav()
     return name
 
 
@@ -269,16 +275,19 @@ def move_vertex(name: str, x: float, y: float) -> None:
     v = json.loads(vj.read_text())
     v["x"], v["y"] = round(x, 2), round(y, 2)
     vj.write_text(json.dumps(v, indent=1))
+    sync_nav()
 
 
 def rename_vertex(old: str, new: str) -> None:
     (DREAM / old).rename(DREAM / new)
     rename_in_edges(old, new)
+    sync_nav()
 
 
 def delete_vertex(name: str) -> None:
     shutil.rmtree(DREAM / name)
     drop_from_edges(name)
+    sync_nav()
 
 
 # ---- edges, kept in one file beside the vertex folders ----------------------
@@ -300,6 +309,7 @@ def add_edge(a: str, b: str) -> str:
         return f"{a} and {b} are already connected"
     edges.append((a, b))
     save_edges(edges)
+    sync_nav()
     return f"connected {a} — {b}"
 
 
@@ -314,6 +324,7 @@ def drop_from_edges(name: str) -> None:
 
 def remove_edge(a: str, b: str) -> None:
     save_edges([e for e in load_edges() if set(e) != {a, b}])
+    sync_nav()
 
 
 def bearings_from(dream: dict, name: str, scale) -> list:
@@ -412,6 +423,64 @@ def apply_roll(name: str, degrees: float) -> int:
         json.dumps({"degrees": round((old + degrees) % 360.0, 2),
                     "last": round(degrees, 2)}, indent=1))
     return rolled
+
+
+def sync_nav() -> None:
+    """Write the nav layer back into building.yaml, where RMF's tools read
+    it: every dream vertex as a named vertex on its own level, every edge
+    as a bidirectional graph-0 lane.
+
+    The nav layer is this tree's to own — the clean start began at zero
+    vertices, and this editor is where nav content is authored — so all
+    NAMED vertices and ALL lanes are regenerated wholesale on every sync.
+    Walls, doors, floors, holes, measurements, lifts and their unnamed
+    vertices are never touched; their indices are remapped around the
+    removals, and if a named vertex turns out to anchor structure the sync
+    refuses rather than guess. Last writer wins on the file itself: keep
+    the traffic editor closed while tracing nav here, or re-open it after.
+    """
+    f = building_file()
+    if not f:
+        return
+    B = yaml.safe_load(f.read_text())
+    dream = load_dream()
+    edges = load_edges()
+    for lname, L in (B.get("levels") or {}).items():
+        V = L.get("vertices") or []
+        named = {i for i, v in enumerate(V)
+                 if len(v) > 3 and isinstance(v[3], str) and v[3]}
+        refs = set()
+        for key in ("walls", "doors", "measurements"):
+            refs |= {i for e in L.get(key) or [] for i in e[:2]}
+        for key in ("floors", "holes"):
+            for poly in L.get(key) or []:
+                refs |= set(poly["vertices"])
+        if refs & named:
+            raise RuntimeError(f"{lname}: a named vertex anchors structure "
+                               f"— not rewriting the nav layer")
+        keep = [i for i in range(len(V)) if i not in named]
+        remap = {old: new for new, old in enumerate(keep)}
+        L["vertices"] = [V[i] for i in keep]
+        for key in ("walls", "doors", "measurements"):
+            for e in L.get(key) or []:
+                e[0], e[1] = remap[e[0]], remap[e[1]]
+        for key in ("floors", "holes"):
+            for poly in L.get(key) or []:
+                poly["vertices"] = [remap[i] for i in poly["vertices"]]
+        index = {}
+        for nm in sorted(n for n, v in dream.items() if v["level"] == lname):
+            index[nm] = len(L["vertices"])
+            v = dream[nm]
+            L["vertices"].append([v["x"], v["y"], 0, nm])
+        # traffic editor's lane record: endpoint indices and typed params —
+        # 4 is bool, 2 is int, 1 is string; graph_idx 0 is the nav graph
+        # everything downstream reads
+        L["lanes"] = [[index[a], index[b],
+                       {"bidirectional": [4, True], "graph_idx": [2, 0],
+                        "orientation": [1, ""]}]
+                      for a, b in edges if a in index and b in index]
+    f.write_text(yaml.safe_dump(B, default_flow_style=None, sort_keys=True,
+                                width=10**9))
 
 
 def signature():
