@@ -57,6 +57,13 @@ def load_levels() -> dict:
             "lanes": seg(L.get("lanes")),
             "verts": [(v[3], v[0], v[1]) for v in V
                       if len(v) > 3 and isinstance(v[3], str) and v[3]],
+            # lift cabin waypoints: traffic editor writes one per lift per
+            # level, unnamed, identified by the lift_cabin param. The SAME
+            # lift name on two levels is the same cabin — the building's
+            # vertical edges, carried by the map rather than edges.json
+            "lifts": [(v[4]["lift_cabin"][1], v[0], v[1]) for v in V
+                      if len(v) > 4 and isinstance(v[4], dict)
+                      and "lift_cabin" in v[4]],
             "scale": scale,
         }
     return levels

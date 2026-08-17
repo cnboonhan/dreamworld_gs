@@ -20,6 +20,7 @@ C_BG, C_WALL = "#0a0d12", "#3a4757"
 C_LANE, C_DOOR = "#58a6ff", "#e0a030"
 C_INK, C_LABEL, C_SEL = "#0d1117", "#7d8590", "#4ea1ff"
 C_RED, C_YEL, C_GRN = "#f85149", "#e3b341", "#3fb950"
+C_LIFT = "#d24dcf"      # the dashboard's lift magenta
 
 # the plan's cursor says which mode you are in; dw_view.js reads it too —
 # 'move' is its signal to leave dragging to the vertex, not the pan

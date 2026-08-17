@@ -340,16 +340,15 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                     ui.label(f"at {nm}").classes(
                         "text-xs text-gray-500 truncate")
                     variants = store.variants_of(nm)
-                    if variants:
-                        ui.select(["original"] + variants,
-                                  value=look or "original",
-                                  on_change=lambda e, nm=nm: (
-                                      sel["elook"].update(
-                                          {nm: None if e.value == "original"
-                                           else e.value}),
-                                      refresh_all())
-                                  ).classes("w-full").props(
-                            "dense options-dense")
+                    ui.select(["original"] + variants,
+                              value=look or "original",
+                              on_change=lambda e, nm=nm: (
+                                  sel["elook"].update(
+                                      {nm: None if e.value == "original"
+                                       else e.value}),
+                                  refresh_all())
+                              ).classes("w-full").props(
+                        "dense options-dense")
                     if store.pano_of(nm, look) is None:
                         ui.element("div").classes("w-full").style(
                             f"height:130px;border:2px dashed {C_WALL};"

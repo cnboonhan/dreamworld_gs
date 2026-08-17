@@ -9,7 +9,8 @@ no projection, only a shift to the drawing's own bounding box.
 
 import html
 
-from config import (C_BG, C_DOOR, C_INK, C_LABEL, C_LANE, C_SEL, C_WALL)
+from config import (C_BG, C_DOOR, C_INK, C_LABEL, C_LANE, C_LIFT, C_SEL,
+                    C_WALL)
 from store import state_color
 
 
@@ -22,6 +23,7 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
     pts = [(x, y) for seg in ("walls", "doors", "lanes")
            for x1, y1, x2, y2 in lv[seg] for x, y in ((x1, y1), (x2, y2))]
     pts += [(x, y) for _, x, y in lv["verts"]]
+    pts += [(x, y) for _, x, y in lv.get("lifts") or []]
     pts += [(v["x"], v["y"]) for v in mine.values()]
     if not pts:
         return ('<text x="200" y="150" font-size="14" text-anchor="middle" '
@@ -68,6 +70,15 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
                             f'<circle r="6" fill="{C_LABEL}" '
                             f'stroke="{C_INK}" stroke-width="1.5"/>'
                             + label(name, C_LABEL)))
+    # lift cabins wear a diamond, not a dot: a different KIND of waypoint —
+    # the same name on another level is the same cabin, so these are where
+    # the building connects vertically
+    for name, x, y in lv.get("lifts") or []:
+        parts.append(marker(x, y,
+                            f'<rect x="-6" y="-6" width="12" height="12" '
+                            f'transform="rotate(45)" fill="{C_LIFT}" '
+                            f'stroke="{C_INK}" stroke-width="1.5"/>'
+                            + label(name, C_LIFT)))
     for name, v in mine.items():
         inner = ""
         if name == selected:
