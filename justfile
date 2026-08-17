@@ -43,3 +43,4 @@ up: _env
     @echo "  http://localhost:8080                     every surface, one port"
     @echo "  http://localhost:8080/sim_editor          trace the building map"
     @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
+    @echo "  http://localhost:8080/dreamworld_viewer   walk the dreamworld"

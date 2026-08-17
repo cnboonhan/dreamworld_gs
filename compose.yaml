@@ -26,6 +26,7 @@ services:
     depends_on:
       - sim_editor
       - dreamworld_editor
+      - dreamworld_viewer
     restart: unless-stopped
 
   # The traffic editor — author the building map, over noVNC at /sim_editor.
@@ -96,6 +97,17 @@ services:
             - driver: nvidia
               capabilities: [gpu]
               device_ids: ["${DW_WAN_GPU:-6}"]
+    restart: unless-stopped
+
+  # The walkthrough — main's splat viewer rebuilt on the dreamworld tree,
+  # at /dreamworld_viewer. Static nginx: the graph and every asset come
+  # through the editor's routes.
+  dreamworld_viewer:
+    build:
+      context: ./docker
+      dockerfile: dreamworld_viewer/dreamworld_viewer.Dockerfile
+    image: dreamworld/dreamworld_viewer:latest
+    container_name: dreamworld-viewer
     restart: unless-stopped
 
   # Qwen3-VL — the trajectory planner's eyes during splat generation (and

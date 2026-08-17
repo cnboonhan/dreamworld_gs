@@ -270,6 +270,52 @@ def edge_view(name: str, variant: str | None, bearing: float):
     return [round(float(v), 6) for v in m.T.flatten()]
 
 
+def splat_meta(name: str, variant: str | None = None):
+    """The world's own compass, for the viewer: building east and up in ply
+    coordinates, and the capture point — what edge_view() is built from."""
+    p = splat_dir(name, variant) / "gs_result" / "ply" \
+        / "position_meta_info.json"
+    if not p.is_file():
+        return None
+    m = json.loads(p.read_text())
+    return {"east": m["facing_direction"], "up": m["up_direction"],
+            "center": m["center_point"]}
+
+
+def graph_doc() -> dict:
+    """Everything the walkthrough viewer needs, in one JSON: the levels'
+    walls and scale, every vertex with its looks and their built worlds
+    (each with its compass), the edges, and which crossings have videos.
+    Building world.splat here keeps the viewer's first fetch from paying
+    the conversion."""
+    doc = {"levels": {}, "vertices": {}, "edges": load_edges(),
+           "crossings": []}
+    for lname, L in load_levels().items():
+        doc["levels"][lname] = {"walls": L["walls"], "scale": L["scale"]}
+    for name, v in load_dream().items():
+        looks = {}
+        for lk in [None] + variants_of(name):
+            if splat_of(name, lk) is None:
+                continue
+            meta = splat_meta(name, lk)
+            rec = splat_records(name, lk)
+            looks[lk or "original"] = {
+                "dir": splat_dir(name, lk).name,
+                "records": rec.name if rec else None,
+                "meta": meta,
+            }
+        doc["vertices"][name] = {
+            "level": v["level"], "x": v["x"], "y": v["y"],
+            "lift": v.get("lift"), "looks": looks,
+        }
+    cross = DREAM / ".crossings"
+    if cross.is_dir():
+        doc["crossings"] = sorted(
+            d.name for d in cross.iterdir()
+            if (d / "crossing.mp4").is_file())
+    return doc
+
+
 def splat_records(name: str, variant: str | None = None):
     """world.splat beside world.ply: the viewer's 32-byte records (main's
     format — position, scale, rgba, quaternion), importance-sorted, ~40%

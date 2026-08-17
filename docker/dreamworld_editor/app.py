@@ -20,10 +20,17 @@ from fastapi import FastAPI
 from nicegui import app, ui
 
 import page  # noqa: F401 — importing registers the @ui.page routes
+import store
 from config import DREAM, MOUNT
 
 DREAM.mkdir(parents=True, exist_ok=True)
 app.add_static_files("/files", str(DREAM))
+
+
+@app.get("/graph")
+def graph():
+    """The dreamworld, for the walkthrough viewer at /dreamworld_viewer."""
+    return store.graph_doc()
 
 fastapi_app = FastAPI()
 ui.run_with(fastapi_app, mount_path=MOUNT, title="dreamworld editor",
