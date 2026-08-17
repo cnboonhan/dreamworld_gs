@@ -495,9 +495,23 @@ void main () {
     }
   };
 
-  // drag looks, shift-drag pans, wheel walks — all in the camera's own frame
+  // drag looks, shift-drag pans, wheel walks — all in the camera's own
+  // frame — and main's keys ride along: A/D yaw, W/S pitch, Q/E roll,
+  // arrows translate (shift + up/down for height). The canvas must be
+  // clicked once to take the keyboard.
+  const KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE',
+                        'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+                        'ShiftLeft', 'ShiftRight']);
+  const keys = new Set();
+  cv.tabIndex = 0;
+  cv.style.outline = 'none';
+  cv.addEventListener('keydown', e => {
+    if (KEYS.has(e.code)) { keys.add(e.code); e.preventDefault(); } });
+  cv.addEventListener('keyup', e => keys.delete(e.code));
+  cv.addEventListener('blur', () => keys.clear());
   let drag = null;
   cv.addEventListener('pointerdown', e => {
+    cv.focus();
     drag = [e.clientX, e.clientY, e.shiftKey];
     cv.setPointerCapture(e.pointerId); });
   cv.addEventListener('pointermove', e => {
@@ -545,6 +559,25 @@ void main () {
   const frame = () => {
     if (!cv.isConnected) { worker.terminate(); return; }
     if (cv.width !== cv.clientWidth) resize();
+    if (keys.size) {                       // main's rates, verbatim
+      let inv = invert4(viewMatrix);
+      if (keys.has('KeyA')) inv = rotate4(inv, -0.01, 0, 1, 0);
+      if (keys.has('KeyD')) inv = rotate4(inv, 0.01, 0, 1, 0);
+      if (keys.has('KeyQ')) inv = rotate4(inv, 0.01, 0, 0, 1);
+      if (keys.has('KeyE')) inv = rotate4(inv, -0.01, 0, 0, 1);
+      if (keys.has('KeyW')) inv = rotate4(inv, 0.005, 1, 0, 0);
+      if (keys.has('KeyS')) inv = rotate4(inv, -0.005, 1, 0, 0);
+      const sh = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      if (keys.has('ArrowUp'))
+        inv = sh ? translate4(inv, 0, -0.03, 0)
+                 : translate4(inv, 0, 0, 0.1);
+      if (keys.has('ArrowDown'))
+        inv = sh ? translate4(inv, 0, 0.03, 0)
+                 : translate4(inv, 0, 0, -0.1);
+      if (keys.has('ArrowLeft')) inv = translate4(inv, -0.03, 0, 0);
+      if (keys.has('ArrowRight')) inv = translate4(inv, 0.03, 0, 0);
+      viewMatrix = invert4(inv);
+    }
     const viewProj = multiply4(projectionMatrix, viewMatrix);
     worker.postMessage({ view: viewProj });
     // alpha ZERO, as main clears: front-to-back blending scales every

@@ -742,17 +742,42 @@ def splat_card(name, v, sel, refresh_all):
 
         if ply:
             # the world itself: main's renderer, minimal. Drag looks,
-            # wheel walks, shift-drag pans.
-            cv = ui.element("canvas").classes("w-full").style(
-                f"height:320px;display:block;cursor:grab;"
-                f"touch-action:none;background:{C_BG};border-radius:6px")
+            # wheel walks, shift-drag pans, main's keys after a click.
             base = f"{MOUNT}/files/{name}/{scene.name}"
             t = int(ply.stat().st_mtime)
+            with ui.element("div").classes("w-full relative"):
+                cv = ui.element("canvas").classes("w-full").style(
+                    f"height:320px;display:block;cursor:grab;"
+                    f"touch-action:none;background:{C_BG};border-radius:6px")
+
+                def open_big():
+                    with ui.dialog().props("maximized") as dlg:
+                        with ui.element("div").classes(
+                                "w-full h-full relative").style(
+                                f"background:{C_BG}"):
+                            big = ui.element("canvas").classes(
+                                "w-full h-full").style(
+                                "display:block;cursor:grab;"
+                                "touch-action:none")
+                            ui.button(icon="close", on_click=dlg.close
+                                      ).props("flat round dense").classes(
+                                "absolute top-2 right-2 z-10")
+                            ui.timer(0.2, lambda: ui.run_javascript(
+                                f"dwSplat({big.id}, "
+                                f"'{base}/world.ply?t={t}', "
+                                f"'{base}/world.cam.json?t={t}')"),
+                                once=True)
+                    dlg.open()
+
+                ui.button(icon="fullscreen", on_click=open_big).props(
+                    "flat round dense").classes(
+                    "absolute top-1 right-1 z-10")
+            ui.label("drag to look · wheel to walk · shift-drag to pan · "
+                     "after a click: A/D turn, W/S tilt, Q/E roll, "
+                     "arrows move").classes("text-xs text-gray-500")
             ui.timer(0.15, lambda: ui.run_javascript(
                 f"dwSplat({cv.id}, '{base}/world.ply?t={t}', "
                 f"'{base}/world.cam.json?t={t}')"), once=True)
-            ui.label("drag to look · wheel to walk · shift-drag to pan"
-                     ).classes("text-xs text-gray-500")
 
         if busy_here:
             ui.label(f"generating {svar or 'original'} …").classes(
