@@ -472,9 +472,11 @@ void main () {
     viewMatrix = invert4(inv); }, { passive: false });
 
   fetch(camUrl).then(r => r.ok ? r.json() : null).then(cam => {
-    if (Array.isArray(cam) && cam.length === 16) {
-      viewMatrix = cam;
-      baseView = cam;
+    // make_spawn_cam writes {"viewMatrix": [...16]}; accept a bare array too
+    const m = Array.isArray(cam) ? cam : cam && cam.viewMatrix;
+    if (Array.isArray(m) && m.length === 16) {
+      viewMatrix = m;
+      baseView = m;
     }
   }).catch(() => {});
   // a named instance can be walked from outside: offset(z) places the
