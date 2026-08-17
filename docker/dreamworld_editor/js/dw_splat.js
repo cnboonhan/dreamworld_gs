@@ -229,7 +229,7 @@ function dwSplatWorker(self) {
   };
 }
 
-window.dwSplat = (id, plyUrl, camUrl) => {
+window.dwSplat = (id, plyUrl, camUrl, ns) => {
   const cv = document.getElementById('c' + id);
   if (!cv || cv.dataset.dw) return;
   cv.dataset.dw = 1;
@@ -412,6 +412,7 @@ void main () {
 
   // a straight-ahead default; world.cam.json replaces it when present
   let viewMatrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1.5, 1];
+  let baseView = viewMatrix;
   let projectionMatrix = [];
   let vertexCount = 0;
 
@@ -471,8 +472,22 @@ void main () {
     viewMatrix = invert4(inv); }, { passive: false });
 
   fetch(camUrl).then(r => r.ok ? r.json() : null).then(cam => {
-    if (Array.isArray(cam) && cam.length === 16) viewMatrix = cam;
+    if (Array.isArray(cam) && cam.length === 16) {
+      viewMatrix = cam;
+      baseView = cam;
+    }
   }).catch(() => {});
+  // a named instance can be walked from outside: offset(z) places the
+  // camera z units along the spawn view's own forward axis — what the
+  // edge transition drives
+  if (ns) {
+    window._dws = window._dws || {};
+    window._dws[ns] = {
+      offset: z => {
+        viewMatrix = invert4(translate4(invert4(baseView), 0, 0, z));
+      },
+    };
+  }
   fetch(plyUrl).then(r => {
     if (!r.ok) throw new Error(r.status);
     return r.arrayBuffer();

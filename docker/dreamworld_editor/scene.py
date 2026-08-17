@@ -14,7 +14,7 @@ from store import state_color
 
 
 def level_scene(lv: dict, dream: dict, edges: list, level: str,
-                selected, pending):
+                selected, pending, selected_edge=None):
     """(svg, width, height, shift) for one level. The yaml's pixel frame is
     shifted to the drawing's own bounding box, so the image is exactly as
     big as the building plus a margin."""
@@ -45,10 +45,12 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
                      f'stroke="{C_LANE}" stroke-width="2.5" opacity="0.85"/>')
     for a, b in edges:
         if a in mine and b in mine:
+            on = selected_edge and set(selected_edge) == {a, b}
             parts.append(f'<line x1="{mine[a]["x"]}" y1="{mine[a]["y"]}" '
                          f'x2="{mine[b]["x"]}" y2="{mine[b]["y"]}" '
-                         f'stroke="{C_LANE}" stroke-width="2.5" '
-                         f'opacity="0.85"/>')
+                         f'stroke="{C_SEL if on else C_LANE}" '
+                         f'stroke-width="{4 if on else 2.5}" '
+                         f'opacity="{1 if on else 0.85}"/>')
 
     # every marker is a group translated to its spot and scaled by --dwk,
     # which dw_view.js sets to 1/zoom — so dots and labels keep a constant

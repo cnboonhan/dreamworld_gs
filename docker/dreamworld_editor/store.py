@@ -267,6 +267,10 @@ def drop_from_edges(name: str) -> None:
     save_edges([(a, b) for a, b in load_edges() if name not in (a, b)])
 
 
+def remove_edge(a: str, b: str) -> None:
+    save_edges([e for e in load_edges() if set(e) != {a, b}])
+
+
 def bearings_from(dream: dict, name: str, scale) -> list:
     """Where to aim the panorama: the vertices this one is connected to, as
     compass bearings — main aimed by lanes, and an edge is this tree's lane.

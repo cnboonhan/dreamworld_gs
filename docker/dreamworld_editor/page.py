@@ -37,14 +37,16 @@ def index():
     ui.add_head_html(_script("dw_view.js"))
     ui.add_head_html(_script("dw_pano.js"))
     ui.add_head_html(_script("dw_splat.js"))
+    ui.add_head_html(_script("dw_walk.js"))
     sel = {"level": None, "vertex": None, "mode": None, "edge_from": None,
-           "variant": None, "splat_var": None, "busy": False}
+           "variant": None, "splat_var": None, "edge": None, "busy": False}
 
     def select_vertex(nm):
         if nm != sel["vertex"]:
             sel["variant"] = None       # the dropdowns belong to one vertex
             sel["splat_var"] = None
         sel["vertex"] = nm
+        sel["edge"] = None              # a vertex and an edge never both
 
     with ui.header().classes("items-center bg-[#0b0e13] gap-6"):
         ui.label("dreamworld editor").classes("text-lg font-bold text-[#4ea1ff]")
@@ -104,6 +106,21 @@ def index():
                     best, bd = nm, d
             return best
 
+        def nearest_edge(x, y, r):
+            best, bd = None, r
+            for a, b in store.load_edges():
+                va, vb = dream.get(a), dream.get(b)
+                if not va or not vb or va["level"] != sel["level"]:
+                    continue
+                vx, vy = vb["x"] - va["x"], vb["y"] - va["y"]
+                L2 = vx * vx + vy * vy
+                u = 0.0 if L2 < 1e-9 else max(0.0, min(1.0, (
+                    (x - va["x"]) * vx + (y - va["y"]) * vy) / L2))
+                d = math.hypot(x - va["x"] - u * vx, y - va["y"] - u * vy)
+                if d < bd:
+                    best, bd = (a, b), d
+            return best
+
         async def handler(e):
             x, y = e.image_x - shift[0], e.image_y - shift[1]
             if e.type == "mousedown":
@@ -151,6 +168,11 @@ def index():
                 near = nearest(x, y, hit)
                 if near:             # empty space keeps the selection
                     select_vertex(near)
+                else:
+                    e = nearest_edge(x, y, hit)
+                    if e:            # vertices win; edges take the rest
+                        sel["edge"] = e
+                        sel["vertex"] = None
             refresh_all()
         return handler
 
@@ -172,7 +194,8 @@ def index():
                 dream = store.load_dream()
                 svg, w, h, shift = level_scene(
                     levels[sel["level"]], dream, store.load_edges(),
-                    sel["level"], sel["vertex"], sel["edge_from"])
+                    sel["level"], sel["vertex"], sel["edge_from"],
+                    sel["edge"])
                 box = ui.element("div").classes("w-full").style(
                     f"height:78vh;overflow:hidden;touch-action:none;"
                     f"background:{C_BG};border-radius:8px;"
@@ -199,11 +222,19 @@ def index():
             @ui.refreshable
             def side():
                 dream = store.load_dream()
+                edge = sel["edge"]
+                if edge and all(n in dream for n in edge) \
+                        and set(edge) in [set(e)
+                                          for e in store.load_edges()]:
+                    edge_card(edge, dream, sel, refresh_all)
+                    transition_card(edge, dream)
+                    return
+                sel["edge"] = None
                 name = sel["vertex"] if sel["vertex"] in dream else None
                 if not name:
-                    ui.label("no vertex selected — click one on the plan, "
-                             "or use add vertex and click a spot"
-                             ).classes("text-sm text-gray-500 mt-2")
+                    ui.label("nothing selected — click a vertex or an edge "
+                             "on the plan").classes(
+                        "text-sm text-gray-500 mt-2")
                     return
                 v = dream[name]
                 scale = (store.load_levels().get(v["level"]) or {}).get("scale")
@@ -215,9 +246,11 @@ def index():
 
     def on_key(e):
         if e.key.escape and e.action.keydown and (sel["vertex"]
-                                                  or sel["edge_from"]):
+                                                  or sel["edge_from"]
+                                                  or sel["edge"]):
             sel["vertex"] = None
             sel["edge_from"] = None
+            sel["edge"] = None
             refresh_all()
     ui.keyboard(on_key=on_key)
 
@@ -237,7 +270,90 @@ def index():
     ui.timer(2.0, poll)
 
 
-# ---- the three boxes ----------------------------------------------------------
+# ---- the edge boxes -------------------------------------------------------------
+
+def edge_card(edge, dream, sel, refresh_all):
+    a, b = edge
+    va, vb = dream[a], dream[b]
+    scale = (store.load_levels().get(va["level"]) or {}).get("scale")
+    d = math.hypot(vb["x"] - va["x"], vb["y"] - va["y"])
+    dist = f"{d * scale:.1f} m" if scale else f"{d:.0f} px"
+    with ui.card().classes("w-full bg-[#11151c]"):
+        ui.label("Edge").classes("font-bold")
+        with ui.row().classes("w-full items-center gap-2"):
+            for nm, v in ((a, va), (b, vb)):
+                ui.html(f'<span style="width:10px;height:10px;'
+                        f'border-radius:5px;display:inline-block;'
+                        f'background:{store.state_color(v)}"></span>')
+                ui.label(nm).classes("text-sm text-[#7aa2f7]")
+                if nm == a:
+                    ui.label("—").classes("text-gray-600")
+            ui.space()
+            ui.label(dist).classes("text-xs text-gray-500")
+
+        def delete():
+            with ui.dialog() as dlg, ui.card():
+                ui.label(f"disconnect {a} — {b}?")
+                with ui.row():
+                    def yes():
+                        store.remove_edge(a, b)
+                        sel["edge"] = None
+                        dlg.close()
+                        refresh_all()
+                    ui.button("disconnect", color="negative", on_click=yes)
+                    ui.button("keep", on_click=dlg.close)
+            dlg.open()
+
+        ui.button("disconnect", color="negative", on_click=delete).props(
+            "dense flat")
+
+
+def transition_card(edge, dream):
+    """The crossing, scaffolded from main's mid-corridor handover: walk out
+    of A, crossfade through the middle, arrive into B. The walk is a
+    nominal straight line along each spawn's forward axis until
+    splat-to-building placement gives it the real corridor."""
+    a, b = edge
+    with ui.card().classes("w-full bg-[#11151c]"):
+        ui.label("transition").classes("font-bold")
+        pa, pb = store.splat_of(a), store.splat_of(b)
+        if not (pa and pb):
+            missing = ", ".join(n for n, p in ((a, pa), (b, pb)) if not p)
+            ui.label(f"needs a splat at both ends — missing: {missing}"
+                     ).classes("text-xs text-[#f0a35e]")
+            return
+        with ui.element("div").classes("w-full relative").style(
+                "height:320px"):
+            cvs = []
+            for nm, p in ((a, pa), (b, pb)):
+                cvs.append(ui.element("canvas").classes(
+                    "absolute inset-0 w-full h-full").style(
+                    f"background:{C_BG};border-radius:6px;"
+                    "pointer-events:none"))
+        ua = f"{MOUNT}/files/{a}/splat"
+        ub = f"{MOUNT}/files/{b}/splat"
+        ta, tb = int(pa.stat().st_mtime), int(pb.stat().st_mtime)
+        ui.timer(0.15, lambda: ui.run_javascript(
+            f"dwSplat({cvs[0].id}, '{ua}/world.ply?t={ta}', "
+            f"'{ua}/world.cam.json?t={ta}', 'walkA');"
+            f"dwSplat({cvs[1].id}, '{ub}/world.ply?t={tb}', "
+            f"'{ub}/world.cam.json?t={tb}', 'walkB');"
+            f"dwWalkInit({cvs[0].id}, {cvs[1].id}, 4.0)"), once=True)
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.button(icon="play_arrow", on_click=lambda: ui.run_javascript(
+                "window.dwWalkPlay && dwWalkPlay(6)")).props("dense flat")
+            slider = ui.slider(min=0.0, max=1.0, step=0.01, value=0.0
+                               ).classes("grow")
+            slider.on("update:model-value",
+                      lambda e: ui.run_javascript(
+                          f"window.dwWalkT && dwWalkT({e.args})"),
+                      throttle=0.05)
+        ui.label(f"walk {a} → {b}: out along A's view, crossfading into B "
+                 "mid-way — a nominal straight line until the splats are "
+                 "placed on the building").classes("text-xs text-gray-500")
+
+
+# ---- the three vertex boxes ------------------------------------------------------
 
 def vertex_card(name, v, sel, refresh_all):
     with ui.card().classes("w-full bg-[#11151c]"):
