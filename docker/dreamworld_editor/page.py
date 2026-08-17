@@ -613,9 +613,6 @@ def splat_card(name, v, sel, refresh_all):
             stage_lb = ui.label(gen.get("stage") or "starting").classes(
                 "text-xs text-gray-500")
             el_lb = ui.label("").classes("text-xs text-gray-500")
-            if queue:
-                ui.label(f"{len(queue)} more waiting behind this one"
-                         ).classes("text-xs text-gray-500")
 
             def tick():
                 s = splatgen.status()
