@@ -246,8 +246,7 @@ def vertex_card(name, v, sel, refresh_all):
 
             def delete():
                 with ui.dialog() as dlg, ui.card():
-                    ui.label(f"delete {name}, its edges, and everything "
-                             f"under it?")
+                    ui.label(f"delete {name} and its edges?")
                     with ui.row():
                         def yes():
                             store.delete_vertex(name)
