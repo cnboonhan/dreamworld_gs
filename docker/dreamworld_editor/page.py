@@ -42,6 +42,7 @@ def index():
         state["sig"] = store.signature()
         board.refresh()
         side.refresh()
+        tools.refresh()     # the move button follows the selection
 
     # ---- toolbar ----
     names = list(store.load_levels())
@@ -69,9 +70,11 @@ def index():
                                      ("edge", "edge", "timeline"),
                                      ("move", "move", "open_with")):
                 on = sel["mode"] == mode
+                props = "dense no-caps" + ("" if on else " outline")
+                if mode == "move" and not sel["vertex"]:
+                    props += " disable"     # nothing selected, nothing to move
                 ui.button(text, icon=icon,
-                          on_click=lambda m=mode: switch(m)).props(
-                    "dense no-caps" + ("" if on else " outline"))
+                          on_click=lambda m=mode: switch(m)).props(props)
             ui.label(HINT[sel["mode"]]).classes("text-xs text-gray-600")
         tools()
 
@@ -79,8 +82,8 @@ def index():
     def on_map_mouse(dream, shift):
         down = {}
 
-        def nearest(x, y):
-            best, bd = None, 15.0
+        def nearest(x, y, r=15.0):
+            best, bd = None, r
             for nm, v in dream.items():
                 if v["level"] != sel["level"]:
                     continue
@@ -93,19 +96,21 @@ def index():
             x, y = e.image_x - shift[0], e.image_y - shift[1]
             if e.type == "mousedown":
                 down["at"] = (x, y)
-                down["vertex"] = nearest(x, y)
                 return
             if e.type != "mouseup" or "at" not in down:
                 return
             # movement judged in SCREEN pixels: image units shrink with
             # zoom, so a fixed image-unit threshold read a small pan at
-            # high zoom as a click — which deselected the vertex
+            # high zoom as a click — which deselected the vertex. The hit
+            # radius converts the other way: markers hold a constant size
+            # on screen, so the radius that hits them must too.
             level = (sel["level"] or "").replace("'", "")
             k = float(await ui.run_javascript(
                 f"(window._dwvMem && window._dwvMem['{level}']) "
                 f"? window._dwvMem['{level}'].k : 1") or 1)
+            hit = max(12.0 / k, 3.0)
             moved = math.hypot(x - down["at"][0], y - down["at"][1]) * k
-            grabbed = down.get("vertex")
+            grabbed = nearest(*down["at"], hit)
             down.clear()
             if sel["mode"] == "move":
                 if grabbed and moved > 6:
@@ -121,7 +126,7 @@ def index():
                 sel["mode"] = None      # one drop per press of the button
                 tools.refresh()
             elif sel["mode"] == "edge":
-                near = nearest(x, y)
+                near = nearest(x, y, hit)
                 if near is None or near == sel["edge_from"]:
                     sel["edge_from"] = None
                 elif sel["edge_from"] is None:
@@ -131,7 +136,7 @@ def index():
                     ui.notify(store.add_edge(sel["edge_from"], near))
                     sel["edge_from"] = None
             else:
-                near = nearest(x, y)
+                near = nearest(x, y, hit)
                 if near:             # empty space keeps the selection
                     sel["vertex"] = near
             refresh_all()
@@ -247,6 +252,8 @@ def vertex_card(name, v, sel, refresh_all):
                         def yes():
                             store.delete_vertex(name)
                             sel["vertex"] = None
+                            if sel["mode"] == "move":
+                                sel["mode"] = None   # nothing left to move
                             dlg.close()
                             refresh_all()
                         ui.button("delete", color="negative", on_click=yes)

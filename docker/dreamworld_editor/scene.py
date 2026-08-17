@@ -50,28 +50,33 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
                          f'stroke="{C_LANE}" stroke-width="2.5" '
                          f'opacity="0.85"/>')
 
-    def label(x, y, text, color):
-        return (f'<text x="{x}" y="{y - 10}" font-size="12" '
-                f'text-anchor="middle" fill="{color}">'
-                f'{html.escape(text)}</text>')
+    # every marker is a group translated to its spot and scaled by --dwk,
+    # which dw_view.js sets to 1/zoom — so dots and labels keep a constant
+    # size on SCREEN while the geometry underneath zooms
+    def marker(x, y, inner):
+        return (f'<g style="transform:translate({x}px,{y}px) '
+                f'scale(var(--dwk,1))">{inner}</g>')
+
+    def label(text, color):
+        return (f'<text x="0" y="-10" font-size="12" text-anchor="middle" '
+                f'fill="{color}">{html.escape(text)}</text>')
 
     for name, x, y in lv["verts"]:
-        parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="{C_LABEL}" '
-                     f'stroke="{C_INK}" stroke-width="1.5"/>')
-        parts.append(label(x, y, name, C_LABEL))
+        parts.append(marker(x, y,
+                            f'<circle r="6" fill="{C_LABEL}" '
+                            f'stroke="{C_INK}" stroke-width="1.5"/>'
+                            + label(name, C_LABEL)))
     for name, v in mine.items():
-        x, y = v["x"], v["y"]
+        inner = ""
         if name == selected:
-            parts.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" '
-                         f'stroke="{C_SEL}" stroke-width="2.5"/>')
+            inner += (f'<circle r="11" fill="none" stroke="{C_SEL}" '
+                      f'stroke-width="2.5"/>')
         if name == pending:
-            parts.append(f'<circle cx="{x}" cy="{y}" r="11" fill="none" '
-                         f'stroke="{C_LANE}" stroke-width="2" '
-                         f'stroke-dasharray="4 3"/>')
-        parts.append(f'<circle cx="{x}" cy="{y}" r="6" '
-                     f'fill="{state_color(v)}" stroke="{C_INK}" '
-                     f'stroke-width="1.5"/>')
-        parts.append(label(x, y, name,
-                           C_SEL if name == selected else C_LABEL))
+            inner += (f'<circle r="11" fill="none" stroke="{C_LANE}" '
+                      f'stroke-width="2" stroke-dasharray="4 3"/>')
+        inner += (f'<circle r="6" fill="{state_color(v)}" '
+                  f'stroke="{C_INK}" stroke-width="1.5"/>')
+        inner += label(name, C_SEL if name == selected else C_LABEL)
+        parts.append(marker(v["x"], v["y"], inner))
     parts.append('</g>')
     return "".join(parts), w, h, (tx, ty)

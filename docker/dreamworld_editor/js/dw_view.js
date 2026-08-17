@@ -21,12 +21,17 @@ window.dwView = (id, w, h, key) => {
   // layout size equal declared size, which the math assumes.
   kid.style.width = w + 'px';
   kid.style.transformOrigin = '0 0';
-  let k = 1, px = 0, py = 0, drag = null;
+  let k = 1, px = 0, py = 0, drag = null, ghost = null;
+  box.style.position = 'relative';
   // every refresh rebuilds this element, so the view lives OUTSIDE it,
-  // remembered per level: selecting a vertex must not lose your zoom
+  // remembered per level: selecting a vertex must not lose your zoom.
+  // --dwk counter-scales the vertex markers so they hold their size on
+  // screen while the geometry zooms.
   const mem = window._dwvMem = window._dwvMem || {};
   const apply = () => { kid.style.transform =
-    `translate(${px}px,${py}px) scale(${k})`; mem[key] = { k, px, py }; };
+    `translate(${px}px,${py}px) scale(${k})`;
+    box.style.setProperty('--dwk', (1 / k).toFixed(4));
+    mem[key] = { k, px, py }; };
   const fit = () => { const r = box.getBoundingClientRect();
     k = Math.min(r.width / w, r.height / h);
     px = (r.width - w * k) / 2; py = (r.height - h * k) / 2; apply(); };
@@ -39,18 +44,32 @@ window.dwView = (id, w, h, key) => {
       px = cx - (cx - px) * nk / k; py = cy - (cy - py) * nk / k; k = nk;
     } else { px -= e.deltaX; py -= e.deltaY; }
     apply(); }, {passive: false});
+  const ghostAt = e => { const r = box.getBoundingClientRect();
+    ghost.style.left = (e.clientX - r.left - 7) + 'px';
+    ghost.style.top = (e.clientY - r.top - 7) + 'px'; };
   box.addEventListener('pointerdown', e => {
-    // in move mode the drag belongs to the vertex, not the pan
-    if (box.style.cursor === 'move') return;
+    // in move mode the drag belongs to the vertex, not the pan — and a
+    // translucent stand-in follows the pointer to show where it will land
+    if (box.style.cursor === 'move') {
+      ghost = document.createElement('div');
+      ghost.style.cssText = 'position:absolute;width:14px;height:14px;' +
+        'border-radius:7px;background:rgba(122,162,247,.5);' +
+        'border:1.5px solid rgba(13,17,23,.7);pointer-events:none;z-index:5';
+      ghostAt(e); box.appendChild(ghost);
+      return;
+    }
     drag = [e.clientX, e.clientY]; });
   if (window._dwvMove) {
     removeEventListener('pointermove', window._dwvMove);
     removeEventListener('pointerup', window._dwvUp);
   }
-  window._dwvMove = e => { if (!drag || !box.isConnected) return;
+  window._dwvMove = e => { if (!box.isConnected) return;
+    if (ghost) { ghostAt(e); return; }
+    if (!drag) return;
     px += e.clientX - drag[0]; py += e.clientY - drag[1];
     drag = [e.clientX, e.clientY]; apply(); };
-  window._dwvUp = () => drag = null;
+  window._dwvUp = () => { drag = null;
+    if (ghost) { ghost.remove(); ghost = null; } };
   addEventListener('pointermove', window._dwvMove);
   addEventListener('pointerup', window._dwvUp);
   box.addEventListener('dblclick', fit);
