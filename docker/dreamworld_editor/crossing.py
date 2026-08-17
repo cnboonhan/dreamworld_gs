@@ -36,6 +36,11 @@ PROMPTS = {
                  "the camera steps forward out of the lift into the space "
                  "beyond, ending outside the lift. Smooth steady forward "
                  "camera motion, photorealistic indoor lighting."),
+    "lift_ride": ("First-person lift ride. The lift doors directly ahead "
+                  "close, the cabin rides to another floor, and the doors "
+                  "open again onto the destination level; the camera holds "
+                  "steady facing the doors throughout. Photorealistic "
+                  "indoor lighting."),
     "open": ("First-person walkthrough. The camera moves smoothly forward "
              "along the open corridor toward the destination, steady "
              "motion, photorealistic indoor office lighting, consistent "

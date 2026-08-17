@@ -172,8 +172,31 @@ def index():
                     sel["edge_from"] = None
             else:
                 near = nearest(x, y, hit)
+                lift_arrow = None
+                if not near:
+                    # a lift's up/down arrows sit a marker-height off the
+                    # diamond — the building's vertical edges, clickable
+                    off = 18.0 / k
+                    for nm, v in dream.items():
+                        if v["level"] != sel["level"] or not v.get("lift"):
+                            continue
+                        for d, dy in (("up", -1), ("down", 1)):
+                            if math.hypot(v["x"] - x,
+                                          v["y"] + dy * off - y) < hit:
+                                lift_arrow = (nm, d)
                 if near:             # empty space keeps the selection
                     select_vertex(near)
+                elif lift_arrow:
+                    nm, d = lift_arrow
+                    tgt = store.lift_neighbors(nm)[d]
+                    if tgt:
+                        e = (nm, tgt)
+                        if e != sel["edge"] and e[::-1] != sel["edge"]:
+                            sel["elook"] = {}
+                        sel["edge"] = e
+                        sel["vertex"] = None
+                    else:
+                        ui.notify(f"{nm}: no stop {d} from here")
                 else:
                     e = nearest_edge(x, y, hit)
                     if e:            # vertices win; edges take the rest
@@ -232,8 +255,9 @@ def index():
                 dream = store.load_dream()
                 edge = sel["edge"]
                 if edge and all(n in dream for n in edge) \
-                        and set(edge) in [set(e)
-                                          for e in store.load_edges()]:
+                        and (set(edge) in [set(e)
+                                           for e in store.load_edges()]
+                             or store.is_lift_edge(*edge)):
                     edge_card(edge, dream, sel, refresh_all)
                     a, b = edge
                     la, lb = _elook(sel, a), _elook(sel, b)
@@ -288,9 +312,11 @@ def index():
 def edge_card(edge, dream, sel, refresh_all):
     a, b = edge
     va, vb = dream[a], dream[b]
+    lift_edge = store.is_lift_edge(a, b)
     scale = (store.load_levels().get(va["level"]) or {}).get("scale")
     d = math.hypot(vb["x"] - va["x"], vb["y"] - va["y"])
-    dist = f"{d * scale:.1f} m" if scale else f"{d:.0f} px"
+    dist = (f"{va['level']} ⇵ {vb['level']} · {va['lift']}" if lift_edge
+            else f"{d * scale:.1f} m" if scale else f"{d:.0f} px")
     with ui.card().classes("w-full bg-[#11151c]"):
         ui.label("Edge").classes("font-bold")
         with ui.row().classes("w-full items-center gap-2"):
@@ -317,8 +343,13 @@ def edge_card(edge, dream, sel, refresh_all):
                     ui.button("keep", on_click=dlg.close)
             dlg.open()
 
-        ui.button("delete", color="negative", on_click=delete).props(
-            "dense flat")
+        if lift_edge:
+            ui.label("the building's own edge — it goes when the lift "
+                     "does, in /sim_editor").classes(
+                "text-xs text-[#d24dcf]")
+        else:
+            ui.button("delete", color="negative", on_click=delete).props(
+                "dense flat")
 
 
 def _elook(sel, nm):
@@ -337,8 +368,13 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
     splat-to-building placement gives it the real corridor."""
     va, vb = dream[frm], dream[to]
     la, lb = _elook(sel, frm), _elook(sel, to)
-    # drawing pixels run y-down; bearings live in the y-up compass frame
-    bearing = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
+    if va["level"] != vb["level"]:
+        # a lift ride is vertical: both panoramas face east, paired, and
+        # the crossing prompt carries the actual direction of travel
+        bearing = 0.0
+    else:
+        # drawing pixels run y-down; bearings live in the y-up compass frame
+        bearing = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
     with ui.card().classes("w-full bg-[#11151c]"):
         ui.label(f"{frm} → {to}").classes("font-bold")
 

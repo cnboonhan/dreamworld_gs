@@ -60,6 +60,7 @@ def load_levels() -> dict:
             "walls": seg(L.get("walls")),
             "doors": seg(L.get("doors")),
             "lanes": seg(L.get("lanes")),
+            "elevation": L.get("elevation", 0),
             "verts": [(v[3], v[0], v[1]) for v in V
                       if len(v) > 3 and isinstance(v[3], str) and v[3]
                       and not (len(v) > 4 and isinstance(v[4], dict)
@@ -354,6 +355,35 @@ def splat_records(name: str, variant: str | None = None):
     return out
 
 
+def lift_neighbors(name: str) -> dict:
+    """The same lift's stops on the levels above and below this one — the
+    building's implicit vertical edges, ordered by level elevation."""
+    dream = load_dream()
+    lift = (dream.get(name) or {}).get("lift")
+    out = {"up": None, "down": None}
+    if not lift:
+        return out
+    elev = {ln: L.get("elevation", 0) for ln, L in load_levels().items()}
+    stops = sorted((n for n, w in dream.items() if w.get("lift") == lift),
+                   key=lambda n: elev.get(dream[n]["level"], 0))
+    i = stops.index(name)
+    if i + 1 < len(stops):
+        out["up"] = stops[i + 1]
+    if i > 0:
+        out["down"] = stops[i - 1]
+    return out
+
+
+def is_lift_edge(a: str, b: str) -> bool:
+    """True for the same lift's stops on two different levels — an edge
+    the building carries, not edges.json."""
+    dream = load_dream()
+    va, vb = dream.get(a), dream.get(b)
+    return bool(va and vb and va.get("lift")
+                and va.get("lift") == vb.get("lift")
+                and va["level"] != vb["level"])
+
+
 def state_color(v: dict) -> str:
     """Red until the panorama is ALIGNED — an unsaved alignment is not an
     alignment — green once every look, the original and each variant, has
@@ -449,6 +479,8 @@ def edge_kind(frm: str, to: str) -> str:
     or out of a lift cabin, across a door segment, or nothing at all —
     the difference between crossing prompts."""
     dream = load_dream()
+    if is_lift_edge(frm, to):
+        return "lift_ride"
     if dream.get(to, {}).get("lift"):
         return "lift_in"
     if dream.get(frm, {}).get("lift"):

@@ -11,7 +11,7 @@ import html
 
 from config import (C_BG, C_DOOR, C_INK, C_LABEL, C_LANE, C_LIFT, C_SEL,
                     C_WALL)
-from store import state_color
+from store import lift_neighbors, state_color
 
 
 def level_scene(lv: dict, dream: dict, edges: list, level: str,
@@ -74,9 +74,10 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
     # draw with everything else below — diamonds among the dots
     for name, v in mine.items():
         inner = ""
-        if name == selected:
+        if name == selected or (selected_edge and name in selected_edge):
             inner += (f'<circle r="11" fill="none" stroke="{C_SEL}" '
                       f'stroke-width="2.5"/>')
+        if name == selected:
             if v["pano"]:
                 # where the panorama viewer is facing, driven live by
                 # dw_pano.js through --dwrot; hidden until the viewer
@@ -94,7 +95,15 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
         if v.get("lift"):
             # a lift stop wears a diamond — a different KIND of waypoint,
             # and the same lift's diamond on another level is the same
-            # cabin. Its fill is its work state, its magenta ring its nature.
+            # cabin. Its fill is its work state, its magenta ring its
+            # nature — and its up and down arrows are the building's
+            # vertical edges: lit where a stop exists on that side,
+            # dimmed where the shaft ends.
+            nb = lift_neighbors(name)
+            for dy, tgt in ((-1, nb["up"]), (1, nb["down"])):
+                col = C_LIFT if tgt else C_WALL
+                inner += (f'<path d="M0 {dy * 24} L-5 {dy * 13} '
+                          f'L5 {dy * 13} Z" fill="{col}"/>')
             inner += (f'<rect x="-6" y="-6" width="12" height="12" '
                       f'transform="rotate(45)" fill="{state_color(v)}" '
                       f'stroke="{C_LIFT}" stroke-width="2"/>')
