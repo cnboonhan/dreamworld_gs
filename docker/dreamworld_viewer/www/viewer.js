@@ -319,12 +319,71 @@ worker.onmessage = e => {
   }
 };
 
+// ---- preheat: main's habit, carried over — fetch the whole building's
+// worlds and crossings in the background, neighbours of where you stand
+// first, so a crossing never waits on the network. Records are kept as
+// buffers and COPIED before each transfer to the worker (a transferred
+// buffer is gone); crossing videos become blob URLs that start instantly.
+const heat = { records: new Map(), videos: new Map(), busy: false };
+const KEEP = 24;      // record buffers held; the oldest leave first
+
 async function fetchRecords(name, look) {
+  const key = tagOf(name, look);
+  if (heat.records.has(key)) {
+    const ab = heat.records.get(key);
+    heat.records.delete(key);
+    heat.records.set(key, ab);      // refreshed: recently used stays
+    return ab.slice(0);
+  }
   const info = graph.vertices[name].looks[look];
   const url = `${FILES}/${name}/${info.dir}/${info.records}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} for ${url}`);
-  return r.arrayBuffer();
+  const ab = await r.arrayBuffer();
+  heat.records.set(key, ab);
+  while (heat.records.size > KEEP)
+    heat.records.delete(heat.records.keys().next().value);
+  return ab.slice(0);
+}
+
+async function fetchVideo(key) {
+  if (heat.videos.has(key)) return heat.videos.get(key);
+  try {
+    const r = await fetch(`${FILES}/.crossings/${key}/crossing.mp4`);
+    if (!r.ok) return null;
+    const url = URL.createObjectURL(await r.blob());
+    heat.videos.set(key, url);
+    return url;
+  } catch (e) { return null; }
+}
+
+async function preheat() {
+  if (heat.busy || !graph) return;
+  heat.busy = true;
+  try {
+    const jobs = [];
+    const pushLooks = n => {
+      for (const look of Object.keys(graph.vertices[n].looks))
+        jobs.push(['r', n, look]);
+    };
+    if (st.at) {
+      for (const nb of neighbours(st.at)) pushLooks(nb);
+      for (const key of graph.crossings)
+        if (key.startsWith(tagOf(st.at, st.look) + '__'))
+          jobs.push(['v', key]);
+    }
+    for (const n of Object.keys(graph.vertices)) pushLooks(n);
+    for (const key of graph.crossings) jobs.push(['v', key]);
+    for (const j of jobs) {                 // sequential: gentle on tunnels
+      if (j[0] === 'r') {
+        if (heat.records.has(tagOf(j[1], j[2]))) continue;
+        await fetchRecords(j[1], j[2]);
+      } else {
+        await fetchVideo(j[1]);
+      }
+    }
+  } catch (e) { console.warn('preheat stopped:', e); }
+  heat.busy = false;
 }
 function showRecords(ab) {
   return new Promise(res => {
@@ -547,7 +606,9 @@ async function go() {
   st.transition = { to, look, phase: 'crossing' };
   pushState(true);
   if (hasVideo) {
-    await playVideo(`${FILES}/.crossings/${key}/crossing.mp4`);
+    const vurl = await fetchVideo(key)
+      || `${FILES}/.crossings/${key}/crossing.mp4`;
+    await playVideo(vurl);
   } else {
     $('shade').style.opacity = '1';
     await new Promise(r => setTimeout(r, 350));
@@ -574,6 +635,7 @@ async function go() {
   updateBar();
   st.moving = false;
   pushState(true);
+  preheat();               // the new neighbourhood warms behind you
 }
 
 function updateBar() {
@@ -636,6 +698,7 @@ async function boot() {
   const ab = await fetchRecords(start, st.look);
   await showRecords(ab);
   $('spin').style.display = 'none';
+  preheat();               // the rest of the building, quietly
 }
 frame();
 boot();
