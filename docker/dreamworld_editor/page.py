@@ -581,9 +581,10 @@ def splat_card(name, v, sel, refresh_all):
                           else e.value), refresh_all())
                       ).classes("w-40").props("dense options-dense")
 
-        gen = splatgen.status()
-        busy_here = bool(gen and gen.get("busy")
-                         and gen.get("scene") == str(scene))
+        gen = splatgen.status() or {}
+        queue = gen.get("queue") or []
+        busy_here = bool(gen.get("busy") and gen.get("scene") == str(scene))
+        queued_here = str(scene) in queue
 
         if ply:
             # the world itself: main's renderer, minimal. Drag looks,
@@ -607,6 +608,9 @@ def splat_card(name, v, sel, refresh_all):
             stage_lb = ui.label(gen.get("stage") or "starting").classes(
                 "text-xs text-gray-500")
             el_lb = ui.label("").classes("text-xs text-gray-500")
+            if queue:
+                ui.label(f"{len(queue)} more waiting behind this one"
+                         ).classes("text-xs text-gray-500")
 
             def tick():
                 s = splatgen.status()
@@ -620,8 +624,25 @@ def splat_card(name, v, sel, refresh_all):
             ui.timer(5.0, tick)
             return
 
+        if queued_here:
+            # waiting its turn: say so, and say whose turn it is
+            pos = queue.index(str(scene)) + 1
+            ui.label(f"queued — position {pos} of {len(queue)}").classes(
+                "text-xs text-[#f0a35e]")
+            if gen.get("scene"):
+                ui.label(f"generating now: {splatgen.short(gen['scene'])} "
+                         f"({gen.get('stage') or 'starting'})").classes(
+                    "text-xs text-gray-500")
+
+            def tick_q():
+                s = splatgen.status() or {}
+                if str(scene) not in (s.get("queue") or []):
+                    refresh_all()      # our turn came, or the queue died
+            ui.timer(5.0, tick_q)
+            return
+
         has_pano = store.pano_of(name, svar) is not None
-        done = gen.get("done") if gen else None
+        done = gen.get("done")
         if done and done.get("scene") == str(scene) and not done.get("ok"):
             ui.label(f"last generation failed: {done.get('error')}").classes(
                 "text-xs text-[#f85149]")
@@ -633,22 +654,24 @@ def splat_card(name, v, sel, refresh_all):
                               "or not running", type="negative")
                     return
                 try:
-                    await run.io_bound(splatgen.submit, name, svar)
+                    doc = await run.io_bound(splatgen.submit, name, svar)
                 except Exception as err:
                     ui.notify(str(err), type="negative")
                     return
+                pos = doc.get("position", 1)
                 ui.notify("generation started — six stages, roughly "
-                          "fifteen to twenty minutes")
+                          "fifteen to twenty minutes" if pos <= 1 else
+                          f"queued at position {pos}")
                 refresh_all()
 
-            busy_other = bool(gen and gen.get("busy"))
-            props = "dense" + ("" if has_pano and not busy_other
-                               else " disable")
+            busy_other = bool(gen.get("busy"))
+            props = "dense" + ("" if has_pano else " disable")
             ui.button("regenerate" if ply else "generate splat",
                       color="primary", on_click=generate).props(props)
-            if busy_other:
-                ui.label(f"generator busy: {gen.get('scene', '')}").classes(
-                    "text-xs text-[#f0a35e]")
-            elif not has_pano:
+            if not has_pano:
                 ui.label("this look has no panorama yet").classes(
+                    "text-xs text-gray-500")
+            elif busy_other:
+                ui.label(f"will queue behind "
+                         f"{splatgen.short(gen.get('scene', ''))}").classes(
                     "text-xs text-gray-500")

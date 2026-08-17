@@ -1,15 +1,21 @@
-"""One splat job at a time, over HTTP — main's generator without Prefect.
+"""Splat jobs over HTTP, one running and the rest queued — main's
+generator without Prefect.
 
 The image is main's splat-generator unchanged; this wrapper replaces the
-Prefect deployment with three endpoints, because v2 has no Prefect server
-and one building grows one splat at a time anyway:
+Prefect deployment. One job runs at a time — the stages want all four
+cards to themselves, main's own concurrency limit — and submissions made
+meanwhile wait in a FIFO the worker drains:
 
-    GET  /health              {"status": "ok", "busy": bool}
-    GET  /status              the running job: scene, stage, elapsed — or
-                              the last finished one
+    GET  /health              {"status": "ok", "busy": bool, "queued": N}
+    GET  /status              the running job (scene, stage, elapsed),
+                              the queue, and the last finished job
     POST /generate            {"scene": "/projects/.../splat", "steps": N}
-                              409 while a job runs; the scene dir must
-                              already hold panorama.png
+                              enqueued unless that scene is already
+                              running or waiting; the scene dir must hold
+                              panorama.png
+
+The queue lives in memory: a restart forgets it, which is honest — the
+jobs' inputs are all on disk and resubmission costs one click.
 
 The job subprocess drives main's flow.py directly — the same six stages,
 Prefect running them ephemerally — with the vLLM reached by service name.
@@ -34,6 +40,7 @@ STAGES = ["1. trajectory planning", "2. trajectory rendering",
           "5. 3DGS training", "6. export"]
 
 STATE = {"busy": False, "scene": None, "started": 0.0, "done": None}
+QUEUE = []
 LOCK = threading.Lock()
 
 
@@ -49,7 +56,7 @@ def stage_of(scene: str):
     return current
 
 
-def run_job(scene: str, steps: int) -> None:
+def run_job(scene: str, steps: int) -> dict:
     code = ("import sys; sys.path.insert(0, '/opt'); "
             "from flow import generate_world; "
             f"generate_world({scene!r}, gpus={GPUS}, steps={steps}, "
@@ -58,13 +65,28 @@ def run_job(scene: str, steps: int) -> None:
         proc = subprocess.run(["python", "-c", code], cwd="/opt",
                               stdout=log, stderr=subprocess.STDOUT)
     ok = (Path(scene) / "world.ply").is_file()
-    with LOCK:
-        STATE["done"] = {"scene": scene, "ok": ok,
-                         "seconds": round(time.time() - STATE["started"]),
-                         "error": None if ok else
-                         f"exit {proc.returncode} — see generate.log"}
-        STATE["busy"] = False
-        STATE["scene"] = None
+    return {"scene": scene, "ok": ok,
+            "seconds": round(time.time() - STATE["started"]),
+            "error": None if ok else
+            f"exit {proc.returncode} — see generate.log"}
+
+
+def worker() -> None:
+    while True:
+        with LOCK:
+            job = QUEUE.pop(0) if QUEUE else None
+            if job:
+                STATE.update(busy=True, scene=job["scene"],
+                             started=time.time())
+        if job is None:
+            time.sleep(1)
+            continue
+        result = run_job(job["scene"], job["steps"])
+        with LOCK:
+            STATE.update(done=result, busy=False, scene=None)
+
+
+threading.Thread(target=worker, daemon=True).start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -81,12 +103,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            return self._send(200, {"status": "ok", "busy": STATE["busy"]})
+            return self._send(200, {"status": "ok", "busy": STATE["busy"],
+                                    "queued": len(QUEUE)})
         if self.path == "/status":
-            doc = {k: STATE[k] for k in ("busy", "scene", "done")}
-            if STATE["busy"] and STATE["scene"]:
+            with LOCK:
+                doc = {k: STATE[k] for k in ("busy", "scene", "done")}
+                doc["queue"] = [j["scene"] for j in QUEUE]
+            if doc["busy"] and doc["scene"]:
                 doc["elapsed"] = round(time.time() - STATE["started"])
-                doc["stage"] = stage_of(STATE["scene"])
+                doc["stage"] = stage_of(doc["scene"])
             return self._send(200, doc)
         self._send(404, {"error": "?"})
 
@@ -100,14 +125,13 @@ class Handler(BaseHTTPRequestHandler):
         if not (Path(scene) / "panorama.png").is_file():
             return self._send(400, {"error": f"{scene}/panorama.png missing"})
         with LOCK:
-            if STATE["busy"]:
-                return self._send(409, {"error": "a generation is already "
-                                        "running", "scene": STATE["scene"]})
-            STATE.update(busy=True, scene=scene,
-                         started=time.time(), done=None)
-        threading.Thread(target=run_job, args=(scene, steps),
-                         daemon=True).start()
-        self._send(200, {"ok": True, "scene": scene})
+            if scene == STATE["scene"] or scene in (j["scene"]
+                                                    for j in QUEUE):
+                return self._send(409, {"error": "that scene is already "
+                                        "running or queued", "scene": scene})
+            QUEUE.append({"scene": scene, "steps": steps})
+            position = len(QUEUE) + (1 if STATE["busy"] else 0)
+        self._send(200, {"ok": True, "scene": scene, "position": position})
 
 
 srv = ThreadingHTTPServer(("0.0.0.0", 8000), Handler)

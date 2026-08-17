@@ -31,7 +31,7 @@ def status():
         return None
 
 
-def submit(name: str, variant: str | None, steps: int = 2000) -> None:
+def submit(name: str, variant: str | None, steps: int = 2000) -> dict:
     scene = store.splat_dir(name, variant)
     scene.mkdir(parents=True, exist_ok=True)
     Image.open(store.pano_of(name, variant)).convert("RGB").save(
@@ -39,5 +39,15 @@ def submit(name: str, variant: str | None, steps: int = 2000) -> None:
     r = requests.post(f"{URL}/generate",
                       json={"scene": str(scene), "steps": steps}, timeout=30)
     if r.status_code == 409:
-        raise RuntimeError("the generator is busy with another world")
+        raise RuntimeError("that world is already running or queued")
     r.raise_for_status()
+    return r.json()
+
+
+def short(scene: str) -> str:
+    """/projects/<p>/dreamworld/<vertex>/<splat[@v]> -> vertex · look"""
+    parts = str(scene).rstrip("/").split("/")
+    if len(parts) < 2:
+        return str(scene)
+    look = parts[-1].split("@", 1)
+    return f"{parts[-2]} · {look[1] if len(look) > 1 else 'original'}"
