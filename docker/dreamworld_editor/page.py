@@ -39,7 +39,8 @@ def index():
     ui.add_head_html(_script("dw_splat.js"))
     ui.add_head_html(_script("dw_walk.js"))
     sel = {"level": None, "vertex": None, "mode": None, "edge_from": None,
-           "variant": None, "splat_var": None, "edge": None, "busy": False}
+           "variant": None, "splat_var": None, "edge": None, "elook": {},
+           "busy": False}
 
     def select_vertex(nm):
         if nm != sel["vertex"]:
@@ -171,6 +172,8 @@ def index():
                 else:
                     e = nearest_edge(x, y, hit)
                     if e:            # vertices win; edges take the rest
+                        if e != sel["edge"]:
+                            sel["elook"] = {}   # looks belong to one edge
                         sel["edge"] = e
                         sel["vertex"] = None
             refresh_all()
@@ -228,8 +231,8 @@ def index():
                                           for e in store.load_edges()]:
                     edge_card(edge, dream, sel, refresh_all)
                     a, b = edge
-                    edge_direction_card(a, b, dream, "ab")
-                    edge_direction_card(b, a, dream, "ba")
+                    edge_direction_card(a, b, dream, "ab", sel, refresh_all)
+                    edge_direction_card(b, a, dream, "ba", sel, refresh_all)
                     return
                 sel["edge"] = None
                 name = sel["vertex"] if sel["vertex"] in dream else None
@@ -310,29 +313,49 @@ def edge_card(edge, dream, sel, refresh_all):
             "dense flat")
 
 
-def edge_direction_card(frm, to, dream, tag):
+def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
     """One direction of the crossing: both panoramas faced along the walk's
     own bearing — standing at each end, looking the way you would travel —
     and the splat transition beneath, scaffolded from main's mid-corridor
-    handover: out of the first world, crossfading into the second. The walk
+    handover: out of the first world, crossfading into the second. Each end
+    can wear any of its looks: the dropdowns pick the variant whose
+    panorama AND world this card uses, shared by both directions. The walk
     is a nominal straight line along each spawn's forward axis until
     splat-to-building placement gives it the real corridor."""
     va, vb = dream[frm], dream[to]
+
+    def look_of(nm):
+        lk = sel["elook"].get(nm)
+        return lk if lk in store.variants_of(nm) else None
+
+    la, lb = look_of(frm), look_of(to)
     # drawing pixels run y-down; bearings live in the y-up compass frame
     bearing = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
     with ui.card().classes("w-full bg-[#11151c]"):
         ui.label(f"{frm} → {to}").classes("font-bold")
 
         with ui.row().classes("w-full gap-2 flex-nowrap"):
-            for nm in (frm, to):
+            for nm, look in ((frm, la), (to, lb)):
                 with ui.column().classes("grow min-w-0 gap-1"):
-                    ui.label(f"at {nm}").classes("text-xs text-gray-500")
-                    if store.pano_of(nm) is None:
+                    ui.label(f"at {nm}").classes(
+                        "text-xs text-gray-500 truncate")
+                    variants = store.variants_of(nm)
+                    if variants:
+                        ui.select(["original"] + variants,
+                                  value=look or "original",
+                                  on_change=lambda e, nm=nm: (
+                                      sel["elook"].update(
+                                          {nm: None if e.value == "original"
+                                           else e.value}),
+                                      refresh_all())
+                                  ).classes("w-full").props(
+                            "dense options-dense")
+                    if store.pano_of(nm, look) is None:
                         ui.element("div").classes("w-full").style(
                             f"height:130px;border:2px dashed {C_WALL};"
                             "border-radius:6px")
                         continue
-                    prev = store.preview_of(nm)
+                    prev = store.preview_of(nm, look)
                     url = (f"{MOUNT}/files/{nm}/{prev.name}"
                            f"?t={int(prev.stat().st_mtime)}")
                     cv = ui.element("canvas").classes("w-full").style(
@@ -353,9 +376,11 @@ def edge_direction_card(frm, to, dream, tag):
                  "together — aligned ends show the same corridor from its "
                  "two ends").classes("text-xs text-gray-500")
 
-        pa, pb = store.splat_of(frm), store.splat_of(to)
+        pa, pb = store.splat_of(frm, la), store.splat_of(to, lb)
         if not (pa and pb):
-            missing = ", ".join(n for n, p in ((frm, pa), (to, pb)) if not p)
+            missing = ", ".join(f"{n} ({lk or 'original'})"
+                                for n, lk, p in ((frm, la, pa), (to, lb, pb))
+                                if not p)
             ui.label(f"transition needs a splat at both ends — missing: "
                      f"{missing}").classes("text-xs text-[#f0a35e]")
             return
@@ -365,12 +390,13 @@ def edge_direction_card(frm, to, dream, tag):
                 "absolute inset-0 w-full h-full").style(
                 f"background:{C_BG};border-radius:6px;pointer-events:none")
                 for _ in (frm, to)]
-        ua, ub = (f"{MOUNT}/files/{frm}/splat", f"{MOUNT}/files/{to}/splat")
+        ua = f"{MOUNT}/files/{frm}/{store.splat_dir(frm, la).name}"
+        ub = f"{MOUNT}/files/{to}/{store.splat_dir(to, lb).name}"
         ta, tb = int(pa.stat().st_mtime), int(pb.stat().st_mtime)
 
         async def boot():
-            ra = await run.io_bound(store.splat_records, frm, None)
-            rb = await run.io_bound(store.splat_records, to, None)
+            ra = await run.io_bound(store.splat_records, frm, la)
+            rb = await run.io_bound(store.splat_records, to, lb)
             if not (ra and rb):
                 return
             ui.run_javascript(
