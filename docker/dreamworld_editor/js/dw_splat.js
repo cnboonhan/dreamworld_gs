@@ -536,14 +536,19 @@ void main () {
     inv = translate4(inv, 0, 0, e.deltaY * -0.003);
     viewMatrix = invert4(inv); }, { passive: false });
 
-  fetch(camUrl).then(r => r.ok ? r.json() : null).then(cam => {
-    // make_spawn_cam writes {"viewMatrix": [...16]}; accept a bare array too
+  // the camera can arrive as a URL (make_spawn_cam's {"viewMatrix": [...]}
+  // or a bare array) or as an inline 16-float array — the edge transitions
+  // compute theirs server-side per bearing and pass them directly
+  const applyCam = cam => {
     const m = Array.isArray(cam) ? cam : cam && cam.viewMatrix;
     if (Array.isArray(m) && m.length === 16) {
       viewMatrix = m;
       baseView = m;
     }
-  }).catch(() => {});
+  };
+  if (Array.isArray(camUrl)) applyCam(camUrl);
+  else fetch(camUrl).then(r => r.ok ? r.json() : null)
+    .then(applyCam).catch(() => {});
   // a named instance can be walked from outside: offset(z) places the
   // camera z units along the spawn view's own forward axis — what the
   // edge transition drives

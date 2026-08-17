@@ -392,6 +392,14 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
         ua = f"{MOUNT}/files/{frm}/{store.splat_dir(frm, la).name}"
         ub = f"{MOUNT}/files/{to}/{store.splat_dir(to, lb).name}"
         ta, tb = int(pa.stat().st_mtime), int(pb.stat().st_mtime)
+        # each world's camera stands at its capture point facing the edge's
+        # building bearing — both ends of the walk look the same way, which
+        # is what makes the crossing line up. Spawn cam is the fallback for
+        # worlds generated before position meta was kept.
+        cam_a = store.edge_view(frm, la, bearing) \
+            or f"'{ua}/world.cam.json?t={ta}'"
+        cam_b = store.edge_view(to, lb, bearing) \
+            or f"'{ub}/world.cam.json?t={tb}'"
 
         async def boot():
             ra = await run.io_bound(store.splat_records, frm, la)
@@ -401,10 +409,10 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
             ui.run_javascript(
                 f"dwSplat({cvs[0].id}, "
                 f"'{ua}/{ra.name}?t={int(ra.stat().st_mtime)}', "
-                f"'{ua}/world.cam.json?t={ta}', 'ws_{tag}_a');"
+                f"{cam_a}, 'ws_{tag}_a');"
                 f"dwSplat({cvs[1].id}, "
                 f"'{ub}/{rb.name}?t={int(rb.stat().st_mtime)}', "
-                f"'{ub}/world.cam.json?t={tb}', 'ws_{tag}_b');"
+                f"{cam_b}, 'ws_{tag}_b');"
                 f"dwWalkInit('{tag}', {cvs[0].id}, {cvs[1].id}, "
                 f"'ws_{tag}_a', 'ws_{tag}_b', 4.0)")
         ui.timer(0.15, boot, once=True)

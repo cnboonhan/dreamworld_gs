@@ -207,6 +207,43 @@ def splat_of(name: str, variant: str | None = None):
     return p if p.is_file() else None
 
 
+def edge_view(name: str, variant: str | None, bearing: float):
+    """A camera standing at this world's capture point, facing a BUILDING
+    bearing — the walkthrough camera for an edge, without marks.
+
+    Ported from main's make_spawn_cam and leaning on what v2 knows that
+    main didn't use: the panorama was aligned to the building BEFORE
+    generation, so HY-World's facing_direction (the pano centre, in ply
+    coordinates) is building east, its up_direction is building up, and
+    center_point is the capture position. A bearing then rotates east
+    toward north (up cross east) in the ply's own frame. The camera rows
+    are main's exactly — [right, fwd x right, fwd], the y-down frame the
+    viewer projects with. Scale stays unknown (main measured a 4.5x
+    spread), so walk distances remain nominal; direction is what this
+    fixes."""
+    meta_p = splat_dir(name, variant) / "gs_result" / "ply" \
+        / "position_meta_info.json"
+    if not meta_p.is_file():
+        return None
+    meta = json.loads(meta_p.read_text())
+
+    def unit(v):
+        v = np.asarray(v, dtype=np.float64)
+        return v / max(np.linalg.norm(v), 1e-9)
+
+    up = unit(meta["up_direction"])
+    east = unit(meta["facing_direction"])
+    north = unit(np.cross(up, east))
+    fwd = math.cos(bearing) * east + math.sin(bearing) * north
+    eye = np.asarray(meta["center_point"], dtype=np.float64)
+    right = unit(np.cross(fwd, up))
+    R = np.stack([right, np.cross(fwd, right), fwd])
+    m = np.eye(4)
+    m[:3, :3] = R
+    m[:3, 3] = -R @ eye
+    return [round(float(v), 6) for v in m.T.flatten()]
+
+
 def splat_records(name: str, variant: str | None = None):
     """world.splat beside world.ply: the viewer's 32-byte records (main's
     format — position, scale, rgba, quaternion), importance-sorted, ~40%
