@@ -83,6 +83,51 @@ window.dwPano = (id, url, offId, ns, opts) => {
   cv.addEventListener('wheel', e => { e.preventDefault();
     st.fov = Math.max(0.5, Math.min(2.6, st.fov * (1 + e.deltaY * 0.001)));
   }, { passive: false });
+  // the edit rectangle: what part of the view the edit will touch. Movable
+  // by its body, resizable by its corner; stored as fractions so it renders
+  // the same place through canvas resizes. Its sub-frustum IS what view()
+  // reports, so the crop the model edits is exactly what the box shows.
+  if (opts.rect) {
+    st.rect = { fx: 0.15, fy: 0.18, fw: 0.7, fh: 0.62 };
+    const rc = document.createElement('div');
+    rc.style.cssText = 'position:absolute;border:1.5px dashed #4ea1ff;' +
+      'background:rgba(78,161,255,.08);cursor:move;touch-action:none;' +
+      'z-index:4;border-radius:3px';
+    const hd = document.createElement('div');
+    hd.style.cssText = 'position:absolute;right:-8px;bottom:-8px;' +
+      'width:16px;height:16px;border-radius:4px;background:#4ea1ff;' +
+      'cursor:nwse-resize;touch-action:none';
+    rc.appendChild(hd);
+    cv.parentElement.appendChild(rc);
+    st.place = () => { const W = cv.clientWidth, H = cv.clientHeight;
+      rc.style.left = st.rect.fx * W + 'px';
+      rc.style.top = st.rect.fy * H + 'px';
+      rc.style.width = st.rect.fw * W + 'px';
+      rc.style.height = st.rect.fh * H + 'px'; };
+    st.place();
+    let mode = null, last = null;
+    const grab = m => e => { mode = m; last = [e.clientX, e.clientY];
+      e.stopPropagation(); e.preventDefault();
+      e.target.setPointerCapture(e.pointerId); };
+    rc.addEventListener('pointerdown', grab('move'));
+    hd.addEventListener('pointerdown', grab('size'));
+    const track = e => { if (!mode) return;
+      const W = cv.clientWidth, H = cv.clientHeight, r = st.rect;
+      const dx = (e.clientX - last[0]) / W, dy = (e.clientY - last[1]) / H;
+      last = [e.clientX, e.clientY];
+      if (mode === 'move') {
+        r.fx = Math.min(1 - r.fw, Math.max(0, r.fx + dx));
+        r.fy = Math.min(1 - r.fh, Math.max(0, r.fy + dy));
+      } else {
+        r.fw = Math.min(1 - r.fx, Math.max(0.1, r.fw + dx));
+        r.fh = Math.min(1 - r.fy, Math.max(0.1, r.fh + dy));
+      }
+      st.place(); };
+    rc.addEventListener('pointermove', track);
+    hd.addEventListener('pointermove', track);
+    rc.addEventListener('pointerup', () => mode = null);
+    hd.addEventListener('pointerup', () => mode = null);
+  }
   const im = new Image();
   im.onload = () => { gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, im);
@@ -91,7 +136,8 @@ window.dwPano = (id, url, offId, ns, opts) => {
   const loop = () => {
     if (!cv.isConnected) return;               // gone with its card
     const w = cv.clientWidth, h = cv.clientHeight;
-    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h;
+      if (st.place) st.place(); }
     gl.viewport(0, 0, w, h);
     gl.uniform2f(U.res, w, h);
     gl.uniform1f(U.yaw, st.look); gl.uniform1f(U.pitch, st.pitch);
@@ -109,8 +155,32 @@ window.dwPano = (id, url, offId, ns, opts) => {
     // so discarding the pending turn is all a reset is
     reset: () => { st.off = 0; readout(); },
     off: () => st.off,
-    // what this camera is facing, for the perspective edit
-    view: () => ({ yaw: st.look, pitch: st.pitch, fov: st.fov, off: st.off,
-                   aspect: cv.clientHeight / Math.max(1, cv.clientWidth) }),
+    // what to edit: the rectangle's sub-frustum when there is one — its
+    // centre ray re-aimed through the same camera basis as the shader,
+    // its width shrinking the fov — else the whole camera view
+    view: () => {
+      const W = Math.max(1, cv.clientWidth), H = Math.max(1, cv.clientHeight);
+      let yaw = st.look, pitch = st.pitch, fov = st.fov, aspect = H / W;
+      if (st.rect) {
+        const r = st.rect, t = Math.tan(st.fov / 2);
+        const ncx = (r.fx + r.fw / 2) * 2 - 1;
+        const ncy = -((r.fy + r.fh / 2) * H - H / 2) / (W / 2);
+        const cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
+        const F = [cp * Math.cos(st.look), cp * Math.sin(st.look), sp];
+        let R = [F[1], -F[0], 0];
+        const rn = Math.hypot(R[0], R[1]) || 1;
+        R = [R[0] / rn, R[1] / rn, 0];
+        const U = [R[1] * F[2], -R[0] * F[2], R[0] * F[1] - R[1] * F[0]];
+        const d = [F[0] + ncx * t * R[0] + ncy * t * U[0],
+                   F[1] + ncx * t * R[1] + ncy * t * U[1],
+                   F[2] + ncx * t * R[2] + ncy * t * U[2]];
+        const dn = Math.hypot(d[0], d[1], d[2]) || 1;
+        yaw = Math.atan2(d[1], d[0]);
+        pitch = Math.asin(Math.max(-1, Math.min(1, d[2] / dn)));
+        fov = 2 * Math.atan(t * r.fw);
+        aspect = (r.fh * H) / (r.fw * W);
+      }
+      return { yaw, pitch, fov, off: st.off, aspect };
+    },
   };
 };

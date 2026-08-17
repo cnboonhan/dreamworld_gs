@@ -8,6 +8,7 @@ dreamworld tree changes under it.
 """
 
 import math
+import time
 from pathlib import Path
 
 from nicegui import run, ui
@@ -436,9 +437,22 @@ def variants_card(name, v, sel, refresh_all):
                 "text-xs text-gray-500")
             return
 
+        # an edit in flight: the bar lives here, in the box, not a popup
+        if sel["busy"]:
+            ui.label(f"editing {sel['variant']} — the change will land "
+                     f"inside the rectangle you set").classes(
+                "text-xs text-gray-500")
+            ui.linear_progress(show_value=False).props(
+                "indeterminate").classes("w-full")
+            elapsed = ui.label("0s elapsed").classes("text-xs text-gray-500")
+            t0 = sel.get("busy_t0") or time.time()
+            ui.timer(1.0, lambda: elapsed.set_text(
+                f"{int(time.time() - t0)}s elapsed"))
+            return
+
         # the variant's own viewer, on its own camera: aiming an edit here
         # never turns the alignment view above. Free-look — drag looks
-        # around, pitch included; the ring marks where the edit will land.
+        # around, pitch included; the rectangle IS the crop the edit gets.
         var = sel["variant"]
         p = store.preview_of(name, var)
         url = f"{MOUNT}/files/{name}/{p.name}?t={int(p.stat().st_mtime)}"
@@ -446,13 +460,9 @@ def variants_card(name, v, sel, refresh_all):
             cv = ui.element("canvas").classes("w-full").style(
                 f"height:260px;display:block;cursor:grab;"
                 f"touch-action:none;background:{C_BG};border-radius:6px")
-            ui.html('<div style="position:absolute;left:50%;top:50%;'
-                    'width:16px;height:16px;margin:-8px;border:1.5px solid '
-                    '#4ea1ff;border-radius:8px;opacity:.8;'
-                    'pointer-events:none"></div>')
         ui.timer(0.15, lambda: ui.run_javascript(
-            f"dwPano({cv.id}, '{url}', -1, 'edit', {{free:true}})"),
-            once=True)
+            f"dwPano({cv.id}, '{url}', -1, 'edit', "
+            f"{{free:true, rect:true}})"), once=True)
 
         prompt_box = ui.textarea(
             "how to modify what this viewer is facing",
@@ -479,9 +489,8 @@ def variants_card(name, v, sel, refresh_all):
                           type="negative")
                 return
             sel["busy"] = True
-            note = ui.notification(f"editing what you are facing → {var} … "
-                                   f"(a minute or two)", spinner=True,
-                                   timeout=None)
+            sel["busy_t0"] = time.time()
+            refresh_all()            # the box becomes the progress bar
             try:
                 png, msg = await run.io_bound(
                     restyle.perspective_edit,
@@ -495,7 +504,6 @@ def variants_card(name, v, sel, refresh_all):
                 ui.notify(f"edit failed: {err}", type="negative")
             finally:
                 sel["busy"] = False
-                note.dismiss()
             refresh_all()
 
         def delete_variant():
@@ -512,14 +520,24 @@ def variants_card(name, v, sel, refresh_all):
                     ui.button("keep", on_click=dlg.close)
             dlg.open()
 
+        def undo():
+            ok = store.undo_variant(name, sel["variant"])
+            ui.notify("restored the previous look — undo again to swap back"
+                      if ok else "nothing to undo")
+            refresh_all()
+
         with ui.row().classes("w-full items-center gap-2"):
             ui.button("edit", color="primary",
                       on_click=edit_variant).props("dense")
+            ui.button("undo", on_click=undo).props(
+                "dense flat" + ("" if store.has_undo(name, var)
+                                else " disable"))
             ui.button("delete", color="negative",
                       on_click=delete_variant).props("dense")
-        ui.label("drag to look, scroll to zoom — the edit lands on what "
-                 "the ring is over, in place; the variant's alignment "
-                 "survives").classes("text-xs text-gray-500")
+        ui.label("drag to look, scroll to zoom, place the rectangle over "
+                 "the spot to change — the edit lands inside it, in place; "
+                 "the variant's alignment survives").classes(
+            "text-xs text-gray-500")
 
 
 def splat_card():

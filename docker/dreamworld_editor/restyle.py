@@ -113,8 +113,10 @@ def perspective_edit(src_path, prompt: str, view: dict, seed: int = 0):
     # alignment turn, so the file is sampled at look minus that turn
     yaw = float(view["yaw"]) - math.radians(float(view.get("off", 0)))
     pitch = float(view["pitch"])
-    fov = min(max(float(view.get("fov", 1.4)), 0.5), 2.3)
-    aspect = min(max(float(view.get("aspect", 0.66)), 0.4), 1.4)
+    # looser than main's clamps: the edit rectangle can name a sub-frustum
+    # much narrower or taller than a whole viewport
+    fov = min(max(float(view.get("fov", 1.4)), 0.2), 2.3)
+    aspect = min(max(float(view.get("aspect", 0.66)), 0.3), 2.0)
     Wp = 1024
     Hp = int(round(Wp * aspect / 16) * 16)
     crop = _extract_perspective(base, yaw, pitch, fov, Wp, Hp)

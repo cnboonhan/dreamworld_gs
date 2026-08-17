@@ -88,7 +88,9 @@ def variants_of(name: str) -> list:
     out = set()
     for f in d.glob("pano@*"):
         stem = f.stem.split("@", 1)[1]
-        if not stem.endswith(".preview"):
+        # valid names carry no dot, so a dotted stem is machinery:
+        # .preview, .undo
+        if "." not in stem:
             out.add(stem)
     return sorted(out)
 
@@ -107,23 +109,63 @@ def create_variant(name: str, variant: str) -> None:
 def save_variant(name: str, variant: str, png: bytes,
                  keep_alignment: bool = False) -> None:
     """A fresh generation replaces the variant entire. An EDIT keeps its
-    alignment record: the edit was built on the variant's rolled pixels,
-    so the orientation the record describes survives in the new image."""
+    alignment record — it was built on the variant's rolled pixels — and
+    stashes the previous image as the undo step."""
+    d = DREAM / name
     rec = _aligned_rec(name, variant)
     aligned = rec.read_text() if (keep_alignment and rec.is_file()) else None
-    delete_variant(name, variant)
-    (DREAM / name / f"{_stem(variant)}.png").write_bytes(png)
+    prev = pano_of(name, variant) if keep_alignment else None
+    if prev:
+        for old in d.glob(f"{_stem(variant)}.undo.*"):
+            old.unlink()
+        prev.rename(d / f"{_stem(variant)}.undo{prev.suffix}")
+        if aligned is not None:
+            (d / f"aligned@{variant}.undo.json").write_text(aligned)
+    delete_variant(name, variant, keep_undo=True)
+    (d / f"{_stem(variant)}.png").write_bytes(png)
     preview_of(name, variant)
     if aligned is not None:
         rec.write_text(aligned)
 
 
-def delete_variant(name: str, variant: str) -> None:
+def has_undo(name: str, variant: str) -> bool:
+    return any((DREAM / name).glob(f"{_stem(variant)}.undo.*"))
+
+
+def undo_variant(name: str, variant: str) -> bool:
+    """Swap the variant with its pre-edit self — so undo twice is redo.
+    The alignment records ride along with their images."""
+    d = DREAM / name
+    und = next(iter(d.glob(f"{_stem(variant)}.undo.*")), None)
+    if und is None:
+        return False
+    cur = pano_of(name, variant)
+    if cur:
+        cur.rename(d / f"{_stem(variant)}.swap{cur.suffix}")
+    und.rename(d / f"{_stem(variant)}{und.suffix}")
+    for s in d.glob(f"{_stem(variant)}.swap.*"):
+        s.rename(d / f"{_stem(variant)}.undo{s.suffix}")
+    rec = _aligned_rec(name, variant)
+    urec = d / f"aligned@{variant}.undo.json"
+    cur_txt = rec.read_text() if rec.is_file() else None
+    und_txt = urec.read_text() if urec.is_file() else None
+    for f, txt in ((rec, und_txt), (urec, cur_txt)):
+        f.write_text(txt) if txt is not None else f.unlink(missing_ok=True)
+    (d / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
+    preview_of(name, variant)
+    return True
+
+
+def delete_variant(name: str, variant: str, keep_undo: bool = False) -> None:
     d = DREAM / name
     for ext in (".jpg", ".jpeg", ".png"):
         (d / f"{_stem(variant)}{ext}").unlink(missing_ok=True)
     (d / f"{_stem(variant)}.preview.jpg").unlink(missing_ok=True)
     (d / f"aligned@{variant}.json").unlink(missing_ok=True)
+    if not keep_undo:
+        for f in d.glob(f"{_stem(variant)}.undo.*"):
+            f.unlink()
+        (d / f"aligned@{variant}.undo.json").unlink(missing_ok=True)
 
 
 def load_dream() -> dict:
