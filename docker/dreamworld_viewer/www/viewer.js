@@ -207,16 +207,23 @@ let lastPush = 0, lastSent = '', coreOk = 0;
 function coreMark() {
   const el = $('core');
   if (!el) return;
+  if (!st.follow) {
+    el.textContent = '\u25cb core unsynced';
+    el.style.color = '#8b98a8';
+    return;
+  }
   const live = performance.now() - coreOk < 3000;
   el.textContent = live ? '\u25cf core synced' : '\u25cb core unreachable';
   el.style.color = live ? '#3fb950' : '#f85149';
 }
 setInterval(coreMark, 1000);
+// the chip IS the toggle: click to walk free of the core, click again
+// to follow — and catch up to wherever it went meanwhile
 addEventListener('DOMContentLoaded', () => {
-  const f = $('follow');
-  if (f) f.onchange = () => {
-    st.follow = f.checked;
-    if (st.follow) lastSeq = 0;   // catch up to wherever the core is
+  $('core').onclick = () => {
+    st.follow = !st.follow;
+    if (st.follow) lastSeq = 0;
+    coreMark();
   };
 });
 
