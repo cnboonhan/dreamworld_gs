@@ -93,6 +93,17 @@ def variants_of(name: str) -> list:
     return sorted(out)
 
 
+def create_variant(name: str, variant: str) -> None:
+    """A new variant IS the original, copied — pixels, preview and alignment
+    record alike. It only becomes a different look when edited."""
+    src = pano_of(name)
+    shutil.copy2(src, DREAM / name / f"{_stem(variant)}{src.suffix}")
+    preview_of(name, variant)
+    rec = _aligned_rec(name, None)
+    if rec.is_file():
+        shutil.copy2(rec, _aligned_rec(name, variant))
+
+
 def save_variant(name: str, variant: str, png: bytes,
                  keep_alignment: bool = False) -> None:
     """A fresh generation replaces the variant entire. An EDIT keeps its
