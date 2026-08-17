@@ -227,7 +227,9 @@ def index():
                         and set(edge) in [set(e)
                                           for e in store.load_edges()]:
                     edge_card(edge, dream, sel, refresh_all)
-                    transition_card(edge, dream)
+                    a, b = edge
+                    edge_direction_card(a, b, dream, "ab")
+                    edge_direction_card(b, a, dream, "ba")
                     return
                 sel["edge"] = None
                 name = sel["vertex"] if sel["vertex"] in dream else None
@@ -308,49 +310,79 @@ def edge_card(edge, dream, sel, refresh_all):
             "dense flat")
 
 
-def transition_card(edge, dream):
-    """The crossing, scaffolded from main's mid-corridor handover: walk out
-    of A, crossfade through the middle, arrive into B. The walk is a
-    nominal straight line along each spawn's forward axis until
+def edge_direction_card(frm, to, dream, tag):
+    """One direction of the crossing: both panoramas faced along the walk's
+    own bearing — standing at each end, looking the way you would travel —
+    and the splat transition beneath, scaffolded from main's mid-corridor
+    handover: out of the first world, crossfading into the second. The walk
+    is a nominal straight line along each spawn's forward axis until
     splat-to-building placement gives it the real corridor."""
-    a, b = edge
+    va, vb = dream[frm], dream[to]
+    # drawing pixels run y-down; bearings live in the y-up compass frame
+    bearing = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
     with ui.card().classes("w-full bg-[#11151c]"):
-        ui.label("transition").classes("font-bold")
-        pa, pb = store.splat_of(a), store.splat_of(b)
+        ui.label(f"{frm} → {to}").classes("font-bold")
+
+        with ui.row().classes("w-full gap-2 flex-nowrap"):
+            for nm in (frm, to):
+                with ui.column().classes("grow min-w-0 gap-1"):
+                    ui.label(f"at {nm}").classes("text-xs text-gray-500")
+                    if store.pano_of(nm) is None:
+                        ui.element("div").classes("w-full").style(
+                            f"height:130px;border:2px dashed {C_WALL};"
+                            "border-radius:6px")
+                        continue
+                    prev = store.preview_of(nm)
+                    url = (f"{MOUNT}/files/{nm}/{prev.name}"
+                           f"?t={int(prev.stat().st_mtime)}")
+                    cv = ui.element("canvas").classes("w-full").style(
+                        f"height:130px;display:block;cursor:grab;"
+                        f"touch-action:none;background:{C_BG};"
+                        "border-radius:6px")
+                    ns = f"ep_{tag}_{nm}"
+                    # solo: faced once at the edge's bearing, uncoupled
+                    # from the vertex viewers' shared heading
+                    ui.timer(0.15, lambda cv=cv, url=url, ns=ns:
+                             ui.run_javascript(
+                                 f"dwPano({cv.id}, '{url}', -1, '{ns}', "
+                                 f"{{free:true, solo:true}});"
+                                 f"dwp('{ns}','face',{bearing})"),
+                             once=True)
+        ui.label("both panoramas face the direction of travel — aligned "
+                 "ends should show the same corridor from its two ends"
+                 ).classes("text-xs text-gray-500")
+
+        pa, pb = store.splat_of(frm), store.splat_of(to)
         if not (pa and pb):
-            missing = ", ".join(n for n, p in ((a, pa), (b, pb)) if not p)
-            ui.label(f"needs a splat at both ends — missing: {missing}"
-                     ).classes("text-xs text-[#f0a35e]")
+            missing = ", ".join(n for n, p in ((frm, pa), (to, pb)) if not p)
+            ui.label(f"transition needs a splat at both ends — missing: "
+                     f"{missing}").classes("text-xs text-[#f0a35e]")
             return
         with ui.element("div").classes("w-full relative").style(
-                "height:320px"):
-            cvs = []
-            for nm, p in ((a, pa), (b, pb)):
-                cvs.append(ui.element("canvas").classes(
-                    "absolute inset-0 w-full h-full").style(
-                    f"background:{C_BG};border-radius:6px;"
-                    "pointer-events:none"))
-        ua = f"{MOUNT}/files/{a}/splat"
-        ub = f"{MOUNT}/files/{b}/splat"
+                "height:260px"):
+            cvs = [ui.element("canvas").classes(
+                "absolute inset-0 w-full h-full").style(
+                f"background:{C_BG};border-radius:6px;pointer-events:none")
+                for _ in (frm, to)]
+        ua, ub = (f"{MOUNT}/files/{frm}/splat", f"{MOUNT}/files/{to}/splat")
         ta, tb = int(pa.stat().st_mtime), int(pb.stat().st_mtime)
         ui.timer(0.15, lambda: ui.run_javascript(
             f"dwSplat({cvs[0].id}, '{ua}/world.ply?t={ta}', "
-            f"'{ua}/world.cam.json?t={ta}', 'walkA');"
+            f"'{ua}/world.cam.json?t={ta}', 'ws_{tag}_a');"
             f"dwSplat({cvs[1].id}, '{ub}/world.ply?t={tb}', "
-            f"'{ub}/world.cam.json?t={tb}', 'walkB');"
-            f"dwWalkInit({cvs[0].id}, {cvs[1].id}, 4.0)"), once=True)
+            f"'{ub}/world.cam.json?t={tb}', 'ws_{tag}_b');"
+            f"dwWalkInit('{tag}', {cvs[0].id}, {cvs[1].id}, "
+            f"'ws_{tag}_a', 'ws_{tag}_b', 4.0)"), once=True)
         with ui.row().classes("w-full items-center gap-2"):
             ui.button(icon="play_arrow", on_click=lambda: ui.run_javascript(
-                "window.dwWalkPlay && dwWalkPlay(6)")).props("dense flat")
+                f"window.dwWalk && dwWalk('{tag}','play',6)")).props(
+                "dense flat")
             slider = ui.slider(min=0.0, max=1.0, step=0.01, value=0.0
                                ).classes("grow")
             slider.on("update:model-value",
                       lambda e: ui.run_javascript(
-                          f"window.dwWalkT && dwWalkT({e.args})"),
+                          f"window.dwWalk && dwWalk('{tag}','t',{e.args})"),
                       throttle=0.05)
-        ui.label(f"walk {a} → {b}: out along A's view, crossfading into B "
-                 "mid-way — a nominal straight line until the splats are "
-                 "placed on the building").classes("text-xs text-gray-500")
 
 
 # ---- the three vertex boxes ------------------------------------------------------
