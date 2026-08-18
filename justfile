@@ -41,12 +41,32 @@ _env:
 world: _env
     docker compose run --rm --no-deps rmfsim world {{project}}
 
-# Start everything behind the one forwarded port.
+# FULL: everything — authoring, simulation, and all four generators (8 GPUs).
 up: _env
-    docker compose up -d --build --remove-orphans
+    docker compose --profile full up -d --build
     @echo "  http://localhost:8080                     every surface, one port"
     @echo "  http://localhost:8080/sim_editor          trace the building map"
     @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
     @echo "  http://localhost:8080/dreamworld_viewer   walk the dreamworld"
     @echo "  http://localhost:8080/rmfsim              the building under simulation"
     @echo "  http://localhost:8080/harness             drive it by tool call"
+
+# MINIMAL: walk + simulate + command an already-generated dreamworld
+# (1 GPU, for the mission agent's VLM). No generators, no traffic editor.
+minimal: _env
+    docker compose up -d --build
+    @echo "  http://localhost:8080/dreamworld_viewer   walk the dreamworld"
+    @echo "  http://localhost:8080/rmfsim              the building under simulation"
+    @echo "  http://localhost:8080/harness             drive it by tool call"
+
+# Pack the walkable demo into assets/projects/<project>/bundle: the graph,
+# every world's records, every crossing video — and nothing else (the
+# panoramas never leave the dreamworld tree).
+bundle proj=project:
+    docker compose run --rm --no-deps dreamworld_editor \
+        python bundle.py /projects/{{proj}}/bundle
+
+# DEMO: the bundle behind one nginx — browser only, no backend, no GPU.
+demo:
+    docker compose -f compose.demo.yaml up -d --build
+    @echo "  http://localhost:${DW_DEMO_PORT:-8080}/dreamworld_viewer   walk the bundle"

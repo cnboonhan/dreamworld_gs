@@ -1,0 +1,20 @@
+# The walkthrough alone, browser-only: one nginx serving the viewer and a
+# static bundle. No backend, no GPU, no network calls beyond this box.
+#
+#   just bundle     build assets/projects/<project>/bundle from the tree
+#   just demo       serve it at ${DW_DEMO_PORT:-8080}
+name: dreamworld-demo
+
+services:
+  demo:
+    build:
+      context: ./docker
+      dockerfile: dreamworld_viewer/dreamworld_viewer.Dockerfile
+    image: dreamworld/dreamworld_viewer:latest
+    container_name: dreamworld-demo
+    ports:
+      - "${DW_DEMO_PORT:-8080}:80"
+    volumes:
+      - ./assets/projects/${DW_PROJECT:-multilevel_office}/bundle:/bundle:ro
+      - ./docker/dreamworld_viewer/demo.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped

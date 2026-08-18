@@ -875,6 +875,9 @@ async function boot() {
   try {
     core = await (await fetch('/dreamworld_core/position')).json();
   } catch (e) { core = null; }
+  // no core at all — the bundled demo: walk free from the first click
+  // rather than posting every move to a wall
+  if (core === null) { st.follow = false; coreMark(); }
   let start, startLook = null;
   if (core && core.position && graph.vertices[core.position.at]
       && graph.vertices[core.position.at].looks[core.position.look]) {
