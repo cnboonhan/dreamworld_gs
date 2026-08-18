@@ -172,6 +172,8 @@ def index():
                 else:
                     ui.notify(store.add_edge(sel["edge_from"], near))
                     sel["edge_from"] = None
+                    sel["mode"] = None  # one edge per press, like vertex
+                    tools.refresh()
             else:
                 near = nearest(x, y, hit)
                 lift_arrow = None
@@ -448,16 +450,10 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                                  f"{{free:true, group:'ep_{tag}'}});"
                                  f"dwp('{ns}','face',{bearing})"),
                              once=True)
-        if store.is_lift_edge(frm, to):
-            # the ride is vertical: there is no corridor for two splats to
-            # hand over in the middle of, so no walkthrough — the crossing
-            # video below is what carries a lift ride
-            ui.label("both panoramas face building east and pan together — "
-                     "a lift ride is vertical, so there is no splat "
-                     "walkthrough; the crossing video below carries "
-                     "it").classes("text-xs text-gray-500")
-            return
-        ui.label("both panoramas face the direction of travel and pan "
+        ui.label("both panoramas face building east and pan together — a "
+                 "lift ride is vertical, so east stands in for a walk "
+                 "direction" if store.is_lift_edge(frm, to) else
+                 "both panoramas face the direction of travel and pan "
                  "together — aligned ends show the same corridor from its "
                  "two ends").classes("text-xs text-gray-500")
 

@@ -105,7 +105,14 @@ def submit(frm, la, to, lb, prompt: str) -> dict:
     prompt beside them, and queue the crossing."""
     dream = store.load_dream()
     a, b = dream[frm], dream[to]
-    bearing = math.atan2(-(b["y"] - a["y"]), b["x"] - a["x"])
+    if a["level"] != b["level"]:
+        # a lift ride is vertical: the drawing offset between the two
+        # cabins is noise from each level's own pixel frame, and atan2 of
+        # noise is a random heading. Both frames face building east — the
+        # same convention the edge panel and the walkthrough use.
+        bearing = 0.0
+    else:
+        bearing = math.atan2(-(b["y"] - a["y"]), b["x"] - a["x"])
     d = job_dir(frm, la, to, lb)
     d.mkdir(parents=True, exist_ok=True)
     for nm, look, tag in ((frm, la, "first"), (to, lb, "last")):

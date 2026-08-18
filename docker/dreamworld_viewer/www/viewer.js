@@ -297,6 +297,9 @@ async function jumpTo(to, look) {
 }
 function bearingToFrom(frm, to) {
   const a = graph.vertices[frm], b = graph.vertices[to];
+  // a lift ride is vertical: the cabins' drawing offset is noise from two
+  // different levels' pixel frames — face building east, like the editor
+  if (a.level !== b.level) return 0;
   return Math.atan2(-(b.y - a.y), b.x - a.x);
 }
 function postPosition(at, look) {
@@ -638,8 +641,7 @@ function neighbours(n) {
 }
 const tagOf = (n, look) => look === 'original' ? n : `${n}@${look}`;
 function bearingTo(to) {
-  const a = graph.vertices[st.at], b = graph.vertices[to];
-  return Math.atan2(-(b.y - a.y), b.x - a.x);
+  return bearingToFrom(st.at, to);
 }
 
 // ---- the crossing ---------------------------------------------------------
