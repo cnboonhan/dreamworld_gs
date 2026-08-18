@@ -353,7 +353,13 @@ def edge_card(edge, dream, sel, refresh_all):
     dist = (f"{va['level']} ⇵ {vb['level']} · {va['lift']}" if lift_edge
             else f"{d * scale:.1f} m" if scale else f"{d:.0f} px")
     with ui.card().classes("w-full bg-[#11151c]"):
-        ui.label("Lift Edge" if lift_edge else "Edge").classes("font-bold")
+        # the title says what the walk passes through, read from the map —
+        # the same classification that picks the crossing prompt
+        title = {"lift_ride": "Lift Edge",
+                 "lift_in": "Lift Door Edge",
+                 "lift_out": "Lift Door Edge",
+                 "door": "Door Edge"}.get(store.edge_kind(a, b), "Edge")
+        ui.label(title).classes("font-bold")
         with ui.row().classes("w-full items-center gap-2"):
             for nm, v in ((a, va), (b, vb)):
                 ui.html(f'<span style="width:10px;height:10px;'
