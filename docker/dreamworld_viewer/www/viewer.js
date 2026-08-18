@@ -214,12 +214,12 @@ function coreMark() {
   if (!el) return;
   if (!st.follow) {
     el.textContent = '\u25cb core unsynced';
-    el.style.color = '#8b98a8';
+    el.className = '';
     return;
   }
   const live = performance.now() - coreOk < 3000;
   el.textContent = live ? '\u25cf core synced' : '\u25cb core unreachable';
-  el.style.color = live ? '#3fb950' : '#f85149';
+  el.className = live ? 'up' : 'down';
 }
 setInterval(coreMark, 1000);
 // the chip IS the toggle: click to walk free of the core, click again
@@ -227,6 +227,7 @@ setInterval(coreMark, 1000);
 // meanwhile is not a walk you took, so a fade says so honestly
 addEventListener('DOMContentLoaded', () => {
   $('core').onclick = async () => {
+    autoFree = false;
     st.follow = !st.follow;
     coreMark();
     if (!st.follow || st.moving) return;
@@ -249,7 +250,7 @@ addEventListener('DOMContentLoaded', () => {
 // enacts it: a spin-and-crossing for a neighbour, a cut for anywhere
 // else, a reload in place for a change of look. The follow toggle turns
 // the viewer back into a free agent.
-let lastSeq = 0;
+let lastSeq = 0, autoFree = false;
 function followTruth(pos, seq) {
   if (!st.follow || st.moving || !graph) return;
   // a seq far BELOW ours means the core restarted and began a new count —
@@ -326,6 +327,7 @@ const hb = new Worker(URL.createObjectURL(new Blob([
   ".catch(()=>{})},1000)"], { type: 'application/javascript' })));
 hb.onmessage = e => {
   if (!e.data) return;
+  if (autoFree && !st.follow) { autoFree = false; st.follow = true; }
   coreOk = performance.now();
   if (e.data.position) followTruth(e.data.position, e.data.seq);
   coreMark();
@@ -364,6 +366,9 @@ function pushState(force) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: s }).then(async r => {
       if (r.ok) {
+        if (autoFree && !st.follow) {
+          autoFree = false; st.follow = true;
+        }
         coreOk = performance.now();
         // the response carries the TRUTH: core's position, which this
         // viewer follows — the harness (or our own go button) moved it
@@ -883,9 +888,10 @@ async function boot() {
   try {
     core = await (await fetch('/dreamworld_core/position')).json();
   } catch (e) { core = null; }
-  // no core at all — the bundled demo: walk free from the first click
-  // rather than posting every move to a wall
-  if (core === null) { st.follow = false; coreMark(); }
+  // no core answering — the bundled demo, or a core mid-reboot: walk
+  // free rather than posting every move to a wall, but REMEMBER this was
+  // our choice, not the user's — a heartbeat landing later re-follows
+  if (core === null) { st.follow = false; autoFree = true; coreMark(); }
   let start, startLook = null;
   if (core && core.position && graph.vertices[core.position.at]
       && graph.vertices[core.position.at].looks[core.position.look]) {

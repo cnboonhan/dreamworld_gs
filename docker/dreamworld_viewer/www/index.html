@@ -16,6 +16,12 @@
          z-index: 5 }
   #bar b { color: #4ea1ff }
   #bar .k { color: #8b98a8 }
+  /* the same rounded chip the harness header wears */
+  #core { font-size: 12px; border: 1px solid #2f3a48; border-radius: 10px;
+          padding: 2px 8px; color: #8b98a8; cursor: pointer;
+          margin-left: auto }
+  #core.up { color: #56d364; border-color: #238636 }
+  #core.down { color: #f85149; border-color: #da3633 }
   /* the canvas cannot wear a native resize grip (replaced element), and
      the box is RIGHT-anchored — so a custom grip sits on the free corner,
      bottom-left */
@@ -88,9 +94,9 @@
     <b>dreamworld viewer</b>
     <span class="k">at</span> <span id="at">…</span>
     <span class="k" id="lookNote"></span>
-    <span id="core" style="margin-left:auto; cursor:pointer"
+    <span id="core"
           title="the core is the one writer of position and this viewer
-follows it — click to walk free, click again to catch up">core: …</span>
+follows it — click to walk free, click again to catch up">core …</span>
   </div>
   <button id="planBtn" title="hide the plan"
           style="position:absolute; top:56px; right:32px; z-index:6;
@@ -113,6 +119,6 @@ follows it — click to walk free, click again to catch up">core: …</span>
   </div>
   <div id="hint">drag to look · wheel to walk · click a neighbour on the
     plan to cross</div>
-  <script src="viewer.js?v=17"></script>
+  <script src="viewer.js?v=19"></script>
 </body>
 </html>
