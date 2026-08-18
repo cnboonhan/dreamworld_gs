@@ -172,9 +172,16 @@ def lift_of(nav_yaml, level):
     return out
 
 
+def _norm_name(s):
+    return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
+
+
 def find_vertex(verts, key):
-    """A waypoint by name, by v<index>, or by bare index — the three ways every
-    other part of this repo spells the same thing."""
+    """A waypoint by name, by v<index>, by bare index — and FORGIVINGLY:
+    'apex lab' finds L11.v0.apex_lab, because the agent speaks human and
+    the graph speaks dream names. Exact wins; then the name's human tail;
+    then a unique substring. Ambiguity and misses both name candidates, so
+    a small model corrects itself instead of improvising."""
     key = str(key).strip()
     for i, (n, _, _) in enumerate(verts):
         if n and n.lower() == key.lower():
@@ -182,6 +189,20 @@ def find_vertex(verts, key):
     m = re.fullmatch(r"v?(\d+)", key, re.I)
     if m and int(m.group(1)) < len(verts):
         return int(m.group(1))
+    want = _norm_name(key)
+    if want:
+        tails = [i for i, (n, _, _) in enumerate(verts)
+                 if n and _norm_name(n.split(".")[-1]) == want]
+        if len(tails) == 1:
+            return tails[0]
+        subs = [i for i, (n, _, _) in enumerate(verts)
+                if n and want in _norm_name(n)]
+        if not tails and len(subs) == 1:
+            return subs[0]
+        cands = sorted(verts[i][0] for i in (tails or subs))
+        if cands:
+            raise SystemExit(f"{key!r} is ambiguous — say one of: "
+                             + ", ".join(cands))
     raise SystemExit(f"no waypoint {key!r}")
 
 
@@ -954,6 +975,10 @@ def _door(to, mode):
     # waypoints and let it decide, which is also what makes its answer worth having.
     res = bridge("/door", {"waypoints": [[ST["verts"][cur][1], ST["verts"][cur][2]],
                                          [ST["verts"][tgt][1], ST["verts"][tgt][2]]],
+                           # which lift this edge ends at, or none: the
+                           # bridge must not sweep a flanking shaft into a
+                           # corridor-door request
+                           "lift": lift_here or "",
                            "mode": mode})
     if ST.get("galaxea") and not res.get("ok", True):
         err = res.get("error") or f"the bridge refused to {mode} it"
@@ -1173,20 +1198,37 @@ def wait_lift_door(lift, want_open, timeout=20):
 
 
 def _ride_lift(lift, floor):
-    """Wait for the gazebo lift to reach `floor`, then switch the map there."""
-    deadline = time.time() + 90
-    arrived = False
-    while ST.get("galaxea") and time.time() < deadline:
-        time.sleep(1.0)
-        st = lift_states().get(lift) or {}
-        if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
-            arrived = True
-            break
-    if not arrived and ST.get("galaxea"):
-        log(f"{lift} has not reported reaching {floor}", "err")
-    elif not ST.get("galaxea"):
-        time.sleep(3)          # no sim to ride -> switch after a nominal delay
-    return switch_level(floor, lift)
+    """Wait for the gazebo lift to reach `floor`, then switch the map there.
+
+    Under MOVE, and the CORE rides too: the cabin carrying the walker is a
+    move like any other. Without the core post, the viewer stayed standing
+    in the departure cabin, and the follow loop read the stale core as
+    truth and dragged the whole model back to the floor it just left —
+    the ride undone half a second after it happened."""
+    with MOVE:
+        deadline = time.time() + 90
+        arrived = False
+        while ST.get("galaxea") and time.time() < deadline:
+            time.sleep(1.0)
+            st = lift_states().get(lift) or {}
+            if st.get("floor") == floor and int(st.get("motion", 0)) == 0:
+                arrived = True
+                break
+        if not arrived and ST.get("galaxea"):
+            log(f"{lift} has not reported reaching {floor}", "err")
+        elif not ST.get("galaxea"):
+            time.sleep(3)      # no sim to ride -> switch after a nominal delay
+        ok = switch_level(floor, lift)
+        if ok:
+            at = lab(ST["cur"])
+            body = {"at": at, "look": _look_for(at)}
+            # land facing the arrival cabin's door, if the graph knows it
+            db = ((editor_graph().get("vertices") or {}).get(at)
+                  or {}).get("door_bearing")
+            if db is not None:
+                body["yaw_deg"] = round(math.degrees(db), 1)
+            core("/position", body)
+        return ok
 
 
 def switch_level(to, lift=None, land_on=None):
@@ -1399,6 +1441,30 @@ def write_todos(todos=None):
                 "allowed_tools": sorted(SUBTASK_TOOLS),
                 "example": ["go_to lift_lobby_north", "face v0", "open_door",
                             "go_to apex_lab", "pick apple"]}
+    # a ride is ONE subtask: take_lift installs its own verified sequence,
+    # so a plan that hand-rolls the internals could never execute — the
+    # gate refuses free-standing lift primitives
+    rolled = [x for x in items
+              if _subtask_tool(x) in ("select_lift", "call_lift")]
+    if rolled:
+        return {"ok": False, "rejected": True,
+                "error": "Do not plan select_lift or call_lift — a level "
+                         "change is ONE subtask: 'take_lift <level>' (from "
+                         "a lift lobby). It installs and verifies the whole "
+                         "ride itself. Rejected: "
+                         + "; ".join(str(x) for x in rolled),
+                "example": ["go_to lift_lobby", "take_lift L11",
+                            "go_to apex_lab_entrance", "open_door",
+                            "go_to apex_lab"]}
+    # a mover without its argument is not a plan, it is a wish
+    NEEDY = {"go_to", "face", "take_lift", "pick", "place"}
+    vague = [x for x in items
+             if _subtask_tool(x) in NEEDY and len(str(x).split()) < 2]
+    if vague:
+        return {"ok": False, "rejected": True,
+                "error": "These subtasks are missing their argument — say "
+                         "WHERE or WHAT, e.g. 'go_to apex_lab', 'take_lift "
+                         "L11': " + "; ".join(str(x) for x in vague)}
     with ST["lock"]:
         ST["todos"] = [{"step": x, "status": "pending"} for x in items]
         if ST["todos"]:
@@ -1717,6 +1783,27 @@ def _post_tool(name, args, result):
     """Shared by every path into a tool: verify, then hand back the fresh log as
     state so the caller (agent or operator) reacts to what actually happened."""
     if isinstance(result, dict):
+        # a small model can spiral on a read tool; after the third
+        # identical look at an unchanged world, the result says so
+        if name not in SUBTASK_TOOLS:
+            spin = ST.setdefault("_spin", {"key": None, "n": 0})
+            key = f"{name}:{ST.get('cur')}:{len(ST.get('todos') or [])}"
+            spin["n"] = spin["n"] + 1 if spin["key"] == key else 1
+            spin["key"] = key
+            if spin["n"] >= 3:
+                result = {**result, "note": (
+                    f"you have called {name} {spin['n']} times and nothing "
+                    f"changed. Looking is not progress: execute the current "
+                    f"subtask with its tool, or rewrite the plan with "
+                    f"write_todos.")}
+        else:
+            ST.setdefault("_spin", {"key": None, "n": 0})["key"] = None
+        if _BUSY.is_set():
+            # narrate the AGENT's calls — the manual paths log their own,
+            # and a silent mission reads as a hung one
+            ok = result.get("ok", True)
+            log(f"\u2699 {name} \u2014 {as_message(name, result)}"[:200],
+                "ok" if ok else "err")
         _record_verify(name, args, result)
         if name != "write_todos":
             result = {**result, "recent_log": BUS.recent_log(12)}
@@ -2701,7 +2788,7 @@ def r_agent():
     log(f"agent ▶ {text}", "mission")
     prompt = (f"New mission from the operator: {text}\n\nCurrent world model:\n"
               f"{build_context()}\n\nSet the mission and subtasks, then execute them.")
-    cfg = {"configurable": {"thread_id": "interactive"},
+    cfg = {"configurable": {"thread_id": f"m{int(time.time() * 1000)}"},
            "recursion_limit": AGENT_STEPS}
     predecessor = _AGENT.get("thread")
 
@@ -2727,8 +2814,9 @@ def r_agent():
             if type(e).__name__ == "GraphRecursionError":
                 log(f"agent stopped at the step budget ({AGENT_STEPS}): it "
                     f"was looping or the mission is genuinely huge. What "
-                    f"finished stands; run the mission again to continue, "
-                    f"or raise AGENT_RECURSION_LIMIT.", "err")
+                    f"finished stands; run it again — it starts fresh from "
+                    f"the world as it stands — or raise "
+                    f"AGENT_RECURSION_LIMIT.", "err")
             else:
                 log(f"agent error: {e}", "err")
             traceback.print_exc()     # the container log keeps the details
