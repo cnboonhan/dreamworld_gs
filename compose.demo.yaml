@@ -1,16 +1,14 @@
-# The walkthrough alone, browser-only: one nginx serving the viewer and a
-# static bundle. No backend, no GPU, no network calls beyond this box.
+# DEMO: the walkthrough alone, browser-only. The bundle is a
+# self-contained static site (just bundle), so this is one stock nginx
+# and nothing else — no backend, no GPU, no build.
 #
-#   just bundle     build assets/projects/<project>/bundle from the tree
-#   just demo       serve it at ${DW_DEMO_PORT:-8080}
+#   just bundle         build assets/projects/<project>/bundle
+#   just demo           serve it at ${DW_DEMO_PORT:-8080}
 name: dreamworld-demo
 
 services:
   demo:
-    build:
-      context: ./docker
-      dockerfile: dreamworld_viewer/dreamworld_viewer.Dockerfile
-    image: dreamworld/dreamworld_viewer:latest
+    image: nginx:alpine
     container_name: dreamworld-demo
     ports:
       - "${DW_DEMO_PORT:-8080}:80"

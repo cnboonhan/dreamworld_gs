@@ -39,11 +39,11 @@ _env:
 
 # Rebuild the Gazebo world + nav graph from building.yaml (after map edits).
 world: _env
-    docker compose run --rm --no-deps rmfsim world {{project}}
+    docker compose -f compose.full.yaml run --rm --no-deps rmfsim world {{project}}
 
 # FULL: everything — authoring, simulation, and all four generators (8 GPUs).
 up: _env
-    docker compose --profile full up -d --build
+    docker compose -f compose.full.yaml up -d --build
     @echo "  http://localhost:8080                     every surface, one port"
     @echo "  http://localhost:8080/sim_editor          trace the building map"
     @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
@@ -54,17 +54,24 @@ up: _env
 # MINIMAL: walk + simulate + command an already-generated dreamworld
 # (1 GPU, for the mission agent's VLM). No generators, no traffic editor.
 minimal: _env
-    docker compose up -d --build
+    docker compose -f compose.minimal.yaml up -d --build
     @echo "  http://localhost:8080/dreamworld_viewer   walk the dreamworld"
     @echo "  http://localhost:8080/rmfsim              the building under simulation"
     @echo "  http://localhost:8080/harness             drive it by tool call"
 
-# Pack the walkable demo into assets/projects/<project>/bundle: the graph,
-# every world's records, every crossing video — and nothing else (the
-# panoramas never leave the dreamworld tree).
+# Pack the walkable demo into assets/projects/<project>/bundle as a
+# SELF-CONTAINED static site: viewer + graph + every world's records +
+# every crossing video, relative paths throughout — any static file host
+# serves it (the panoramas never leave the dreamworld tree).
 bundle proj=project:
-    docker compose run --rm --no-deps dreamworld_editor \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker compose -f compose.full.yaml run --rm --no-deps dreamworld_editor \
         python bundle.py /projects/{{proj}}/bundle
+    dest={{assets}}/projects/{{proj}}/bundle
+    cp -r {{repo}}/docker/dreamworld_viewer/www/. "$dest/"
+    sed -i 's|<script src="viewer.js|<script>window.DW_BASE={files:"files",graph:"graph.json"}</script>\n  <script src="viewer.js|' "$dest/index.html"
+    echo "self-contained site at $dest — any static file server can host it"
 
 # DEMO: the bundle behind one nginx — browser only, no backend, no GPU.
 demo:

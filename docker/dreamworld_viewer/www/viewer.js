@@ -12,8 +12,13 @@
 // world loads behind it, and the video fades out onto the destination
 // standing at its capture point facing the same bearing.
 
-const FILES = '/dreamworld_editor/files';
-const GRAPH = '/dreamworld_editor/graph';
+// Bundled, the viewer is a self-contained static site: its index.html
+// injects window.DW_BASE with RELATIVE paths, so any static file host
+// serves it from any subpath — no live backend at all. Unbundled, the
+// editor's routes stand behind the proxy as always.
+const DW = window.DW_BASE || {};
+const FILES = DW.files || '/dreamworld_editor/files';
+const GRAPH = DW.graph || '/dreamworld_editor/graph';
 
 // ---- matrices (main's helpers) ------------------------------------------
 function invert4(a) {

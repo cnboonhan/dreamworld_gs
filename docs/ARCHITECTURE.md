@@ -83,7 +83,7 @@ The repo:
 
 ```
 justfile                   every workflow — just --list
-compose.yaml               the services below; DW_* knobs via .env
+compose.full.yaml          every service; minimal and demo pick from it
 docker/
   proxy/                   nginx: one port, every surface
   rmf-tools/               traffic editor, world build, Gazebo+RMF sim

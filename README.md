@@ -10,13 +10,21 @@ call. Everything runs on this box, offline, behind one forwarded port.
 
 ## Quick launch
 
-Three sizes. Each is a superset of the one before it.
+Three sizes, three compose files. Each is a superset of the one before.
 
-| tier | command | needs | you get |
-| --- | --- | --- | --- |
-| **demo** | `just bundle` then `just demo` | no GPU — any machine with Docker | the walkthrough alone, browser-only: walk the splat worlds, cross edges through the generated videos. One nginx serving a static bundle. |
-| **minimal** | `just minimal` | 1 GPU (~20 GB) | walk + simulate + command an already-generated dreamworld: viewer, Gazebo+RMF sim, harness dashboard and its mission agent (the GPU is the agent's VLM). |
-| **full** | `just up` | 8 GPUs (see times below) | everything: authoring UIs and all the generators — splats, crossing videos, panorama variants. |
+| tier | command | compose file | needs | you get |
+| --- | --- | --- | --- | --- |
+| **demo** | `just bundle` then `just demo` | `compose.demo.yaml` | no GPU — or no Docker at all (below) | the walkthrough alone, browser-only: walk the splat worlds, cross edges through the generated videos. |
+| **minimal** | `just minimal` | `compose.minimal.yaml` | 1 GPU (~20 GB) | walk + simulate + command an already-generated dreamworld: viewer, Gazebo+RMF sim, harness dashboard and its mission agent (the GPU is the agent's VLM). |
+| **full** | `just up` | `compose.full.yaml` | 8 GPUs (see times below) | everything: authoring UIs and all the generators — splats, crossing videos, panorama variants. |
+
+The demo bundle is a **self-contained static site** — `just bundle` folds
+the viewer in with relative paths, so `compose.demo.yaml` is just a stock
+nginx and ANY static file host serves the same directory: `python3 -m
+http.server` in it works, and so would GitHub Pages or an internal static
+host. Before putting a bundle anywhere public, remember what it shows:
+photoreal reconstructions of a real building are still images of that
+building, and need the same clearance the photographs would.
 
 ```
 ssh -L 8080:localhost:8080 <box>        one tunnel carries every surface
