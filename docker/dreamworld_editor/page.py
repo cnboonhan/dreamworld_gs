@@ -76,11 +76,6 @@ def index():
                                                 board.refresh())
                            ).classes("w-40")
 
-        HINT = {None: "click a vertex to select it",
-                "add": "click the plan to drop a vertex",
-                "edge": "click one vertex, then the other",
-                "move": "drag a vertex to its new spot"}
-
         @ui.refreshable
         def tools():
             def switch(mode):
@@ -98,7 +93,6 @@ def index():
                     props += " disable"     # nothing selected, nothing to move
                 ui.button(text, icon=icon,
                           on_click=lambda m=mode: switch(m)).props(props)
-            ui.label(HINT[sel["mode"]]).classes("text-xs text-gray-600")
         tools()
 
     # ---- the plan ----
