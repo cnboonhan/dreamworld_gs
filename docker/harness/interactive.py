@@ -72,8 +72,60 @@ TOOLS = {}
 # ---- nav graph --------------------------------------------------------------
 # Ported from dreamworld/docker/common/nav_path.py, so the graph this reasons over
 # is the graph the robot bridge drives over: same file, same indices, same costs.
+def nav_data(src):
+    """The nav document, from either source.
+
+    Given a generated nav graph, read it. Given a building.yaml, synthesize
+    the SAME shape live from its nav layer — the named vertices and graph-0
+    lanes that `just world` bakes into nav_graphs/0.yaml, read fresh so the
+    graph never lags the editor by a world rebuild. The frame is the
+    drawing's, scaled to metres by the level's measurement and y-flipped to
+    bearings; it can differ from the generated world's frame by a hair, but
+    every consumer here shares it and the sim is spoken to by NAME."""
+    B = yaml.safe_load(open(src))
+    if not str(src).endswith(".building.yaml"):
+        return B
+    doc = {"levels": {}, "doors": {}}
+    for lname, BL in (B.get("levels") or {}).items():
+        V = BL.get("vertices") or []
+        s = 0.05
+        for m in BL.get("measurements") or []:
+            px = math.hypot(V[m[1]][0] - V[m[0]][0],
+                            V[m[1]][1] - V[m[0]][1])
+            metres = (m[2] or {}).get("distance", [0, 0])[1]
+            if px > 0 and metres:
+                s = metres / px
+        named, index = [], {}
+        for i, v in enumerate(V):
+            nm = v[3] if len(v) > 3 and isinstance(v[3], str) else ""
+            if not nm:
+                continue
+            p = {"name": nm}
+            if len(v) > 4 and isinstance(v[4], dict) and "lift_cabin" in v[4]:
+                p["lift_cabin"] = v[4]["lift_cabin"][1]
+            index[i] = len(named)
+            named.append([v[0] * s, -v[1] * s, p])
+        lanes = []
+        for ln in BL.get("lanes") or []:
+            a, b = int(ln[0]), int(ln[1])
+            if a in index and b in index:
+                # the editor writes bidirectional lanes; the generated
+                # graph spells that as two directed ones, so match it
+                lanes.append([index[a], index[b], {}])
+                lanes.append([index[b], index[a], {}])
+        doc["levels"][lname] = {"vertices": named, "lanes": lanes}
+        for j, d in enumerate(BL.get("doors") or []):
+            p = d[2] if len(d) > 2 and isinstance(d[2], dict) else {}
+            nm = (p.get("name") or [1, f"door{j}"])[1]
+            doc["doors"][nm] = {
+                "endpoints": [[V[d[0]][0] * s, -V[d[0]][1] * s],
+                              [V[d[1]][0] * s, -V[d[1]][1] * s]],
+                "map": lname}
+    return doc
+
+
 def load_nav(nav_yaml, level=None):
-    data = yaml.safe_load(open(nav_yaml))
+    data = nav_data(nav_yaml)
     levels = data.get("levels") or {}
     if not levels:
         raise SystemExit(f"no levels in {nav_yaml}")
@@ -96,19 +148,19 @@ def load_nav(nav_yaml, level=None):
 
 def levels_of(nav_yaml):
     """Every level the nav graph declares, so a level argument can be checked."""
-    return list((yaml.safe_load(open(nav_yaml)).get("levels") or {}))
+    return list((nav_data(nav_yaml).get("levels") or {}))
 
 
 def doors_of(nav_yaml, level):
     """{door_name: params} for the doors on a level, straight out of the graph."""
-    data = yaml.safe_load(open(nav_yaml))
+    data = nav_data(nav_yaml)
     return {n: d for n, d in (data.get("doors") or {}).items()
             if d.get("map") in (None, level)}
 
 
 def lift_of(nav_yaml, level):
     """{vertex index: lift name} for the lift-cabin vertices on a level."""
-    data = yaml.safe_load(open(nav_yaml))
+    data = nav_data(nav_yaml)
     lvl = (data.get("levels") or {}).get(level) or {}
     out = {}
     for i, v in enumerate(lvl.get("vertices", [])):
@@ -552,16 +604,29 @@ def pose_pump():
         try:
             doc = core("/viewer/state") or {}
             st = doc.get("state") or {}
-            up = bool(doc.get("live"))
+            # connected and ready-to-walk are different facts: a hidden tab
+            # keeps heartbeating (present, will catch up on focus) but its
+            # animations are parked, so movers must not wait on it. Only
+            # LIVE flips are logged — tab switches are not news.
+            live = bool(doc.get("live"))
+            up = live and not st.get("hidden")
+            if live != bool(ST.get("viewer_live")):
+                ST["viewer_live"] = live
+                log("dreamworld viewer " + ("connected" if live
+                                            else "disconnected"),
+                    "ok" if live else "err")
             if up != bool(ST.get("viewer_up")):
                 ST["viewer_up"] = up
-                log("dreamworld viewer " + ("connected" if up
-                                            else "disconnected"),
-                    "ok" if up else "err")
                 push_state()
-            if not st or not ST.get("px_of"):
+            if not ST.get("px_of"):
                 continue
-            at = st.get("at")
+            # Follow the CORE's commanded position, not the viewer's report:
+            # the report lags (a hidden tab lags forever), and adopting it
+            # undid an operator reset within one poll. Anyone may move the
+            # core — the viewer's go button, a curl, another harness — and
+            # the core is the one writer this whole stack agreed on.
+            pos = (core("/position") or {}).get("position") or {}
+            at = pos.get("at")
             if at and not MOVE.locked():
                 try:
                     i = find_vertex(ST["verts"], at)
@@ -570,8 +635,10 @@ def pose_pump():
                 if i is not None and i != ST["cur"]:
                     with ST["lock"]:
                         ST["prev"], ST["cur"], ST["face"] = ST["cur"], i, None
-                    log(f"walker moved to {at} — following")
+                    log(f"the core moved to {at} — following")
                     push_state()
+            if not st:
+                continue
             yawd = st.get("yaw_deg")
             key = (at, yawd, bool(st.get("moving")))
             if key == last or ST.get("cur") is None:
@@ -1777,7 +1844,7 @@ main{display:flex;flex:1;overflow:hidden;gap:1px;background:#30363d}
 .ph b{color:#58a6ff}
 .pb{flex:1;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
 .pb::-webkit-scrollbar{width:6px}.pb::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
-#pad{display:flex;gap:5px;align-items:stretch;justify-content:flex-end}
+#pad{display:flex;gap:5px;align-items:stretch;justify-content:center}
 #pad button{background:#21262d;border:1px solid #30363d;color:#e6edf3;font-size:15px;padding:5px 11px;border-radius:5px;cursor:pointer}
 #pad button:hover{background:#30363d}
 .bar{display:flex;gap:6px}
@@ -1792,7 +1859,7 @@ input:focus{outline:0;border-color:#1f6feb}
 #mapwrap{padding:4px;overflow:hidden;background:#0a0d12;flex:1;min-height:0;display:flex;position:relative}
 /* movement + reset ride the map as an overlay, out of the panels' way */
 #mapctl{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;
- gap:6px;align-items:flex-end;background:rgba(13,17,23,.88);border:1px solid #30363d;
+ gap:6px;align-items:stretch;background:rgba(13,17,23,.88);border:1px solid #30363d;
  border-radius:6px;padding:8px;z-index:5}
 #mapctl input{width:150px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
  border-radius:4px;padding:4px 6px;font-size:11px}
@@ -1867,9 +1934,10 @@ header #mbox{flex:1;min-width:140px}
       <button onclick="cmd('turn right')" title="turn right">↱</button>
      </div>
      <div class=row>
-      <input id=tpwhere placeholder="reset at — click a waypoint"
+      <input id=tpwhere placeholder="click a vertex"
        title="puts the robot there, shuts every door and lift, and starts
- again — an operator move, not something the agent can do">
+ again — an operator move, not something the agent can do. Left empty,
+ reset just shuts every door.">
       <input id=tplevel placeholder="level">
       <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
     </div>
@@ -1883,7 +1951,6 @@ header #mbox{flex:1;min-width:140px}
     <div id=tools></div>
     <div class=bar id=toolarg style="display:none">
      <input id=argbox><button class=go onclick="runTool()">go</button></div>
-    <div class=hint id=toolhint>click a tool — ones that need input reveal a field</div>
    </div>
   </div>
  </div>
@@ -2046,8 +2113,8 @@ function updateRunBtn(){const b=$('runbtn');if(!b)return;
  b.classList.toggle('paused',agentRunning&&agentPaused)}
 function onRunBtn(){
  if(!agentRunning)return runAgent();
- if(!agentPaused){agentPaused=true;updateRunBtn();P('/pause',{}).catch(()=>{})}
- else{agentPaused=false;updateRunBtn();P('/resume',{}).catch(()=>{})}}
+ if(!agentPaused){agentPaused=true;updateRunBtn();P('pause',{}).catch(()=>{})}
+ else{agentPaused=false;updateRunBtn();P('resume',{}).catch(()=>{})}}
 // The button tracks the MISSION, not the HTTP call: /agent returns in
 // milliseconds (the mission runs in a server thread), so resetting in a
 // finally flipped the button back to "run mission" while the robot had
@@ -2061,7 +2128,7 @@ async function runAgent(){const t=$('mbox').value.trim();if(!t)return;$('mbox').
  catch(e){logEv('err','! '+e);agentRunning=false;updateRunBtn()}}
 function cancelMission(){agentRunning=false;agentPaused=false;updateRunBtn();  // stop the agent + clear
  $('mbox').value='';setMission('');setTodos([]);  // inputs and panes empty now, not at the next broadcast
- P('/cancel',{}).catch(()=>{})}   // server wipes mission+subtasks and broadcasts the cleared state
+ P('cancel',{}).catch(()=>{})}   // server wipes mission+subtasks and broadcasts the cleared state
 $('mbox').addEventListener('keydown',e=>{if(e.key==='Enter')onRunBtn()});
 // Tool buttons. HIDE: not shown. NOINPUT: run on click even though they take an optional
 // arg (open_door figures out the door from the current vertex + facing). Everything else
@@ -2077,13 +2144,12 @@ function selectTool(name){const t=TOOLD[name];if(!t)return;
  for(const el of document.querySelectorAll('.tool'))el.classList.toggle('sel',el.textContent===name);
  if(t.params&&t.params.length&&!NOINPUT.includes(name)){selTool=name;const p=t.params[0];
   $('toolarg').style.display='flex';$('argbox').placeholder=p.desc||p.name;
-  $('argbox').value=(name==='call_lift'?curLevel:'');$('argbox').focus();$('argbox').select();
-  $('toolhint').textContent=name+' — '+(p.desc||p.name)}
- else{hideArg();$('toolhint').textContent='running '+name+'…';
-  P('/invoke',{text:name}).catch(e=>logEv('err','! '+e))}}
+  $('argbox').value=(name==='call_lift'?curLevel:'');$('argbox').focus();$('argbox').select()}
+ else{hideArg();
+  P('invoke',{text:name}).catch(e=>logEv('err','! '+e))}}
 async function runTool(){if(!selTool)return;const nm=selTool,v=$('argbox').value.trim();
  $('argbox').value='';hideArg();
- try{await P('/invoke',{text:(nm+' '+v).trim()})}catch(e){logEv('err','! '+e)}}
+ try{await P('invoke',{text:(nm+' '+v).trim()})}catch(e){logEv('err','! '+e)}}
 $('argbox').addEventListener('keydown',e=>{if(e.key==='Enter')runTool()});
 function setTodos(td){const el=$('todos');if(!el)return;el.innerHTML=(td&&td.length)?td.map(t=>`<div class=todo>○ ${esc(typeof t==='string'?t:(t.content||t.step||''))}</div>`).join(''):''}
 function setStateModel(text){const el=$('statemodel');if(!el)return;
@@ -2097,9 +2163,16 @@ function setStateModel(text){const el=$('statemodel');if(!el)return;
 // no path to it through the harness, so a mission cannot skip a corridor by
 // wishing itself past it. Here it is a button because setting up a test from a
 // particular waypoint should not mean walking there first.
-async function resetAt(where,level){if(!where)return;
+async function resetAt(where,level){
+ if(!where||!level){
+  // nothing (or only half) named: the operator just wants the building shut
+  $("tpgo").disabled=true;
+  try{const j=await(await P('close_all',{})).json();
+   logEv(j.ok?'ok':'err',(j.ok?'':'! ')+(j.message||'close_all failed'))}
+  catch(e){logEv('err','! '+e)}finally{$("tpgo").disabled=false}
+  return}
  $("tpgo").disabled=true;
- try{const j=await(await P('/reset',{waypoint:where,level:level||''})).json();
+ try{const j=await(await P('reset',{waypoint:where,level:level||''})).json();
   // No reload here. A teleport that changes level makes the server broadcast
   // {type:'level'}, which reloads the graph and the floorplan; one that does not
   // needs no reload at all, because the state message moves the marker. Calling
@@ -2406,6 +2479,79 @@ def r_events():
 # commands the camera directly nor hears from it — it asks the core.
 
 
+@app.route("/reset", methods=["POST", "OPTIONS"])
+def r_reset():
+    """Put the walker at a waypoint, shut everything, and start again.
+
+    Not just a move: a run leaves doors held open behind it, and starting
+    the next one in a building someone has already walked through is how a
+    test passes for the wrong reason. An operator action, deliberately not
+    in TOOLS: an agent that can teleport is not solving the problem it was
+    asked to solve. Ported from main; the robot bridge's half becomes the
+    core's — the teleport is a position the viewer must follow."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    b = request.get_json(force=True, silent=True) or {}
+    where = str(b.get("waypoint") or b.get("to") or "").strip()
+    level = str(b.get("level") or ST["level"]).strip()
+    if not where:
+        return jsonify(ok=False, error="need a waypoint"), 400
+    if ST.get("levels") and level not in ST["levels"]:
+        return jsonify(ok=False,
+                       error=f"no level {level}; have {ST['levels']}"), 400
+    if level != ST["level"]:
+        if not switch_level(level, land_on=where):
+            return jsonify(ok=False,
+                           error=f"no waypoint {where!r} on {level}"), 400
+    else:
+        try:
+            v = find_vertex(ST["verts"], where)
+        except SystemExit as e:
+            return jsonify(ok=False, error=str(e)), 400
+        with ST["lock"]:
+            ST.update({"cur": v, "prev": None, "face": None, "yaw": None,
+                       "open_doors": set()})
+    cur = ST["cur"]
+    # face the first neighbour, so it lands looking down a corridor rather
+    # than at whatever bearing it happened to be holding before
+    nb = next((v for v, _ in ST["adj"].get(cur, [])), None)
+    yaw = _az(cur, nb) if nb is not None else 0.0
+    core("/position", {"at": lab(cur), "look": _look_for(lab(cur)),
+                       "yaw_deg": round(math.degrees(yaw), 1)})
+    with ST["lock"]:
+        ST["yaw"] = yaw
+        ST["face"] = nb
+        ST["open_doors"] = set()
+    # shut every door and lift, and stop the bridge holding any open —
+    # otherwise its door_keeper republishes OPEN and undoes this
+    shut = bridge("/close_all", {}) or {}
+    push_state(reset=True)
+    _push_context()
+    n = shut.get("n", 0)
+    return jsonify(ok=True, at=lab(cur), level=ST["level"],
+                   facing=lab(nb) if nb is not None else None,
+                   closed=n,
+                   message=f"{lab(cur)} on {ST['level']}"
+                           + (f", facing {lab(nb)}" if nb is not None else "")
+                           + (f" — {n} doors shut" if n else ""))
+
+
+@app.route("/close_all", methods=["POST", "OPTIONS"])
+def r_close_all():
+    """The reset button's other half, alone: with no waypoint named the
+    operator just wants the building shut."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    shut = bridge("/close_all", {}) or {}
+    with ST["lock"]:
+        ST["open_doors"] = set()
+    push_state()
+    n = shut.get("n", 0)
+    return jsonify(ok=bool(shut.get("ok")), n=n,
+                   message=f"{n} door(s) shut" if shut.get("ok")
+                           else "the bridge did not answer")
+
+
 @app.route("/statemodel")
 def r_statemodel():
     return jsonify(text=build_context())
@@ -2583,7 +2729,8 @@ def core_resync():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--nav", required=True)
+    ap.add_argument("--nav", default="",
+                    help="a generated nav graph; building.yaml is preferred")
     ap.add_argument("--building", default="")
     ap.add_argument("--level", default="L11")
     ap.add_argument("--start", default="lift_lobby")
@@ -2592,12 +2739,19 @@ def main():
     ap.add_argument("--port", type=int, default=8086)
     a = ap.parse_args()
 
-    level, verts, adj, _ = load_nav(a.nav, a.level)
+    # the building IS the graph source when given: its nav layer is synced
+    # by the editor on every change, where nav_graphs/0.yaml waits for the
+    # next world rebuild — the map must show what the editor shows
+    nav_src = a.building if a.building and os.path.isfile(a.building) \
+        else a.nav
+    if not nav_src:
+        raise SystemExit("need --building or --nav")
+    level, verts, adj, _ = load_nav(nav_src, a.level)
     ST.update({
         "lock": threading.RLock(), "waiting": {}, "seq": 0,
         "level": level, "verts": verts, "adj": adj,
-        "doors": doors_of(a.nav, level), "lift_of": lift_of(a.nav, level),
-        "nav": a.nav, "levels": levels_of(a.nav), "building": a.building,
+        "doors": doors_of(nav_src, level), "lift_of": lift_of(nav_src, level),
+        "nav": nav_src, "levels": levels_of(nav_src), "building": a.building,
         "open_doors": set(), "inventory": [], "mission": "", "todos": [],
         "prev": None, "face": None, "selected_lift": None, "sel_cabin": None,
         # The heading both sides are holding, in the nav graph's frame. Kept here

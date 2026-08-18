@@ -302,6 +302,30 @@ function bearingToFrom(frm, to) {
   if (a.level !== b.level) return 0;
   return Math.atan2(-(b.y - a.y), b.x - a.x);
 }
+// The steady heartbeat lives in a WORKER. The render loop's own pushes
+// stop in a hidden tab (rAF is parked) and page timers throttle to one a
+// minute, so switching to the editor or harness read as this walker
+// dying — connect, disconnect, connect. A worker's timer keeps its pace
+// regardless of tab visibility; it re-sends the last state doc each
+// second and hands responses back for the follow protocol.
+const hb = new Worker(URL.createObjectURL(new Blob([
+  "let body=null;" +
+  "onmessage=e=>{body=e.data};" +
+  "setInterval(()=>{if(!body)return;" +
+  "fetch('/dreamworld_core/viewer/state',{method:'POST'," +
+  "headers:{'Content-Type':'application/json'},body:body})" +
+  ".then(async r=>{if(r.ok)postMessage(await r.json())})" +
+  ".catch(()=>{})},1000)"], { type: 'application/javascript' })));
+hb.onmessage = e => {
+  if (!e.data) return;
+  coreOk = performance.now();
+  if (e.data.position) followTruth(e.data.position, e.data.seq);
+  coreMark();
+};
+// visibility flips must reach the worker's doc at once — there is no
+// render tick in a hidden tab to carry them
+document.addEventListener('visibilitychange', () => pushState(true));
+
 function postPosition(at, look) {
   return fetch('/dreamworld_core/position', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -319,11 +343,15 @@ function pushState(force) {
     pitch_deg: Math.round(st.cam.pitch * 1800 / Math.PI) / 10,
     moving: st.moving,
     transition: st.transition,
+    // a hidden tab is present but cannot walk (rAF is parked): the
+    // harness keeps the connection but does not wait on us
+    hidden: document.hidden,
   };
   const s = JSON.stringify(doc);
   if (!force && s === lastSent && now - lastPush < 1000) return;
   lastSent = s;
   lastPush = now;
+  hb.postMessage(s);
   fetch('/dreamworld_core/viewer/state', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: s }).then(async r => {
