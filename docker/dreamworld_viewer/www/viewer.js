@@ -440,9 +440,12 @@ gl.vertexAttribDivisor(a_idx, 1);
 let projection = [];
 function resize() {
   const w = innerWidth, h = innerHeight;
-  // the crossing videos were extracted at 1.2 rad horizontal fov; the
-  // splat camera matches it, so the video-to-splat handoff keeps scale
-  const f = (0.5 / Math.tan(0.6)) * w;
+  // The crossing videos are 832x480 frames extracted at 1.2 rad
+  // horizontal fov, drawn with object-fit COVER — which scales by
+  // whichever dimension must crop. The splat focal must follow that
+  // SAME cover scale, or the video-to-splat handoff zooms: matching
+  // width alone was only right for windows wider than 832:480.
+  const f = Math.max(w / 832, h / 480) * (416 / Math.tan(0.6));
   cv.width = w; cv.height = h;
   gl.viewport(0, 0, w, h);
   gl.uniform2fv(u_focal, new Float32Array([f, f]));
