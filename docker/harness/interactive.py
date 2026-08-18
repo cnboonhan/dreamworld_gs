@@ -471,10 +471,10 @@ def built_scenes():
 
 def state_dict():
     cur = ST["cur"]
-    m2px, px, py, dirv = ST.get("m2px"), None, None, None
-    if m2px:
-        px, py = m2px(ST["verts"][cur][1], ST["verts"][cur][2])
-        px, py = round(px, 1), round(py, 1)
+    px, py, dirv = None, None, None
+    p = v_px(cur)
+    if p:
+        px, py = p
         # Prefer the heading actually being held over the waypoint being faced:
         # after a reset there is a heading but nothing is "faced", and the marker
         # fell back to a directionless dot for want of one.
@@ -486,12 +486,10 @@ def state_dict():
         if yaw is None:
             yaw = ST.get("yaw_live")
         if yaw is not None:
-            ex, ey = m2px(ST["verts"][cur][1] + math.cos(yaw),
-                          ST["verts"][cur][2] + math.sin(yaw))
-            d = math.hypot(ex - px, ey - py) or 1.0
-            dirv = [(ex - px) / d, (ey - py) / d]
-        elif ST["face"] is not None:
-            fx, fy = m2px(ST["verts"][ST["face"]][1], ST["verts"][ST["face"]][2])
+            # a bearing is y-up; the drawing's y runs down
+            dirv = [math.cos(yaw), -math.sin(yaw)]
+        elif ST["face"] is not None and v_px(ST["face"]):
+            fx, fy = v_px(ST["face"])
             d = math.hypot(fx - px, fy - py) or 1.0
             dirv = [(fx - px) / d, (fy - py) / d]
     heading = None if ST["face"] is None else round(math.degrees(_az(cur, ST["face"])) % 360)
@@ -561,7 +559,7 @@ def pose_pump():
                                             else "disconnected"),
                     "ok" if up else "err")
                 push_state()
-            if not st or not ST.get("m2px"):
+            if not st or not ST.get("px_of"):
                 continue
             at = st.get("at")
             if at and not MOVE.locked():
@@ -579,13 +577,13 @@ def pose_pump():
             if key == last or ST.get("cur") is None:
                 continue
             last = key
-            v = ST["verts"][ST["cur"]]
             yaw = math.radians(yawd or 0.0)
             ST["yaw_live"] = yaw
-            px, py = ST["m2px"](v[1], v[2])
-            ex, ey = ST["m2px"](v[1] + math.cos(yaw), v[2] + math.sin(yaw))
-            BUS.send({"type": "pose", "px": px, "py": py,
-                      "dir": [ex - px, ey - py],
+            p = v_px(ST["cur"])
+            if p is None:
+                continue
+            BUS.send({"type": "pose", "px": p[0], "py": p[1],
+                      "dir": [math.cos(yaw), -math.sin(yaw)],
                       "moving": bool(st.get("moving")) or MOVE.locked()})
         except Exception:                                      # noqa: BLE001
             pass                     # the core going quiet is already reported
@@ -1111,15 +1109,13 @@ def switch_level(to, lift=None, land_on=None):
                    "doors": doors_of(ST["nav"], level), "lift_of": lifts,
                    "open_doors": set(), "cur": cabin, "prev": None, "face": None,
                    "yaw": None})
-    # AFTER the vertices are swapped: the affine is fitted from the waypoints the
-    # drawing and the nav graph both name, and it reads ST["verts"] for them. Run
-    # before, it fits the new level's drawing against the old level's waypoints,
-    # finds one name in common, gives up, and every vertex is then drawn in raw
-    # metres on a canvas sized in pixels — the whole graph in one corner. The
-    # dream's own comment says to do it here, and I had moved it.
-    png, fw, fh, m2px = build_floorplan(ST.get("building", ""), level)
+    # AFTER the vertices are swapped: the plan places the NEW level's waypoints
+    # by name, and it reads ST["verts"] for them. Run before, it places the old
+    # level's waypoints on the new level's drawing. The dream's own comment
+    # says to do it here, and I had once moved it.
+    plan, px_of = build_plan(ST.get("building", ""), level)
     with ST["lock"]:
-        ST.update({"fp_png": png, "fp_w": fw, "fp_h": fh, "m2px": m2px})
+        ST.update({"plan": plan, "px_of": px_of})
     log(f"now on {level} at {lab(cabin)}")
     BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
     push_state()
@@ -1392,73 +1388,60 @@ def handle(text):
                                   f"open door, where."}
 
 
-# ---- floorplan overlay: nav-metres -> floorplan-pixels affine ----------------
-# The building.yaml drawing (the floorplan PNG) has vertices in PIXELS; the nav
-# graph is in METRES. Both name the same waypoints, so fit an affine from the
-# shared names and project every nav vertex onto the image. Ported from the dream
-# dashboard — the same fit this repo measured at 0.04875 m/px on L11.
-def _solve3(A, b):
-    M = [A[i][:] + [b[i]] for i in range(3)]
-    for i in range(3):
-        p = max(range(i, 3), key=lambda r: abs(M[r][i]))
-        M[i], M[p] = M[p], M[i]
-        piv = M[i][i] or 1e-9
-        for j in range(i, 4):
-            M[i][j] /= piv
-        for r in range(3):
-            if r != i:
-                f = M[r][i]
-                for j in range(i, 4):
-                    M[r][j] -= f * M[i][j]
-    return [M[0][3], M[1][3], M[2][3]]
-
-
-def _fit_affine(src, tgt):
-    sxx = sxy = sx = syy = sy = n = tx = ty = t = 0.0
-    for (ax, ay), m in zip(src, tgt):
-        sxx += ax * ax; sxy += ax * ay; sx += ax
-        syy += ay * ay; sy += ay; n += 1
-        tx += ax * m; ty += ay * m; t += m
-    return _solve3([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]], [tx, ty, t])
-
-
-def build_floorplan(building, level):
-    """(png path, w, h, metres->pixels) for a level, or (None, 0, 0, None)."""
+# ---- the plan: building.yaml linework, vertices placed by NAME ----------------
+# Main fitted an affine from nav-metres onto the floorplan raster, and the fit
+# needed three shared names it did not always have (a young level has two). The
+# editor never fits anything: building.yaml IS the drawing, in pixels, and the
+# nav layer is GENERATED from its named vertices — so the lookup by name is
+# exact, and the walls and doors come along as linework, the same abstract plan
+# the dreamworld editor draws.
+def build_plan(building, level):
+    """({w,h,walls,doors}, {vertex index: (px,py)}) for a level."""
+    empty = ({"w": 0, "h": 0, "walls": [], "doors": []}, {})
     if not building or not os.path.isfile(building):
-        return None, 0, 0, None
+        return empty
     B = yaml.safe_load(open(building))
     BL = (B.get("levels") or {}).get(level)
     if not BL:
-        return None, 0, 0, None
-    png = os.path.join(os.path.dirname(building),
-                       (BL.get("drawing") or {}).get("filename", ""))
-    if not os.path.isfile(png):
-        return None, 0, 0, None
-    w = h = 0
-    try:
-        import struct
-        with open(png, "rb") as f:
-            f.read(16)
-            w, h = struct.unpack(">II", f.read(8))      # PNG IHDR
-    except (OSError, struct.error):
-        pass
-    # A drawing vertex is [px, py, z, name, params]; only the named ones can be
-    # matched to the nav graph, and three of them pin an affine.
-    bname = {v[3]: (v[0], v[1]) for v in BL.get("vertices", [])
+        return empty
+    V = BL.get("vertices") or []
+
+    def seg(edges):
+        return [(V[e[0]][0], V[e[0]][1], V[e[1]][0], V[e[1]][1])
+                for e in edges or []]
+
+    walls, doors = seg(BL.get("walls")), seg(BL.get("doors"))
+    named = {v[3]: (v[0], v[1]) for v in V
              if len(v) > 3 and isinstance(v[3], str) and v[3]}
-    nname = {n: (x, y) for (n, x, y) in ST["verts"] if n}
-    shared = [k for k in bname if k in nname]
-    if len(shared) < 3:
-        print(f"[interactive] floorplan: only {len(shared)} shared name(s), "
-              f"no projection", flush=True)
-        return png, w, h, None
-    src = [nname[k] for k in shared]
-    ax = _fit_affine(src, [bname[k][0] for k in shared])
-    ay = _fit_affine(src, [bname[k][1] for k in shared])
-    print(f"[interactive] floorplan: {os.path.basename(png)} {w}x{h}, "
-          f"fitted on {len(shared)} shared waypoints", flush=True)
-    return png, w, h, (lambda x, y: (ax[0] * x + ax[1] * y + ax[2],
-                                     ay[0] * x + ay[1] * y + ay[2]))
+    idx = {i: named[n] for i, (n, _x, _y) in enumerate(ST["verts"])
+           if n in named}
+    pts = ([(x, y) for x1, y1, x2, y2 in walls + doors
+            for x, y in ((x1, y1), (x2, y2))] + list(idx.values()))
+    if not pts:
+        return empty
+    pad = 30
+    mx = min(x for x, _ in pts)
+    my = min(y for _, y in pts)
+
+    def shift(x, y):
+        return (round(x - mx + pad, 1), round(y - my + pad, 1))
+
+    plan = {"w": round(max(x for x, _ in pts) - mx + 2 * pad, 1),
+            "h": round(max(y for _, y in pts) - my + 2 * pad, 1),
+            "walls": [shift(x1, y1) + shift(x2, y2)
+                      for x1, y1, x2, y2 in walls],
+            "doors": [shift(x1, y1) + shift(x2, y2)
+                      for x1, y1, x2, y2 in doors]}
+    px_of = {i: shift(x, y) for i, (x, y) in idx.items()}
+    print(f"[interactive] plan: {len(walls)} walls, {len(doors)} doors, "
+          f"{len(px_of)}/{len(ST['verts'])} vertices placed by name",
+          flush=True)
+    return plan, px_of
+
+
+def v_px(i):
+    """Where vertex i sits on the plan, or None if the drawing lacks it."""
+    return (ST.get("px_of") or {}).get(i)
 
 
 # ---- verification: a subtask completes when the world says it did ------------
@@ -1863,7 +1846,7 @@ header #mbox{flex:1;min-width:140px}
 <main>
  <div id=stack>
   <div class="panel" id=mid>
-   <div class=ph><b>floorplan</b> + nav graph + position
+   <div class=ph><b>plan</b> + nav graph + position
     <span class=leg style="float:right"><span><i style="background:#3fb950"></i>you</span>
     <span><i style="background:#7aa2f7"></i>waypoint</span>
     <span><i style="background:#e0a030"></i>door</span>
@@ -1956,7 +1939,7 @@ function splitter(id,onDown,onMove){
   document.getElementById('simpop').href=base;
 })();
 const $=id=>document.getElementById(id);
-let G=null, FP=new Image(), fpReady=false, last=null;
+let G=null, last=null;
 function ts(){return new Date().toTimeString().slice(0,8)}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function logEv(cls,text){const e=document.createElement('div');e.className='ev '+cls;
@@ -1979,8 +1962,15 @@ function drawMap(s){const c=$('map'),g=c.getContext('2d');if(!G){return}
  const k=Math.min(W/(G.w||1),H/(G.h||1));
  const ox=(W-(G.w||1)*k)/2, oy=(H-(G.h||1)*k)/2, sx=k, sy=k;
  const P=(px,py)=>[px*k+ox,py*k+oy];
- if(fpReady){g.globalAlpha=.55;g.drawImage(FP,ox,oy,(G.w||1)*k,(G.h||1)*k);g.globalAlpha=1}
- else{g.fillStyle='#11151c';g.fillRect(0,0,W,H)}
+ // the editor's plan: dark ground, wall linework, doors amber
+ g.fillStyle='#0a0d12';g.fillRect(0,0,W,H);
+ if(G.walls)for(const w of G.walls){const a=P(w[0],w[1]),b=P(w[2],w[3]);
+  g.strokeStyle='#3a4757';g.lineWidth=2;g.beginPath();
+  g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke()}
+ if(G.doors)for(const w of G.doors){const a=P(w[0],w[1]),b=P(w[2],w[3]);
+  g.strokeStyle='#e0a030';g.lineWidth=3.5;g.beginPath();
+  g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke()}
+ g.lineWidth=1;
  // edges
  const V={};for(const v of G.verts)V[v.id]=v;
  for(const e of G.edges){const a=V[e.u],b=V[e.v];if(!a||!b)continue;
@@ -2156,8 +2146,6 @@ function connect(){const es=new EventSource('events');
   es.close();setTimeout(connect,3000)}}
 
 function loadGraph(){fetch('graph').then(r=>r.json()).then(g=>{G=g;
- if(g.has_floorplan){fpReady=false;FP.onload=()=>{fpReady=true;fitCanvas();if(last)drawMap(last)};
-  FP.src='floorplan.png?t='+Date.now()}
  fitCanvas();fetch('state').then(r=>r.json()).then(onState)})}
 loadGraph();
 window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
@@ -2328,13 +2316,12 @@ def r_command():
 
 @app.route("/graph")
 def r_graph():
-    """The nav graph, in floorplan pixels where a projection could be fitted, so
-    the minimap draws the building rather than an abstract diagram."""
-    m2px = ST.get("m2px")
+    """The nav graph on the building's own drawing: walls and doors as
+    linework, vertices placed by name — the editor's plan, not a raster."""
     built = set(built_scenes())
     verts = []
     for i, (name, x, y) in enumerate(ST["verts"]):
-        px, py = m2px(x, y) if m2px else (x, y)
+        px, py = v_px(i) or (x, y)
         verts.append({"id": i, "name": name or f"v{i}",
                       "px": round(px, 1), "py": round(py, 1),
                       "lift": i in ST["lift_of"], "built": lab(i) in built,
@@ -2349,19 +2336,10 @@ def r_graph():
             name = door_between(u, v)
             edges.append({"u": u, "v": v, "door": bool(name),
                           "open": name in ST["open_doors"]})
-    return jsonify(w=ST.get("fp_w", 0), h=ST.get("fp_h", 0),
-                   has_floorplan=bool(ST.get("fp_png") and m2px),
+    plan = ST.get("plan") or {}
+    return jsonify(w=plan.get("w", 0), h=plan.get("h", 0),
+                   walls=plan.get("walls", []), doors=plan.get("doors", []),
                    level=ST["level"], verts=verts, edges=edges)
-
-
-@app.route("/floorplan.png")
-def r_floorplan():
-    png = ST.get("fp_png")
-    if not png:
-        return ("no floorplan for this level", 404)
-    with open(png, "rb") as f:
-        return (f.read(), 200, {"Content-Type": "image/png",
-                                "Cache-Control": "max-age=3600"})
 
 
 @app.route("/events")
@@ -2591,8 +2569,8 @@ def main():
         ST["cur"] = find_vertex(verts, a.start)
     except SystemExit:
         ST["cur"] = 0                       # any vertex beats not booting
-    png, fw, fh, m2px = build_floorplan(a.building, level)
-    ST["fp_png"], ST["fp_w"], ST["fp_h"], ST["m2px"] = png, fw, fh, m2px
+    plan, px_of = build_plan(a.building, level)
+    ST["plan"], ST["px_of"] = plan, px_of
     ST["viewer_base"] = a.viewer.rstrip("/")
     ST["viewer_url"] = f"{a.viewer}/?at={lab(ST['cur'])}"
 
