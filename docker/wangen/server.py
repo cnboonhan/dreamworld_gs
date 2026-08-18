@@ -48,7 +48,7 @@ def pipeline():
     return PIPE
 
 
-def run_job(scene: str, prompt: str) -> dict:
+def run_job(scene: str, prompt: str, negative_extra: str = "") -> dict:
     d = Path(scene)
     log = d / "generate.log"
     try:
@@ -60,6 +60,10 @@ def run_job(scene: str, prompt: str) -> dict:
         last = load_image(str(d / "last.png"))
         negative = ("blurry, warped geometry, distortion, text artifacts, "
                     "jump cut, flicker, people")
+        if negative_extra:
+            # per-crossing steering from the caller — what THIS kind of
+            # crossing must not show, on top of the always-unwanted
+            negative = f"{negative}, {negative_extra}"
         out = pipe(image=first, last_image=last, prompt=prompt,
                    negative_prompt=negative, height=480, width=832,
                    num_frames=81, num_inference_steps=40,
@@ -85,7 +89,7 @@ def worker() -> None:
         if job is None:
             time.sleep(1)
             continue
-        result = run_job(job["dir"], job["prompt"])
+        result = run_job(job["dir"], job["prompt"], job.get("negative", ""))
         with LOCK:
             STATE.update(done=result, busy=False, scene=None)
 
@@ -137,7 +141,8 @@ class Handler(BaseHTTPRequestHandler):
             if scene == STATE["scene"] or scene in (j["dir"] for j in QUEUE):
                 return self._send(409, {"error": "that crossing is already "
                                         "running or queued"})
-            QUEUE.append({"dir": scene, "prompt": prompt})
+            QUEUE.append({"dir": scene, "prompt": prompt,
+                          "negative": req.get("negative", "").strip()})
             position = len(QUEUE) + (1 if STATE["busy"] else 0)
         self._send(200, {"ok": True, "dir": scene, "position": position})
 

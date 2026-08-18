@@ -37,13 +37,21 @@ PROMPTS = {
                  "beyond, ending outside the lift. Smooth steady forward "
                  "camera motion, photorealistic indoor lighting."),
     # a template, not a prompt: default_prompt() fills {motion} with the
-    # ride's real direction, read from the two levels' elevations
-    "lift_ride": ("First-person lift ride. The metallic lift doors "
-                  "directly ahead slide fully shut, the closed cabin "
-                  "{motion}, and on arrival the metallic doors slide open "
-                  "again onto the destination level; the camera holds "
-                  "steady facing the doors throughout. Photorealistic "
-                  "indoor lighting."),
+    # ride's real direction, read from the two levels' elevations. Both
+    # conditioning frames PIN the doors open (the panoramas were shot from
+    # the open cabin), so the close-ride-reopen is a strict three-act
+    # story the prompt spells out in order — and NEG_LIFT below bans the
+    # lazy alternative the model reaches for, riding with the doorway
+    # open while the shaft slides past.
+    "lift_ride": ("First-person view from inside a lift cabin, the camera "
+                  "locked facing the open doorway. First the two "
+                  "brushed-metal door panels slide in from the sides and "
+                  "close completely, sealing the cabin behind a solid "
+                  "metallic wall. The doors stay fully shut while the "
+                  "cabin {motion}. Finally the metallic doors slide apart "
+                  "and open onto the destination floor. The camera never "
+                  "moves; only the doors close and later reopen. "
+                  "Photorealistic indoor lighting."),
     "open": ("First-person walkthrough. The camera moves smoothly forward "
              "along the open corridor toward the destination, steady "
              "motion, photorealistic indoor office lighting, consistent "
@@ -84,6 +92,13 @@ def saved_prompt(frm, la, to, lb):
     return p.read_text().strip() if p.is_file() else None
 
 
+# what a lift ride must NOT show — sent to the generator as extra negative
+# prompt, the counterweight to the open-door endpoints
+NEG_LIFT = ("doors staying open during the ride, view into the elevator "
+            "shaft, exposed shaft walls, passing floor slabs, camera "
+            "moving through the building")
+
+
 def default_prompt(frm, to):
     kind = store.edge_kind(frm, to)
     if kind != "lift_ride":
@@ -93,8 +108,8 @@ def default_prompt(frm, to):
             for ln, L in store.load_levels().items()}
     up = elev.get(dream[to]["level"], 0) > elev.get(dream[frm]["level"], 0)
     return PROMPTS["lift_ride"].format(
-        motion="rises to another floor" if up
-        else "descends to another floor")
+        motion="rises to a higher floor" if up
+        else "descends to a lower floor")
 
 
 def ready() -> bool:
@@ -133,8 +148,10 @@ def submit(frm, la, to, lb, prompt: str) -> dict:
             d / f"{tag}.png")
     (d / "prompt.txt").write_text(prompt.strip() + "\n")
     (d / "crossing.mp4").unlink(missing_ok=True)
-    r = requests.post(f"{URL}/generate",
-                      json={"dir": str(d), "prompt": prompt}, timeout=30)
+    body = {"dir": str(d), "prompt": prompt}
+    if a["level"] != b["level"]:
+        body["negative"] = NEG_LIFT
+    r = requests.post(f"{URL}/generate", json=body, timeout=30)
     if r.status_code == 409:
         raise RuntimeError("that crossing is already running or queued")
     r.raise_for_status()
