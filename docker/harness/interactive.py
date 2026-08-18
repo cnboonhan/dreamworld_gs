@@ -1876,9 +1876,10 @@ input:focus{outline:0;border-color:#1f6feb}
 #mapctl{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;
  gap:6px;align-items:stretch;background:rgba(13,17,23,.88);border:1px solid #30363d;
  border-radius:6px;padding:8px;z-index:5}
-#mapctl input{width:150px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+#mapctl select{background:#0d1117;border:1px solid #30363d;color:#e6edf3;
  border-radius:4px;padding:4px 6px;font-size:11px}
-#mapctl input#tplevel{width:44px}
+#mapctl select#tpwhere{width:160px}
+#mapctl select#tplevel{width:58px}
 #mapctl .row{display:flex;gap:4px;align-items:center}
 #mapctlmin{position:absolute;top:2px;right:4px;background:none;border:0;
  color:#8b949e;cursor:pointer;font-size:12px;padding:2px}
@@ -1959,11 +1960,11 @@ header #mbox{flex:1;min-width:140px}
        <button onclick="cmd('turn right')" title="turn right">↱</button>
       </div>
       <div class=row>
-       <input id=tpwhere placeholder="click a vertex"
+       <select id=tpwhere
         title="puts the robot there, shuts every door and lift, and starts
- again — an operator move, not something the agent can do. Left empty,
- reset just shuts every door.">
-       <input id=tplevel placeholder="level">
+ again — an operator move, not something the agent can do. On the empty
+ choice, reset just shuts every door."></select>
+       <select id=tplevel title="which level to reset on"></select>
        <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
      </div>
     </div>
@@ -2224,7 +2225,6 @@ function onState(s){
  // dropping it turned the marker back into a dot until the next pose arrived.
  if(s.dir==null&&last&&last.dir)s.dir=last.dir;
  last=s;if(s.level)curLevel=s.level;
- if(!$('tplevel').value)$('tplevel').value=curLevel;   // never blank on arrival
  setMission(s.mission);setTodos(s.todos);viewerLink(s);drawMap(s);
  if(s.agent_busy!=null){agentRunning=!!s.agent_busy;
   agentPaused=agentRunning&&!!s.agent_paused;updateRunBtn()}}
@@ -2260,8 +2260,20 @@ function connect(){const es=new EventSource('events');
  es.onerror=()=>{$('dot').classList.add('off');$('stat').textContent='reconnecting…';
   es.close();setTimeout(connect,3000)}}
 
+// the reset dropdowns: pick a level, its waypoints follow; the blank
+// choice means "just shut every door"
+function fillWaypoints(l,keep){const wp=$('tpwhere'),names=(G&&G.levels&&G.levels[l])||[];
+ wp.innerHTML='<option value="">close doors only</option>'
+  +names.map(n=>`<option>${esc(n)}</option>`).join('');
+ if(keep&&names.includes(keep))wp.value=keep}
+function fillReset(){if(!G||!G.levels)return;const lv=$('tplevel');
+ const cur=(G.levels[lv.value]?lv.value:null)||curLevel||G.level;
+ lv.innerHTML=Object.keys(G.levels).map(l=>
+  `<option${l===cur?' selected':''}>${l}</option>`).join('');
+ fillWaypoints(cur,$('tpwhere').value)}
+$('tplevel').addEventListener('change',e=>fillWaypoints(e.target.value));
 function loadGraph(){fetch('graph').then(r=>r.json()).then(g=>{G=g;
- fitCanvas();fetch('state').then(r=>r.json()).then(onState)})}
+ fillReset();fitCanvas();fetch('state').then(r=>r.json()).then(onState)})}
 loadGraph();
 window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
 // hover a map vertex -> tooltip; click a vertex while a tool input is active -> fill it in
@@ -2315,7 +2327,7 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
   // The map only ever draws one level, so a waypoint clicked on it is on that
   // level and the box should say which — an empty level box means "wherever the
   // dashboard already is", which is the same place today and not tomorrow.
-  else{$('tpwhere').value=label;$('tplevel').value=curLevel;$('tpwhere').focus()}})})();
+  else{$('tplevel').value=curLevel;fillWaypoints(curLevel,label)}})})();
 loadTools();
 connect();
 </script></body></html>"""
@@ -2487,9 +2499,17 @@ def r_graph():
                           or ecol.get(f"{b}__{a}"),
                           "open": name in ST["open_doors"]})
     plan = ST.get("plan") or {}
+    # every level's waypoint names, for the reset dropdowns — a reset may
+    # land on a level this page is not currently drawing
+    nav = nav_data(ST["nav"])
+    by_level = {ln: sorted(v[2].get("name") for v in (L.get("vertices") or [])
+                           if len(v) > 2 and isinstance(v[2], dict)
+                           and v[2].get("name"))
+                for ln, L in (nav.get("levels") or {}).items()}
     return jsonify(w=plan.get("w", 0), h=plan.get("h", 0),
                    walls=plan.get("walls", []), doors=plan.get("doors", []),
-                   level=ST["level"], verts=verts, edges=edges)
+                   level=ST["level"], levels=by_level,
+                   verts=verts, edges=edges)
 
 
 @app.route("/events")
