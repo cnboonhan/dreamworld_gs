@@ -25,7 +25,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATE = {"viewer": None, "stamp": 0.0,
-         "position": None, "seq": 0, "pos_stamp": 0.0}
+         # seq seeds from the clock: a restart must jump FORWARD, never
+         # back to zero — a viewer holding yesterday's seq would otherwise
+         # gate out every command until its tab reloads
+         "position": None, "seq": int(time.time()), "pos_stamp": 0.0}
 LOCK = threading.Lock()
 
 

@@ -1880,6 +1880,10 @@ input:focus{outline:0;border-color:#1f6feb}
  border-radius:4px;padding:4px 6px;font-size:11px}
 #mapctl input#tplevel{width:44px}
 #mapctl .row{display:flex;gap:4px;align-items:center}
+#mapctlmin{position:absolute;top:2px;right:4px;background:none;border:0;
+ color:#8b949e;cursor:pointer;font-size:12px;padding:2px}
+#mapctlmin:hover{color:#58a6ff}
+#mapctlbody{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 /* The sim, embedded: rmfsim's noVNC screen between the floorplan and the
    controls, resizable by the splitter above it. Sized by flex-basis (height
    on a flex child loses to it); the map above flexes. */
@@ -1935,25 +1939,33 @@ header #mbox{flex:1;min-width:140px}
  <div id=stack>
   <div class="panel" id=mid>
    <div class=ph><b>map</b>
-    <span class=leg style="float:right"><span><i style="background:#3fb950"></i>you</span>
-    <span><i style="background:#7aa2f7"></i>waypoint</span>
+    <span class=leg style="float:right"><span><i style="background:#4ea1ff"></i>you</span>
+    <span><i style="background:#f85149"></i>not aligned</span>
+    <span><i style="background:#e3b341"></i>in progress</span>
+    <span><i style="background:#3fb950"></i>complete</span>
     <span><i style="background:#e0a030"></i>door</span>
-    <span><i style="background:#d24dcf"></i>lift</span>
-    <span><i style="background:#0d1117;border:1px solid #484f58"></i>no world yet</span></span></div>
+    <span><i style="background:#d24dcf"></i>lift</span></span></div>
    <div id=mapwrap><canvas id=map></canvas>
     <div id=mapctl>
-     <div id=pad>
-      <button onclick="cmd('turn left')" title="turn left">↰</button>
-      <button onclick="cmd('forward')" title="straight ahead">↑</button>
-      <button onclick="cmd('turn right')" title="turn right">↱</button>
-     </div>
-     <div class=row>
-      <input id=tpwhere placeholder="click a vertex"
-       title="puts the robot there, shuts every door and lift, and starts
+     <button id=mapctlmin title="fold the controls away"
+      onclick="const b=document.getElementById('mapctlbody');
+       const off=b.style.display==='none';
+       b.style.display=off?'':'none';this.textContent=off?'−':'✛';
+       this.title=off?'fold the controls away':'controls'">−</button>
+     <div id=mapctlbody>
+      <div id=pad>
+       <button onclick="cmd('turn left')" title="turn left">↰</button>
+       <button onclick="cmd('forward')" title="straight ahead">↑</button>
+       <button onclick="cmd('turn right')" title="turn right">↱</button>
+      </div>
+      <div class=row>
+       <input id=tpwhere placeholder="click a vertex"
+        title="puts the robot there, shuts every door and lift, and starts
  again — an operator move, not something the agent can do. Left empty,
  reset just shuts every door.">
-      <input id=tplevel placeholder="level">
-      <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
+       <input id=tplevel placeholder="level">
+       <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
+     </div>
     </div>
    </div>
    <div id=middrag title="drag to resize the simulation"></div>
@@ -2069,21 +2081,24 @@ function drawMap(s){const c=$('map'),g=c.getContext('2d');if(!G){return}
   g.strokeStyle='#e0a030';g.lineWidth=3.5;g.beginPath();
   g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke()}
  g.lineWidth=1;
- // edges
+ // edges wear their crossings' traffic light, like the editor's plan
  const V={};for(const v of G.verts)V[v.id]=v;
  for(const e of G.edges){const a=V[e.u],b=V[e.v];if(!a||!b)continue;
   const[ax,ay]=P(a.px,a.py),[bx,by]=P(b.px,b.py);
-  g.strokeStyle=e.door?'#8a6d1f':'#2f4568';g.lineWidth=e.door?2.5:1.5;
+  g.strokeStyle=e.color||'#2f4568';g.lineWidth=2.5;
   g.beginPath();g.moveTo(ax,ay);g.lineTo(bx,by);g.stroke()}
  g.lineWidth=1;
- // vertices
+ // vertices: the editor's traffic lights — red unaligned, yellow in
+ // progress, green complete; lifts are magenta-ringed diamonds
  for(const v of G.verts){const[x,y]=P(v.px,v.py);
-  g.fillStyle=v.lift?'#d24dcf':(v.door?'#e0a030':'#7aa2f7');
-  g.beginPath();g.arc(x,y,4,0,7);g.fill();
-  // hollow ring = no splat world generated for this waypoint yet
-  if(!v.built){g.strokeStyle='#0d1117';g.lineWidth=2;g.stroke();
-   g.strokeStyle='#484f58';g.lineWidth=1;g.beginPath();g.arc(x,y,6,0,7);g.stroke()}
-  if(v.name){g.fillStyle='#7d8590';g.font='9px sans-serif';g.textAlign='center';
+  const fill=v.color||'#7d8590';
+  if(v.lift){g.save();g.translate(x,y);g.rotate(Math.PI/4);
+   g.fillStyle=fill;g.strokeStyle='#d24dcf';g.lineWidth=1.5;
+   g.fillRect(-4,-4,8,8);g.strokeRect(-4,-4,8,8);g.restore();g.lineWidth=1}
+  else{g.fillStyle=fill;g.strokeStyle='#0d1117';g.lineWidth=1.5;
+   g.beginPath();g.arc(x,y,4,0,7);g.fill();g.stroke();g.lineWidth=1}
+  if(v.name){g.fillStyle=v.lift?'#d24dcf':'#7d8590';
+   g.font='9px sans-serif';g.textAlign='center';
    g.fillText(v.name,x,y-7)}}
  // robot + facing arrow (dir is a unit vector already projected into floorplan pixels)
  if(s&&s.px!=null){const[x,y]=P(s.px,s.py);
@@ -2096,12 +2111,12 @@ function drawMap(s){const c=$('map'),g=c.getContext('2d');if(!G){return}
    const a=Math.atan2(dy/dl,dx/dl);
    const P2=(r,off)=>[x+r*Math.cos(a+off),y+r*Math.sin(a+off)];
    const tip=P2(13,0),l=P2(9,2.55),r=P2(9,-2.55);      // long nose, swept back
-   g.fillStyle='#3fb950';g.beginPath();
+   g.fillStyle='#4ea1ff';g.beginPath();
    g.moveTo(tip[0],tip[1]);g.lineTo(l[0],l[1]);
    g.lineTo(x,y);g.lineTo(r[0],r[1]);                  // notched tail, so the
    g.closePath();g.fill();                             // point is unmistakable
    g.strokeStyle='#0d1117';g.lineWidth=1.5;g.stroke();g.lineWidth=1}
-  else{g.fillStyle='#3fb950';g.beginPath();g.arc(x,y,7,0,7);g.fill();
+  else{g.fillStyle='#4ea1ff';g.beginPath();g.arc(x,y,7,0,7);g.fill();
    g.strokeStyle='#0d1117';g.lineWidth=2;g.stroke();g.lineWidth=1}}
 }
 function headingDir(s){if(!G||!s||s.facing==null)return null;
@@ -2443,14 +2458,20 @@ def r_command():
 @app.route("/graph")
 def r_graph():
     """The nav graph on the building's own drawing: walls and doors as
-    linework, vertices placed by name — the editor's plan, not a raster."""
+    linework, vertices placed by name, wearing the EDITOR's traffic-light
+    colors — one scheme across every surface."""
     built = set(built_scenes())
+    eg = editor_graph()
+    estate = {n: v.get("state")
+              for n, v in (eg.get("vertices") or {}).items()}
+    ecol = eg.get("edge_colors") or {}
     verts = []
     for i, (name, x, y) in enumerate(ST["verts"]):
         px, py = v_px(i) or (x, y)
         verts.append({"id": i, "name": name or f"v{i}",
                       "px": round(px, 1), "py": round(py, 1),
                       "lift": i in ST["lift_of"], "built": lab(i) in built,
+                      "color": estate.get(name),
                       "door": any(door_between(i, j) for j, _ in ST["adj"].get(i, []))})
     edges, seen = [], set()
     for u in ST["adj"]:
@@ -2460,7 +2481,10 @@ def r_graph():
                 continue
             seen.add(key)
             name = door_between(u, v)
+            a, b = lab(u), lab(v)
             edges.append({"u": u, "v": v, "door": bool(name),
+                          "color": ecol.get(f"{a}__{b}")
+                          or ecol.get(f"{b}__{a}"),
                           "open": name in ST["open_doors"]})
     plan = ST.get("plan") or {}
     return jsonify(w=plan.get("w", 0), h=plan.get("h", 0),

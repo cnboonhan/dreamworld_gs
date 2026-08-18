@@ -308,6 +308,9 @@ def graph_doc() -> dict:
         doc["vertices"][name] = {
             "level": v["level"], "x": v["x"], "y": v["y"],
             "lift": v.get("lift"), "looks": looks,
+            # the traffic-light state, so every surface wears the same
+            # colors this editor's plan does
+            "state": state_color(v),
         }
     cross = DREAM / ".crossings"
     if cross.is_dir():

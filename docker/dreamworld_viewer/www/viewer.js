@@ -247,6 +247,9 @@ addEventListener('DOMContentLoaded', () => {
 let lastSeq = 0;
 function followTruth(pos, seq) {
   if (!st.follow || st.moving || !graph) return;
+  // a seq far BELOW ours means the core restarted and began a new count —
+  // resync rather than gate out every command until this tab reloads
+  if (seq < lastSeq - 100) lastSeq = seq - 1;
   if (!(seq > lastSeq)) return;
   lastSeq = seq;
   enact(pos.at, pos.look, pos.yaw_deg);
@@ -586,12 +589,14 @@ function drawPlan() {
     const v = graph.vertices[n];
     return Math.hypot(v.x - me.x, v.y - me.y);
   })) * 1.4;
-  const cx2 = 140, cy2 = 110, R = 95;
+  // sized from the canvas, not constants: the plan is resizable now
+  const W = plan.width, H = plan.height;
+  const cx2 = W / 2, cy2 = H / 2, R = Math.min(W, H) / 2 - 15;
   const P = (x, y) => [cx2 + (x - me.x) / far * R,
                        cy2 + (y - me.y) / far * R];
   // clear, not fill: the plan's translucency is its CSS background,
   // so the world stays faintly visible behind it
-  px.clearRect(0, 0, 320, 220);
+  px.clearRect(0, 0, W, H);
   px.strokeStyle = '#3a4757'; px.lineWidth = 2; px.beginPath();
   for (const w of L.walls) {
     const a = P(w[0], w[1]), b = P(w[2], w[3]);
@@ -625,7 +630,7 @@ function drawPlan() {
     // vanish into the clip
     const label = n.split('.').pop();
     const lx = Math.min(cx2 + (x - cx2) * 0.62 + 3,
-                        316 - px.measureText(label).width);
+                        W - 4 - px.measureText(label).width);
     px.fillText(label, lx, cy2 + (y - cy2) * 0.62 - 3);
     if (built) hits.push({ n, x, y });
   }
@@ -639,6 +644,18 @@ function drawPlan() {
   px.moveTo(tip[0], tip[1]); px.lineTo(l[0], l[1]);
   px.lineTo(cx2, cy2); px.lineTo(r2[0], r2[1]); px.fill();
 }
+// the plan wears a CSS resize grip; keep the bitmap matched to the box
+// and the crossing panel tucked beneath whatever size it becomes
+new ResizeObserver(() => {
+  const w = Math.max(160, plan.clientWidth | 0);
+  const h = Math.max(120, plan.clientHeight | 0);
+  if (plan.width !== w || plan.height !== h) {
+    plan.width = w; plan.height = h;
+    drawPlan();
+  }
+  const pn = $('panel');
+  if (pn) pn.style.top = (plan.offsetTop + plan.offsetHeight + 10) + 'px';
+}).observe(plan);
 const planBtn = $('planBtn');
 planBtn.onclick = () => {
   const off = plan.style.display === 'none';

@@ -579,11 +579,18 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
         return
 
     if wmine in wq:
-        now = next(iter(running), None)
-        ui.label(f"queued — position {wq.index(wmine) + 1} · generating "
-                 f"now: {crossing.short(now)}" if now else
-                 f"queued — position {wq.index(wmine) + 1}").classes(
-            "text-xs text-[#f0a35e]")
+        # the position is a place in ONE generator's line — the fleet
+        # count up in the header is a different number on purpose
+        pos, now = wq.index(wmine) + 1, None
+        for inst in wstat.get("by") or []:
+            q = [x.rstrip("/") for x in inst.get("queue") or []]
+            if wmine in q:
+                pos = q.index(wmine) + 1
+                now = (inst.get("scene") or "").rstrip("/")
+                break
+        ui.label(f"queued — position {pos} on its generator"
+                 + (f" · it is generating: {crossing.short(now)}"
+                    if now else "")).classes("text-xs text-[#f0a35e]")
 
         def tick_q():
             s = crossing.status() or {}
@@ -624,7 +631,7 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
                 return
             pos = doc.get("position", 1)
             ui.notify("crossing started — a few minutes" if pos <= 1
-                      else f"queued at position {pos}")
+                      else f"queued at position {pos} on its generator")
             refresh_all()
 
         vid_btn = ui.button("regenerate transition" if vid else

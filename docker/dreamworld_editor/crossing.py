@@ -156,6 +156,11 @@ def status():
     first = next(iter(running), None)
     return {"busy": bool(running), "scene": first, "running": running,
             "queue": [q for s in sts for q in (s.get("queue") or [])],
+            # per-instance views, for anything that reports a POSITION —
+            # a place in one card's line, not in the concatenation
+            "by": [{"scene": s.get("scene"), "queue": s.get("queue") or [],
+                    "elapsed": s.get("elapsed"),
+                    "loaded": s.get("loaded", True)} for s in sts],
             "dones": [s["done"] for s in sts if s.get("done")],
             "done": next((s["done"] for s in sts if s.get("done")), None),
             "elapsed": running[first]["elapsed"] if first else None,

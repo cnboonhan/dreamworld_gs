@@ -36,7 +36,13 @@ app.add_static_files("/files", str(DREAM))
 @app.get("/graph")
 def graph():
     """The dreamworld, for the walkthrough viewer at /dreamworld_viewer."""
-    return store.graph_doc()
+    import crossing  # here, not at top: crossing imports store imports config
+    doc = store.graph_doc()
+    # the edges' traffic lights, keyed a__b — computed here because store
+    # cannot import crossing (crossing imports store)
+    doc["edge_colors"] = {f"{a}__{b}": crossing.edge_color(a, b)
+                          for a, b in doc.get("edges") or []}
+    return doc
 
 
 @app.post("/upload_pano")
