@@ -426,17 +426,19 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
     va, vb = dream[frm], dream[to]
     la, lb = _elook(sel, frm), _elook(sel, to)
     if va["level"] != vb["level"]:
-        # a lift ride is vertical: both panoramas face east, paired, and
-        # the crossing prompt carries the actual direction of travel
-        bearing = 0.0
+        # a lift ride is vertical: each end faces ITS OWN cabin door.
+        # East was only ever lift1's coincidence — lift2 across the hall
+        # faces the other way.
+        b_frm = store.lift_door_bearing(frm)
+        b_to = store.lift_door_bearing(to)
     else:
         # drawing pixels run y-down; bearings live in the y-up compass frame
-        bearing = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
+        b_frm = b_to = math.atan2(-(vb["y"] - va["y"]), vb["x"] - va["x"])
     with ui.card().classes("w-full bg-[#11151c]"):
         ui.label(f"{frm} → {to}").classes("font-bold")
 
         with ui.row().classes("w-full gap-2 flex-nowrap"):
-            for nm, look in ((frm, la), (to, lb)):
+            for nm, look, brg in ((frm, la, b_frm), (to, lb, b_to)):
                 with ui.column().classes("grow min-w-0 gap-1"):
                     ui.label(f"at {nm}").classes(
                         "text-xs text-gray-500 truncate")
@@ -466,11 +468,11 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                     # grouped per direction card: the pair starts on the
                     # edge's bearing and pans together, apart from the
                     # vertex viewers' own shared heading
-                    ui.timer(0.15, lambda cv=cv, url=url, ns=ns:
+                    ui.timer(0.15, lambda cv=cv, url=url, ns=ns, brg=brg:
                              ui.run_javascript(
                                  f"dwPano({cv.id}, '{url}', -1, '{ns}', "
                                  f"{{free:true, group:'ep_{tag}'}});"
-                                 f"dwp('{ns}','face',{bearing})"),
+                                 f"dwp('{ns}','face',{brg})"),
                              once=True)
         ui.label("Splat Transition").classes("font-bold")
 
@@ -495,9 +497,9 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
         # building bearing — both ends of the walk look the same way, which
         # is what makes the crossing line up. Spawn cam is the fallback for
         # worlds generated before position meta was kept.
-        cam_a = store.edge_view(frm, la, bearing) \
+        cam_a = store.edge_view(frm, la, b_frm) \
             or f"'{ua}/world.cam.json?t={ta}'"
-        cam_b = store.edge_view(to, lb, bearing) \
+        cam_b = store.edge_view(to, lb, b_to) \
             or f"'{ub}/world.cam.json?t={tb}'"
 
         async def boot():

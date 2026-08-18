@@ -312,6 +312,10 @@ def graph_doc() -> dict:
             # colors this editor's plan does
             "state": state_color(v),
         }
+        if v.get("lift"):
+            # which way the cabin's door faces — the ride's true heading
+            doc["vertices"][name]["door_bearing"] = round(
+                lift_door_bearing(name), 4)
     cross = DREAM / ".crossings"
     if cross.is_dir():
         doc["crossings"] = sorted(
@@ -475,6 +479,22 @@ def _segments_cross(ax, ay, bx, by, cx, cy, dx, dy) -> bool:
         return 0 if abs(v) < 1e-9 else (1 if v > 0 else -1)
     return (o(ax, ay, bx, by, cx, cy) != o(ax, ay, bx, by, dx, dy)
             and o(cx, cy, dx, dy, ax, ay) != o(cx, cy, dx, dy, bx, by))
+
+
+def lift_door_bearing(name: str) -> float:
+    """Where the cabin's DOOR is, as a building bearing: toward the
+    cabin's same-level neighbour — the lift_in edge every ridable cabin
+    has. East was only ever lift1's coincidence (its shaft sits west of
+    the lobby); lift2 across the hall faces the other way entirely."""
+    dream = load_dream()
+    me = dream.get(name) or {}
+    for a, b in load_edges():
+        if name not in (a, b):
+            continue
+        o = dream.get(b if a == name else a)
+        if o and o.get("level") == me.get("level"):
+            return math.atan2(-(o["y"] - me["y"]), o["x"] - me["x"])
+    return 0.0
 
 
 def edge_kind(frm: str, to: str) -> str:

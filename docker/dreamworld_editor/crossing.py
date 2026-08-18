@@ -173,18 +173,20 @@ def submit(frm, la, to, lb, prompt: str) -> dict:
     dream = store.load_dream()
     a, b = dream[frm], dream[to]
     if a["level"] != b["level"]:
-        # a lift ride is vertical: the drawing offset between the two
-        # cabins is noise from each level's own pixel frame, and atan2 of
-        # noise is a random heading. Both frames face building east — the
-        # same convention the edge panel and the walkthrough use.
-        bearing = 0.0
+        # a lift ride is vertical: each end faces ITS OWN cabin door —
+        # east was only ever lift1's coincidence, and lift2's door faces
+        # the opposite way. The prompt says "doors directly ahead", so
+        # the frames must actually show them.
+        b_frm = store.lift_door_bearing(frm)
+        b_to = store.lift_door_bearing(to)
     else:
-        bearing = math.atan2(-(b["y"] - a["y"]), b["x"] - a["x"])
+        b_frm = b_to = math.atan2(-(b["y"] - a["y"]), b["x"] - a["x"])
     d = job_dir(frm, la, to, lb)
     d.mkdir(parents=True, exist_ok=True)
-    for nm, look, tag in ((frm, la, "first"), (to, lb, "last")):
+    for nm, look, tag, brg in ((frm, la, "first", b_frm),
+                               (to, lb, "last", b_to)):
         pano = Image.open(store.pano_of(nm, look))
-        _extract_perspective(pano, bearing, 0.0, 1.2, 832, 480).save(
+        _extract_perspective(pano, brg, 0.0, 1.2, 832, 480).save(
             d / f"{tag}.png")
     (d / "prompt.txt").write_text(prompt.strip() + "\n")
     (d / "crossing.mp4").unlink(missing_ok=True)

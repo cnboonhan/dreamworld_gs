@@ -305,9 +305,9 @@ async function jumpTo(to, look) {
 }
 function bearingToFrom(frm, to) {
   const a = graph.vertices[frm], b = graph.vertices[to];
-  // a lift ride is vertical: the cabins' drawing offset is noise from two
-  // different levels' pixel frames — face building east, like the editor
-  if (a.level !== b.level) return 0;
+  // a lift ride is vertical: face the DEPARTING cabin's own door — east
+  // was only ever lift1's coincidence, lift2's door faces the other way
+  if (a.level !== b.level) return a.door_bearing || 0;
   return Math.atan2(-(b.y - a.y), b.x - a.x);
 }
 // The steady heartbeat lives in a WORKER. The render loop's own pushes
@@ -810,7 +810,10 @@ async function runGo(to, look) {
   const meta = graph.vertices[to].looks[look].meta;
   st.basis = basisOf(meta);
   st.cam.eye = meta.center.slice();
-  st.cam.yaw = bearing;
+  // after a lift ride, land facing the ARRIVAL cabin's door — the walk
+  // bearing otherwise
+  st.cam.yaw = graph.vertices[to].level !== graph.vertices[st.at].level
+    ? (graph.vertices[to].door_bearing || 0) : bearing;
   st.cam.pitch = 0;
   await showRecords(ab);
   await new Promise(r => requestAnimationFrame(
