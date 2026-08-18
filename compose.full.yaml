@@ -64,6 +64,9 @@ services:
     environment:
       HOME: /tmp
       DISPLAY: ":99"
+      # sim wall-clock speed: doors open and lifts ride this many times
+      # faster than real time
+      DW_SIM_RTF: "${DW_SIM_RTF:-3}"
     restart: unless-stopped
 
   # The dreamworld editor — the panorama -> splat -> align -> walkthrough flow

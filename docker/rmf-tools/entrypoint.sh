@@ -93,6 +93,11 @@ sim)
         echo "no world for ${PROJECT}/${MAP} yet — generating it first"
         /app/generate_world.sh "$PROJECT" "$MAP"
     fi
+    # sim speed: dial the world's real_time_factor at LAUNCH, so the knob
+    # survives every regeneration of the world file. Doors and lifts then
+    # answer that much faster in wall-clock.
+    sed -i "s|<real_time_factor>[^<]*</real_time_factor>|<real_time_factor>${DW_SIM_RTF:-3}</real_time_factor>|" \
+        "${world_dir}/${MAP}.world"
     export GZ_SIM_RESOURCE_PATH="/projects/${PROJECT}:${maps}:${world_dir}:${world_dir}/models"
     # Software GL: there is no host X server to borrow a GPU from, and these
     # are floorplan-scale scenes.
