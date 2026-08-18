@@ -308,6 +308,37 @@ def index():
 
     ui.timer(2.0, poll)
 
+    # completion popups: both generators publish their last finished job
+    # under "done" in /status. Watch it and toast the change — seventeen
+    # minutes is long enough that you are looking at another vertex (or
+    # another window) when a world lands. The first tick only records:
+    # whatever finished before this page opened is old news.
+    seen = {}
+
+    async def watch_done():
+        for kind, mod in (("splat", splatgen), ("crossing video", crossing)):
+            st = await run.io_bound(mod.status) or {}
+            d = st.get("done")
+            if not d:
+                continue
+            key = (d.get("scene"), d.get("ok"),
+                   d.get("seconds"), d.get("error"))
+            if seen.get(kind) == key:
+                continue
+            first = kind not in seen
+            seen[kind] = key
+            if first:
+                continue
+            nm = mod.short(d.get("scene") or "")
+            if d.get("ok"):
+                ui.notify(f"{kind} ready — {nm}", type="positive")
+            else:
+                ui.notify(f"{kind} failed — {nm}: {d.get('error')}",
+                          type="negative", close_button="dismiss",
+                          timeout=0)
+
+    ui.timer(5.0, watch_done)
+
 
 # ---- the edge boxes -------------------------------------------------------------
 
