@@ -10,21 +10,26 @@ call. Everything runs on this box, offline, behind one forwarded port.
 
 ## Quick launch
 
-Three sizes, three compose files. Each is a superset of the one before.
+Three sizes. Each is a superset of the one before.
 
-| tier | command | compose file | needs | you get |
+| tier | command | how it runs | needs | you get |
 | --- | --- | --- | --- | --- |
-| **demo** | `just bundle` then `just demo` | `compose.demo.yaml` | no GPU — or no Docker at all (below) | the walkthrough alone, browser-only: walk the splat worlds, cross edges through the generated videos. |
+| **demo** | `just bundle` then `just demo` | a static site — no Docker, no backend | any machine with a browser | the walkthrough alone: walk the splat worlds, cross edges through the generated videos. |
 | **minimal** | `just minimal` | `compose.minimal.yaml` | 1 GPU (~20 GB) | walk + simulate + command an already-generated dreamworld: viewer, Gazebo+RMF sim, harness dashboard and its mission agent (the GPU is the agent's VLM). |
 | **full** | `just up` | `compose.full.yaml` | 8 GPUs (see times below) | everything: authoring UIs and all the generators — splats, crossing videos, panorama variants. |
 
-The demo bundle is a **self-contained static site** — `just bundle` folds
-the viewer in with relative paths, so `compose.demo.yaml` is just a stock
-nginx and ANY static file host serves the same directory: `python3 -m
-http.server` in it works, and so would GitHub Pages or an internal static
-host. Before putting a bundle anywhere public, remember what it shows:
-photoreal reconstructions of a real building are still images of that
-building, and need the same clearance the photographs would.
+The demo bundle is a **self-contained static site**: `just bundle` folds
+the viewer in with relative paths, so any file server serves the
+directory from any subpath — `just demo` is literally `python3 -m
+http.server` inside it. For **GitHub Pages**: `just pages` stages the
+bundle onto a `gh-pages` branch as one parentless commit (with the
+`.nojekyll` that keeps Jekyll from dropping `files/.crossings`); pushing
+that branch and pointing Pages at it is deliberately left manual —
+photoreal reconstructions of a real building need the same clearance the
+photographs would before going anywhere public. Size-wise a bundle fits
+comfortably: no single file near GitHub's 100 MB limit (worlds are
+~25–30 MB) and the whole site sits well under the 1 GB Pages ceiling
+until a building grows past roughly twenty-five worlds.
 
 ```
 ssh -L 8080:localhost:8080 <box>        one tunnel carries every surface

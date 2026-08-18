@@ -73,7 +73,32 @@ bundle proj=project:
     sed -i 's|<script src="viewer.js|<script>window.DW_BASE={files:"files",graph:"graph.json"}</script>\n  <script src="viewer.js|' "$dest/index.html"
     echo "self-contained site at $dest — any static file server can host it"
 
-# DEMO: the bundle behind one nginx — browser only, no backend, no GPU.
-demo:
-    docker compose -f compose.demo.yaml up -d --build
-    @echo "  http://localhost:${DW_DEMO_PORT:-8080}/dreamworld_viewer   walk the bundle"
+# DEMO: serve the bundle locally — it is a static site, so no Docker,
+# no backend: any file server does. Ctrl-C stops it.
+demo proj=project port="8080":
+    @echo "  http://localhost:{{port}}   walk the bundle (ctrl-c to stop)"
+    @cd {{assets}}/projects/{{proj}}/bundle && python3 -m http.server {{port}}
+
+# Stage the bundle onto the gh-pages branch as ONE parentless commit —
+# rerunning replaces it, so history never grows. Deliberately does NOT
+# push: the bundle is a photoreal reconstruction of a real building, and
+# publishing it is a clearance decision, not a build step.
+#
+#   git push -f origin gh-pages       when cleared
+#   repo Settings -> Pages -> deploy from branch gh-pages
+pages proj=project: (bundle proj)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dest={{assets}}/projects/{{proj}}/bundle
+    # Pages runs Jekyll by default, and Jekyll drops dot-paths — which
+    # would silently vanish every crossing under files/.crossings
+    touch "$dest/.nojekyll"
+    # -u: a fresh PATH, not a file — git refuses an existing empty index
+    export GIT_INDEX_FILE=$(mktemp -u)
+    git --work-tree="$dest" add -A
+    tree=$(git write-tree)
+    commit=$(git commit-tree "$tree" -m "pages: {{proj}} bundle")
+    git update-ref refs/heads/gh-pages "$commit"
+    rm -f "$GIT_INDEX_FILE"
+    echo "gh-pages staged at $(git rev-parse --short gh-pages) — push is yours:"
+    echo "    git push -f origin gh-pages"
