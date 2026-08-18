@@ -410,6 +410,18 @@ def bridge(path, body=None, timeout=10):
             headers={"Content-Type": "application/json"},
             method="GET" if body is None else "POST")
         return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+    except urllib.error.HTTPError as e:
+        # the bridge EXPLAINS its refusals in the body — "lift1 is at L1,
+        # not L11" — and logging only the status code threw that away
+        try:
+            doc = json.loads(e.read())
+        except (ValueError, OSError):
+            doc = {}
+        msg = doc.get("error") or f"HTTP {e.code}"
+        log(f"galaxea {path}: {msg}", "err")
+        doc["ok"] = False
+        doc.setdefault("error", msg)
+        return doc
     except (urllib.error.URLError, OSError, ValueError) as e:
         log(f"galaxea {path}: {e}", "err")
         return {}
@@ -932,8 +944,10 @@ def _door(to, mode):
                                          [ST["verts"][tgt][1], ST["verts"][tgt][2]]],
                            "mode": mode})
     if ST.get("galaxea") and not res.get("ok", True):
-        return {"ok": False, "error": res.get("error") or f"the robot refused to {mode} it",
-                "door": name}
+        err = res.get("error") or f"the bridge refused to {mode} it"
+        if "is at" in err:
+            err += " — call_lift brings it to this floor first"
+        return {"ok": False, "error": err, "door": name}
     # Prefer the bridge's own naming; ours is a fallback for a viewer-only run.
     names = res.get("doors") or [name]
     lift = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
@@ -1920,7 +1934,11 @@ input:focus{outline:0;border-color:#1f6feb}
 .ev .t{color:#484f58;margin-right:5px}
 .leg{display:flex;gap:12px;font-size:10px;color:#8b949e;flex-wrap:wrap}
 .leg i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px;vertical-align:middle}
-header h1,#stat,#vlink{flex-shrink:0}
+header h1,#stat,#vlink,#vlmchip{flex-shrink:0}
+#vlmchip{font-size:12px;border:1px solid #30363d;border-radius:10px;
+ padding:2px 8px;color:#8b949e}
+#vlmchip.up{color:#56d364;border-color:#238636}
+#vlmchip.down{color:#f85149;border-color:#da3633}
 #vlink{font-size:12px;color:#8b949e;text-decoration:none;border:1px solid #30363d;
  border-radius:4px;padding:3px 8px}
 #vlink:hover{border-color:#58a6ff;color:#58a6ff}
@@ -1935,7 +1953,8 @@ header #mbox{flex:1;min-width:140px}
 <input id=mbox placeholder="mission for the agent — describe the goal, then Run">
 <button class=go id=runbtn onclick="onRunBtn()">run mission</button>
 <button id=cancelbtn onclick="cancelMission()" title="cancel the running mission and clear it">✕ clear mission</button>
-<span id=stat>connecting…</span><a id=vlink target=_blank rel=noopener></a></header>
+<span id=stat>connecting…</span><a id=vlink target=_blank rel=noopener></a>
+<span id=vlmchip title="the mission agent's VLM, probed every 10s">vlm …</span></header>
 <main>
  <div id=stack>
   <div class="panel" id=mid>
@@ -2330,6 +2349,14 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
   else{$('tplevel').value=curLevel;fillWaypoints(curLevel,label)}})})();
 loadTools();
 connect();
+// the agent's brain, on the header: green with its round-trip when it
+// answers, red when it does not
+async function vlmPing(){const el=$('vlmchip');if(!el)return;
+ try{const j=await(await fetch('vlm_health')).json();
+  if(j.ok){el.textContent='vlm '+j.ms+' ms';el.className='up'}
+  else{el.textContent='vlm down';el.className='down';el.title=j.error||''}}
+ catch(e){el.textContent='vlm ?';el.className='down'}}
+vlmPing();setInterval(vlmPing,10000);
 </script></body></html>"""
 
 
@@ -2746,6 +2773,23 @@ def r_viewer_pose():
         return jsonify(ok=False, error="no dreamworld viewer reporting — "
                                        f"open {ST['viewer_url']}"), 503
     return jsonify(res)
+
+
+@app.route("/vlm_health")
+def r_vlm_health():
+    """The agent's brain, probed: GET the VLM's model list and time it.
+    Server-side because the browser cannot reach the compose network."""
+    if not VLM_BASE_URL:
+        return jsonify(ok=False, error="no VLM configured")
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(f"{VLM_BASE_URL.rstrip('/')}/models")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            r.read()
+        return jsonify(ok=True, ms=round((time.time() - t0) * 1000))
+    except (urllib.error.URLError, OSError) as e:
+        return jsonify(ok=False, ms=round((time.time() - t0) * 1000),
+                       error=str(getattr(e, "reason", e)))
 
 
 @app.route("/health")
