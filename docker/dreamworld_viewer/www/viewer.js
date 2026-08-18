@@ -226,6 +226,15 @@ setInterval(coreMark, 1000);
 // to follow. Rejoining catches up by TELEPORT — wherever the core went
 // meanwhile is not a walk you took, so a fade says so honestly
 addEventListener('DOMContentLoaded', () => {
+  const sp = $('speed');
+  if (sp) {
+    const cur = String(WALK_SPEED);
+    if ([...sp.options].some(o => o.value === cur)) sp.value = cur;
+    sp.onchange = () => {
+      WALK_SPEED = parseFloat(sp.value) || 1.4;
+      localStorage.dwSpeed = sp.value;
+    };
+  }
   $('core').onclick = async () => {
     autoFree = false;
     st.follow = !st.follow;
@@ -814,13 +823,39 @@ function spinTo(bearing, ms) {
     requestAnimationFrame(step);
   });
 }
-function playVideo(url) {
+// ---- constant walking speed --------------------------------------------
+// Every crossing video is ~5s regardless of edge length; played raw, a
+// 3m hop and a 20m corridor take the same time. The playbackRate warps
+// each video to distance / WALK_SPEED, so motion reads constant. The
+// speed is the bar's dropdown (persisted) or a ?speed= override.
+let WALK_SPEED = parseFloat(new URLSearchParams(location.search).get('speed'))
+  || parseFloat(localStorage.dwSpeed || '') || 1.4;
+function distOf(frm, to) {
+  const a = graph.vertices[frm], b = graph.vertices[to];
+  if (!a || !b) return null;
+  if (a.level !== b.level) {
+    const e = l => (graph.levels[l] || {}).elevation || 0;
+    return Math.abs(e(b.level) - e(a.level));
+  }
+  const scale = (graph.levels[a.level] || {}).scale || 0.05;
+  return Math.hypot(b.x - a.x, b.y - a.y) * scale;
+}
+function crossingSecs(frm, to) {
+  const d = distOf(frm, to);
+  return d == null ? null : Math.min(15, Math.max(1.5, d / WALK_SPEED));
+}
+function playVideo(url, secs) {
   return new Promise(res => {
     const v = $('vid');
     v.src = url;
     v.onended = () => res(true);
     v.onerror = () => res(false);
-    v.oncanplay = () => { v.style.opacity = '1'; v.play(); };
+    v.oncanplay = () => {
+      if (secs && v.duration)
+        v.playbackRate = Math.min(4, Math.max(0.25, v.duration / secs));
+      v.style.opacity = '1';
+      v.play();
+    };
     v.load();
   });
 }
@@ -843,7 +878,7 @@ async function runGo(to, look) {
   if (hasVideo) {
     const vurl = await fetchVideo(key)
       || `${FILES}/.crossings/${key}/crossing.mp4`;
-    await playVideo(vurl);
+    await playVideo(vurl, crossingSecs(st.at, to));
   } else {
     $('shade').style.opacity = '1';
     await new Promise(r => setTimeout(r, 350));

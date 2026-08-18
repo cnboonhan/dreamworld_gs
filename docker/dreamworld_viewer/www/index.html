@@ -18,8 +18,7 @@
   #bar .k { color: #8b98a8 }
   /* the same rounded chip the harness header wears */
   #core { font-size: 12px; border: 1px solid #2f3a48; border-radius: 10px;
-          padding: 2px 8px; color: #8b98a8; cursor: pointer;
-          margin-left: auto }
+          padding: 2px 8px; color: #8b98a8; cursor: pointer }
   #core.up { color: #56d364; border-color: #238636 }
   #core.down { color: #f85149; border-color: #da3633 }
   /* the canvas cannot wear a native resize grip (replaced element), and
@@ -94,6 +93,17 @@
     <b>dreamworld viewer</b>
     <span class="k">at</span> <span id="at">…</span>
     <span class="k" id="lookNote"></span>
+    <span class="k" style="margin-left:auto">speed</span>
+    <select id="speed" title="walking speed — every crossing video is
+warped so motion covers this many metres per second"
+            style="background:#1e2530; color:#dfe6ef; border:1px solid #2f3a48;
+                   border-radius:6px; padding:2px 6px; font:inherit">
+      <option value="0.7">0.7 m/s</option>
+      <option value="1.4" selected>1.4 m/s</option>
+      <option value="2.0">2.0 m/s</option>
+      <option value="3.0">3.0 m/s</option>
+      <option value="5.0">5.0 m/s</option>
+    </select>
     <span id="core"
           title="the core is the one writer of position and this viewer
 follows it — click to walk free, click again to catch up">core …</span>
@@ -119,6 +129,6 @@ follows it — click to walk free, click again to catch up">core …</span>
   </div>
   <div id="hint">drag to look · wheel to walk · click a neighbour on the
     plan to cross</div>
-  <script src="viewer.js?v=22"></script>
+  <script src="viewer.js?v=23"></script>
 </body>
 </html>
