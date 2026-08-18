@@ -471,12 +471,7 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                                  f"{{free:true, group:'ep_{tag}'}});"
                                  f"dwp('{ns}','face',{bearing})"),
                              once=True)
-        ui.label("both panoramas face building east and pan together — a "
-                 "lift ride is vertical, so east stands in for a walk "
-                 "direction" if store.is_lift_edge(frm, to) else
-                 "both panoramas face the direction of travel and pan "
-                 "together — aligned ends show the same corridor from its "
-                 "two ends").classes("text-xs text-gray-500")
+        ui.label("Splat Transition").classes("font-bold")
 
         pa, pb = store.splat_of(frm, la), store.splat_of(to, lb)
         if not (pa and pb):
