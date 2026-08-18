@@ -1846,7 +1846,7 @@ header #mbox{flex:1;min-width:140px}
 <main>
  <div id=stack>
   <div class="panel" id=mid>
-   <div class=ph><b>plan</b> + nav graph + position
+   <div class=ph><b>map</b>
     <span class=leg style="float:right"><span><i style="background:#3fb950"></i>you</span>
     <span><i style="background:#7aa2f7"></i>waypoint</span>
     <span><i style="background:#e0a030"></i>door</span>
@@ -1854,7 +1854,7 @@ header #mbox{flex:1;min-width:140px}
     <span><i style="background:#0d1117;border:1px solid #484f58"></i>no world yet</span></span></div>
    <div id=mapwrap><canvas id=map></canvas></div>
    <div id=middrag title="drag to resize the simulation"></div>
-   <div class=ph style="border-top:1px solid #30363d"><b>simulation</b> — the robot, live
+   <div class=ph style="border-top:1px solid #30363d"><b style="color:#58a6ff">building</b>
     <a id=simpop target=_blank rel=noopener>open full ↗</a></div>
    <div id=sim><iframe id=simframe title="gazebo simulation over noVNC"></iframe></div>
    <div class=ph style="border-top:1px solid #30363d"><b>controls</b></div>
@@ -1929,17 +1929,23 @@ function splitter(id,onDown,onMove){
     const h=Math.max(90,Math.min(m.height-260, r.bottom-e.clientY));sim.style.flexBasis=h+'px';
     fitCanvas();if(last)drawMap(last);});
 })();
-// The gazebo pane's source: rmfsim's noVNC, autoconnecting and scaled to fit.
-// Built from the page's own hostname so a tunnelled dashboard embeds the
-// tunnelled sim; the port is rmfsim's default (DW_RMF_PORT) — like the
-// viewer's :8086 assumption, a changed port means using "open full" instead.
+// The gazebo pane's source: rmfsim's noVNC. Main gave the sim its own host
+// port; v2 has ONE port and the proxy routes by path, so the sim lives
+// beside this dashboard at /rmfsim. path= is load-bearing: noVNC builds
+// its websocket URL root-relative from that setting, and without it the
+// browser asks for /websockify — outside the prefix, "failed to connect".
 (function(){
-  const base=location.protocol+'//'+location.hostname+':8083';
-  document.getElementById('simframe').src=base+'/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000';
-  document.getElementById('simpop').href=base;
+  const root=location.pathname.replace(/harness\/?[^/]*$/,'');
+  const args='autoconnect=true&reconnect=true&reconnect_delay=2000'
+            +'&path=rmfsim/websockify';
+  document.getElementById('simframe').src=root+'rmfsim/vnc.html?'+args+'&resize=scale';
+  document.getElementById('simpop').href=root+'rmfsim/vnc.html?'+args+'&resize=remote';
 })();
 const $=id=>document.getElementById(id);
 let G=null, last=null;
+// the map's view: null means fit-to-pane; pan/zoom writes an override.
+// XF is whatever transform drawMap actually used — hit-testing shares it.
+let VIEW=null, XF={k:1,ox:0,oy:0};
 function ts(){return new Date().toTimeString().slice(0,8)}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function logEv(cls,text){const e=document.createElement('div');e.className='ev '+cls;
@@ -1958,9 +1964,11 @@ function fitCanvas(){const c=$('map');if(!G)return;
 
 function drawMap(s){const c=$('map'),g=c.getContext('2d');if(!G){return}
  const W=c.width,H=c.height;g.clearRect(0,0,W,H);
- // one scale for both axes, centred — the plan must not be stretched to the pane
- const k=Math.min(W/(G.w||1),H/(G.h||1));
- const ox=(W-(G.w||1)*k)/2, oy=(H-(G.h||1)*k)/2, sx=k, sy=k;
+ // one scale for both axes, centred — the plan must not be stretched to the
+ // pane; a pan/zoom override (VIEW) wins over the fit when the user has one
+ const kf=Math.min(W/(G.w||1),H/(G.h||1));
+ XF=VIEW||{k:kf,ox:(W-(G.w||1)*kf)/2,oy:(H-(G.h||1)*kf)/2};
+ const k=XF.k, ox=XF.ox, oy=XF.oy, sx=k, sy=k;
  const P=(px,py)=>[px*k+ox,py*k+oy];
  // the editor's plan: dark ground, wall linework, doors amber
  g.fillStyle='#0a0d12';g.fillRect(0,0,W,H);
@@ -2153,9 +2161,8 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
 (function(){const map=$('map'),tip=$('tip');
  function vertAt(e){if(!G)return null;const r=map.getBoundingClientRect();
   const mx=(e.clientX-r.left)*map.width/r.width,my=(e.clientY-r.top)*map.height/r.height;
-  const k=Math.min(map.width/(G.w||1),map.height/(G.h||1));
-  const ox=(map.width-(G.w||1)*k)/2, oy=(map.height-(G.h||1)*k)/2;
-  let best=null,bd=14;for(const v of G.verts){const d=Math.hypot(v.px*k+ox-mx,v.py*k+oy-my);if(d<bd){bd=d;best=v}}
+  // XF is the transform drawMap actually used, pan/zoom included
+  let best=null,bd=14;for(const v of G.verts){const d=Math.hypot(v.px*XF.k+XF.ox-mx,v.py*XF.k+XF.oy-my);if(d<bd){bd=d;best=v}}
   return best}
  map.addEventListener('mousemove',e=>{const best=vertAt(e);
   if(best){tip.textContent=best.name||('vertex '+best.id);
@@ -2164,11 +2171,38 @@ window.addEventListener('resize',()=>{fitCanvas();if(last)drawMap(last)});
   else{tip.style.display='none';map.style.cursor='default'}});
  map.addEventListener('mouseleave',()=>{tip.style.display='none'});
 
+ // the editor's gestures: drag or scroll pans, ctrl+scroll (pinch) zooms
+ // about the cursor, double-click refits. A drag suppresses the click that
+ // follows it, so panning never fills a tool box by accident.
+ let drag=null, moved=false;
+ const cnv=e=>{const r=map.getBoundingClientRect();
+  return [(e.clientX-r.left)*map.width/r.width,
+          (e.clientY-r.top)*map.height/r.height]};
+ const ensure=()=>{if(!VIEW)VIEW={k:XF.k,ox:XF.ox,oy:XF.oy};return VIEW};
+ map.addEventListener('mousedown',e=>{drag=[e.clientX,e.clientY];moved=false});
+ window.addEventListener('mousemove',e=>{if(!drag)return;
+  const dx=e.clientX-drag[0],dy=e.clientY-drag[1];
+  if(Math.abs(dx)+Math.abs(dy)>3)moved=true;
+  if(!moved)return;
+  const v=ensure(),r=map.getBoundingClientRect();
+  v.ox+=dx*map.width/r.width;v.oy+=dy*map.height/r.height;
+  drag=[e.clientX,e.clientY];if(last)drawMap(last)});
+ window.addEventListener('mouseup',()=>{drag=null});
+ map.addEventListener('wheel',e=>{e.preventDefault();
+  const v=ensure();
+  if(e.ctrlKey){const [mx,my]=cnv(e),f=Math.exp(-e.deltaY*0.01);
+   v.ox=mx-(mx-v.ox)*f;v.oy=my-(my-v.oy)*f;v.k*=f}
+  else{const r=map.getBoundingClientRect();
+   v.ox-=e.deltaX*map.width/r.width;v.oy-=e.deltaY*map.height/r.height}
+  if(last)drawMap(last)},{passive:false});
+ map.addEventListener('dblclick',()=>{VIEW=null;if(last)drawMap(last)});
+
  // Click a waypoint to name it somewhere. With a tool field open that is the
  // tool's argument; otherwise it is the teleport box, which is the other thing
  // on this page that takes a waypoint — and doing nothing was the third option,
  // which is what it used to do.
- map.addEventListener('click',e=>{const best=vertAt(e);if(!best)return;
+ map.addEventListener('click',e=>{if(moved){moved=false;return}
+  const best=vertAt(e);if(!best)return;
   const label=best.name||('v'+best.id);
   if(selTool){$('argbox').value=label;$('argbox').focus()}
   // The map only ever draws one level, so a waypoint clicked on it is on that
