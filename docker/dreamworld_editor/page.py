@@ -55,6 +55,11 @@ def index():
     with ui.header().classes("items-center bg-[#0b0e13] gap-6"):
         ui.label("dreamworld editor").classes("text-lg font-bold text-[#4ea1ff]")
         ui.label(PROJECT).classes("text-sm text-gray-500")
+        ui.space()
+        # the generators' backlog, running job included — fed by the same
+        # 5-second poll that raises the completion toasts
+        with ui.label("").classes("text-xs text-gray-500") as qlab:
+            ui.tooltip("generation backlog, the running job included")
 
     def refresh_all():
         state["sig"] = store.signature()
@@ -318,8 +323,14 @@ def index():
     seen = {}
 
     async def watch_done():
+        counts = []
         for kind, mod in (("splat", splatgen), ("crossing video", crossing)):
             st = await run.io_bound(mod.status) or {}
+            if st:
+                counts.append(len(st.get("queue") or [])
+                              + (1 if st.get("busy") else 0))
+            else:
+                counts.append(None)     # the generator is not answering
             d = st.get("done")
             if not d:
                 continue
@@ -338,6 +349,9 @@ def index():
                 ui.notify(f"{kind} failed — {nm}: {d.get('error')}",
                           type="negative", close_button="dismiss",
                           timeout=0)
+        ns, nv = counts
+        qlab.set_text(f"splat queue {'–' if ns is None else ns} · "
+                      f"video queue {'–' if nv is None else nv}")
 
     ui.timer(5.0, watch_done)
 
