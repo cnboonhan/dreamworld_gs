@@ -1,16 +1,19 @@
 """The level line drawing — the splat viewer's kind of minimap.
 
 An abstract plan on a dark ground, no floorplan raster: walls as the
-picker draws them, doors amber, lanes and edges blue, vertices as
-traffic-light dots. Vertices in building.yaml are already in a single
-pixel frame (coordinate_system is reference_image), so the geometry needs
-no projection, only a shift to the drawing's own bounding box.
+picker draws them, doors amber, lanes blue, vertices AND edges as
+traffic-light dots and lines — an edge's color is its crossings' state,
+the same scheme the vertices wear. Vertices in building.yaml are already
+in a single pixel frame (coordinate_system is reference_image), so the
+geometry needs no projection, only a shift to the drawing's own bounding
+box.
 """
 
 import html
 
 from config import (C_BG, C_DOOR, C_INK, C_LABEL, C_LANE, C_LIFT, C_SEL,
                     C_WALL)
+from crossing import edge_color
 from store import lift_neighbors, state_color
 
 
@@ -48,11 +51,13 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
     for a, b in edges:
         if a in mine and b in mine:
             on = selected_edge and set(selected_edge) == {a, b}
+            # opaque and a shade wider than the lane it mirrors in
+            # building.yaml, so the state color reads true instead of
+            # mixing with the blue underneath
             parts.append(f'<line x1="{mine[a]["x"]}" y1="{mine[a]["y"]}" '
                          f'x2="{mine[b]["x"]}" y2="{mine[b]["y"]}" '
-                         f'stroke="{C_SEL if on else C_LANE}" '
-                         f'stroke-width="{4 if on else 2.5}" '
-                         f'opacity="{1 if on else 0.85}"/>')
+                         f'stroke="{C_SEL if on else edge_color(a, b)}" '
+                         f'stroke-width="{4 if on else 3}"/>')
 
     # every marker is a group translated to its spot and scaled by --dwk,
     # which dw_view.js sets to 1/zoom — so dots and labels keep a constant
@@ -97,11 +102,11 @@ def level_scene(lv: dict, dream: dict, edges: list, level: str,
             # and the same lift's diamond on another level is the same
             # cabin. Its fill is its work state, its magenta ring its
             # nature — and its up and down arrows are the building's
-            # vertical edges: lit where a stop exists on that side,
-            # dimmed where the shaft ends.
+            # vertical edges, wearing the ride's crossing state in the
+            # same traffic-light scheme; dimmed where the shaft ends.
             nb = lift_neighbors(name)
             for dy, tgt in ((-1, nb["up"]), (1, nb["down"])):
-                col = C_LIFT if tgt else C_WALL
+                col = edge_color(name, tgt) if tgt else C_WALL
                 inner += (f'<path d="M0 {dy * 24} L-5 {dy * 13} '
                           f'L5 {dy * 13} Z" fill="{col}"/>')
             inner += (f'<rect x="-6" y="-6" width="12" height="12" '

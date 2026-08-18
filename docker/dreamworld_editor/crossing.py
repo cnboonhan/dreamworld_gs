@@ -61,6 +61,21 @@ def output(frm, la, to, lb):
     return p if p.is_file() else None
 
 
+def edge_color(a: str, b: str) -> str:
+    """The vertex scheme, for an edge's crossings: red until any video is
+    generated, green once every look pair has one in both directions,
+    yellow for the work in between."""
+    have = need = 0
+    for la in [None] + store.variants_of(a):
+        for lb in [None] + store.variants_of(b):
+            for f, lf, t, lt in ((a, la, b, lb), (b, lb, a, la)):
+                need += 1
+                if output(f, lf, t, lt):
+                    have += 1
+    return (store.C_RED if have == 0
+            else store.C_GRN if have == need else store.C_YEL)
+
+
 def saved_prompt(frm, la, to, lb):
     p = job_dir(frm, la, to, lb) / "prompt.txt"
     return p.read_text().strip() if p.is_file() else None
