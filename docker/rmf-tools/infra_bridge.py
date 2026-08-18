@@ -233,6 +233,25 @@ def door():
     (ax, ay), (bx, by) = ((float(wps[0][0]), float(wps[0][1])),
                           (float(wps[1][0]), float(wps[1][1])))
     names = door_on_edge(ax, ay, bx, by)
+    # two shafts can flank one lobby inside the same 2m sweep, and opening
+    # toward lift1 must not demand lift2's cabin too: when several LIFTS'
+    # doors match one edge, keep only the lift whose door sits nearest an
+    # endpoint — the edge ENDS at the lift it means. Plain doors all pass.
+    by_lift = {}
+    for nm in names:
+        lo = _lift_of(nm)
+        if lo:
+            by_lift.setdefault(lo[0], []).append(nm)
+    if len(by_lift) > 1:
+        mid = {nm: ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+               for nm, (x1, y1), (x2, y2) in G.get("doors", [])}
+        def end_d(lift):
+            return min(min(math.hypot(mid[nm][0] - ex, mid[nm][1] - ey)
+                           for ex, ey in ((ax, ay), (bx, by)))
+                       for nm in by_lift[lift] if nm in mid)
+        keep = min(by_lift, key=end_d)
+        drop = {nm for lf, ns in by_lift.items() if lf != keep for nm in ns}
+        names = [nm for nm in names if nm not in drop]
     for nm in names:
         lo = _lift_of(nm)
         if lo:

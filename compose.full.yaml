@@ -212,7 +212,10 @@ services:
       - --model=Qwen/Qwen3-VL-8B-Instruct
       - --port=8000
       - --host=0.0.0.0
-      - --max-model-len=32768
+      # a mission's transcript grows with every tool result; 32k died
+      # mid-lift-ride. Qwen3-VL carries 128k natively, and the H200 has
+      # the KV room to spare.
+      - --max-model-len=131072
       - --trust-remote-code
       - --gpu-memory-utilization=0.80
       # tool calling, for the mission agent to come; harmless to the planner

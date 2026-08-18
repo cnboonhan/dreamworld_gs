@@ -39,6 +39,7 @@ import os
 import queue
 import re
 import threading
+import traceback
 import time
 import urllib.error
 import urllib.request
@@ -611,9 +612,20 @@ def pose_pump():
     the walker actually stands rather than arguing.
     """
     last = None
+    relevel = 0
     while True:
         time.sleep(0.4)
         try:
+            # the bridge boots on its default level; a sim rebuild while
+            # this harness stands elsewhere would desync its door set and
+            # its cabin-elsewhere refusals — heal it quietly
+            relevel = (relevel + 1) % 15
+            if relevel == 0 and ST.get("galaxea"):
+                h = bridge("/health")
+                if h.get("ok") and h.get("level") != ST["level"]:
+                    log(f"the bridge speaks for {h.get('level')} — "
+                        f"re-levelling it to {ST['level']}")
+                    bridge("/reset", {"level": ST["level"]})
             doc = core("/viewer/state") or {}
             st = doc.get("state") or {}
             # connected and ready-to-walk are different facts: a hidden tab
@@ -1212,6 +1224,9 @@ def switch_level(to, lift=None, land_on=None):
     plan, px_of = build_plan(ST.get("building", ""), level)
     with ST["lock"]:
         ST.update({"plan": plan, "px_of": px_of})
+    # the bridge levels WITH us, or its door set — and its "the cabin is
+    # not on this floor" refusals — keep speaking for the old floor
+    bridge("/reset", {"level": level})
     log(f"now on {level} at {lab(cabin)}")
     BUS.send({"type": "level", "level": level})    # the page reloads the graph on this
     push_state()
@@ -1360,16 +1375,27 @@ def write_mission(text=""):
     return {"ok": True, "mission": ST["mission"]}
 
 
-@tool("Record the steps this run will take.", [("todos", "list of step descriptions")])
+@tool("Record the steps this run will take.",
+      [("todos", "list of steps, each one control-tool call as a string, "
+                 "e.g. 'go_to apex_lab'")])
 def write_todos(todos=None):
     items = todos or []
     if isinstance(items, str):
         items = [s.strip() for s in items.split("\n") if s.strip()]
+    # deepagents schools its models to send todo DICTS ({"content": ...,
+    # "status": ...}); rejecting that shape looped the agent on its very
+    # first step, and the rejection message itself crashed joining dicts.
+    # Take the text from whatever arrives; statuses are ignored on purpose —
+    # the world marks work done here, not the model.
+    items = [x.get("content") or x.get("step") or x.get("text") or ""
+             if isinstance(x, dict) else str(x) for x in items]
+    items = [x.strip() for x in items if str(x).strip()]
     bad = [x for x in items if not _subtask_tool(x)]
     if bad:
         return {"ok": False, "rejected": True,
                 "error": "Every subtask must be exactly one control-tool call, starting "
-                         "with the tool name. Not valid: " + "; ".join(bad),
+                         "with the tool name. Not valid: "
+                         + "; ".join(str(x) for x in bad),
                 "allowed_tools": sorted(SUBTASK_TOOLS),
                 "example": ["go_to lift_lobby_north", "face v0", "open_door",
                             "go_to apex_lab", "pick apple"]}
@@ -1744,6 +1770,9 @@ def _push_context():
 VLM_BASE_URL = os.environ.get("VLM_BASE_URL", "")
 VLM_API_KEY = os.environ.get("VLM_API_KEY", "x")
 VLM_MODEL = os.environ.get("VLM_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
+# graph steps per mission — the backstop against a looping agent, sized so
+# an honest long mission (a lift ride and a dozen hops) never hits it
+AGENT_STEPS = int(os.environ.get("AGENT_RECURSION_LIMIT", "1000"))
 
 AGENT_PROMPT = (
     "You are an agent that walks a building to carry out missions. The building is "
@@ -1934,11 +1963,11 @@ input:focus{outline:0;border-color:#1f6feb}
 .ev .t{color:#484f58;margin-right:5px}
 .leg{display:flex;gap:12px;font-size:10px;color:#8b949e;flex-wrap:wrap}
 .leg i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px;vertical-align:middle}
-header h1,#stat,#vlink,#vlmchip{flex-shrink:0}
-#vlmchip{font-size:12px;border:1px solid #30363d;border-radius:10px;
+header h1,#vlink,#vlmchip,#corechip{flex-shrink:0}
+#vlmchip,#corechip{font-size:12px;border:1px solid #30363d;border-radius:10px;
  padding:2px 8px;color:#8b949e}
-#vlmchip.up{color:#56d364;border-color:#238636}
-#vlmchip.down{color:#f85149;border-color:#da3633}
+#vlmchip.up,#corechip.up{color:#56d364;border-color:#238636}
+#vlmchip.down,#corechip.down{color:#f85149;border-color:#da3633}
 #vlink{font-size:12px;color:#8b949e;text-decoration:none;border:1px solid #30363d;
  border-radius:4px;padding:3px 8px}
 #vlink:hover{border-color:#58a6ff;color:#58a6ff}
@@ -1953,7 +1982,8 @@ header #mbox{flex:1;min-width:140px}
 <input id=mbox placeholder="mission for the agent — describe the goal, then Run">
 <button class=go id=runbtn onclick="onRunBtn()">run mission</button>
 <button id=cancelbtn onclick="cancelMission()" title="cancel the running mission and clear it">✕ clear mission</button>
-<span id=stat>connecting…</span><a id=vlink target=_blank rel=noopener></a>
+<a id=vlink target=_blank rel=noopener></a>
+<span id=corechip title="dreamworld_core, probed every 10s">core …</span>
 <span id=vlmchip title="the mission agent's VLM, probed every 10s">vlm …</span></header>
 <main>
  <div id=stack>
@@ -2263,10 +2293,10 @@ function onPose(d){if(!last)return;
 function viewerLink(s){const a=$('vlink');if(!a||!s.scene)return;
  a.href=`${VIEWER}/?at=${s.scene}`
        +`&agent=${encodeURIComponent(location.origin)}`;
- a.textContent=(s.viewer?'viewer connected':'open the splat viewer')+' ↗';
+ a.textContent=(s.viewer?'viewer':'open the viewer')+' ↗';
  a.className=s.viewer?'on':''}
 function connect(){const es=new EventSource('events');
- es.onopen=()=>{$('dot').classList.remove('off');$('stat').textContent='live';
+ es.onopen=()=>{$('dot').classList.remove('off');
   fetch('statemodel').then(r=>r.json()).then(d=>setStateModel(d.text)).catch(()=>{})};
  es.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
   if(d.type==='state')onState(d);
@@ -2276,7 +2306,7 @@ function connect(){const es=new EventSource('events');
   else if(d.type==='pose')onPose(d);         // live robot position between waypoints
   else if(d.type==='level')loadGraph();      // lift ride -> reload map/graph for new level
   else if(d.type==='log')logEv(d.level||'ok',d.text)};
- es.onerror=()=>{$('dot').classList.add('off');$('stat').textContent='reconnecting…';
+ es.onerror=()=>{$('dot').classList.add('off');
   es.close();setTimeout(connect,3000)}}
 
 // the reset dropdowns: pick a level, its waypoints follow; the blank
@@ -2351,12 +2381,14 @@ loadTools();
 connect();
 // the agent's brain, on the header: green with its round-trip when it
 // answers, red when it does not
-async function vlmPing(){const el=$('vlmchip');if(!el)return;
- try{const j=await(await fetch('vlm_health')).json();
-  if(j.ok){el.textContent='vlm '+j.ms+' ms';el.className='up'}
-  else{el.textContent='vlm down';el.className='down';el.title=j.error||''}}
- catch(e){el.textContent='vlm ?';el.className='down'}}
-vlmPing();setInterval(vlmPing,10000);
+async function ping(path,el,name){if(!el)return;
+ try{const j=await(await fetch(path)).json();
+  if(j.ok){el.textContent=name+' '+j.ms+' ms';el.className='up'}
+  else{el.textContent=name+' down';el.className='down';el.title=j.error||''}}
+ catch(e){el.textContent=name+' ?';el.className='down'}}
+function pings(){ping('vlm_health',$('vlmchip'),'vlm');
+ ping('core_health',$('corechip'),'core')}
+pings();setInterval(pings,10000);
 </script></body></html>"""
 
 
@@ -2669,7 +2701,8 @@ def r_agent():
     log(f"agent ▶ {text}", "mission")
     prompt = (f"New mission from the operator: {text}\n\nCurrent world model:\n"
               f"{build_context()}\n\nSet the mission and subtasks, then execute them.")
-    cfg = {"configurable": {"thread_id": "interactive"}, "recursion_limit": 300}
+    cfg = {"configurable": {"thread_id": "interactive"},
+           "recursion_limit": AGENT_STEPS}
     predecessor = _AGENT.get("thread")
 
     def run():
@@ -2691,7 +2724,14 @@ def r_agent():
                 log("✓ mission complete — every subtask verified")
             log(str(final)[:400])
         except Exception as e:
-            log(f"agent error: {e}", "err")
+            if type(e).__name__ == "GraphRecursionError":
+                log(f"agent stopped at the step budget ({AGENT_STEPS}): it "
+                    f"was looping or the mission is genuinely huge. What "
+                    f"finished stands; run the mission again to continue, "
+                    f"or raise AGENT_RECURSION_LIMIT.", "err")
+            else:
+                log(f"agent error: {e}", "err")
+            traceback.print_exc()     # the container log keeps the details
         finally:
             _RUN.set()
             _AGENT["queued"] = False
@@ -2779,6 +2819,19 @@ def r_viewer_pose():
         return jsonify(ok=False, error="no dreamworld viewer reporting — "
                                        f"open {ST['viewer_url']}"), 503
     return jsonify(res)
+
+
+@app.route("/core_health")
+def r_core_health():
+    """The position truth-holder, probed and timed — same as the vlm chip."""
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(f"{CORE}/position", timeout=3) as r:
+            r.read()
+        return jsonify(ok=True, ms=round((time.time() - t0) * 1000))
+    except (urllib.error.URLError, OSError) as e:
+        return jsonify(ok=False, ms=round((time.time() - t0) * 1000),
+                       error=str(getattr(e, "reason", e)))
 
 
 @app.route("/vlm_health")
