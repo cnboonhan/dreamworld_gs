@@ -320,7 +320,7 @@ def edge_card(edge, dream, sel, refresh_all):
     dist = (f"{va['level']} ⇵ {vb['level']} · {va['lift']}" if lift_edge
             else f"{d * scale:.1f} m" if scale else f"{d:.0f} px")
     with ui.card().classes("w-full bg-[#11151c]"):
-        ui.label("Edge").classes("font-bold")
+        ui.label("Lift Edge" if lift_edge else "Edge").classes("font-bold")
         with ui.row().classes("w-full items-center gap-2"):
             for nm, v in ((a, va), (b, vb)):
                 ui.html(f'<span style="width:10px;height:10px;'
@@ -417,6 +417,15 @@ def edge_direction_card(frm, to, dream, tag, sel, refresh_all):
                                  f"{{free:true, group:'ep_{tag}'}});"
                                  f"dwp('{ns}','face',{bearing})"),
                              once=True)
+        if store.is_lift_edge(frm, to):
+            # the ride is vertical: there is no corridor for two splats to
+            # hand over in the middle of, so no walkthrough — the crossing
+            # video below is what carries a lift ride
+            ui.label("both panoramas face building east and pan together — "
+                     "a lift ride is vertical, so there is no splat "
+                     "walkthrough; the crossing video below carries "
+                     "it").classes("text-xs text-gray-500")
+            return
         ui.label("both panoramas face the direction of travel and pan "
                  "together — aligned ends show the same corridor from its "
                  "two ends").classes("text-xs text-gray-500")
