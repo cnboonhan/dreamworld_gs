@@ -2580,29 +2580,35 @@ def r_reset():
     if ST.get("levels") and level not in ST["levels"]:
         return jsonify(ok=False,
                        error=f"no level {level}; have {ST['levels']}"), 400
-    if level != ST["level"]:
-        if not switch_level(level, land_on=where):
-            return jsonify(ok=False,
-                           error=f"no waypoint {where!r} on {level}"), 400
-    else:
-        try:
-            v = find_vertex(ST["verts"], where)
-        except SystemExit as e:
-            return jsonify(ok=False, error=str(e)), 400
+    # Under MOVE, like every mover: between the level switch and the core
+    # post there is a window where the core still holds the OLD position,
+    # and pose_pump's follow would "correct" the harness right back to it —
+    # a reset to L1 that lands on L11 half a second later. Locked, the
+    # follow waits until the core already says the new place.
+    with MOVE:
+        if level != ST["level"]:
+            if not switch_level(level, land_on=where):
+                return jsonify(ok=False,
+                               error=f"no waypoint {where!r} on {level}"), 400
+        else:
+            try:
+                v = find_vertex(ST["verts"], where)
+            except SystemExit as e:
+                return jsonify(ok=False, error=str(e)), 400
+            with ST["lock"]:
+                ST.update({"cur": v, "prev": None, "face": None, "yaw": None,
+                           "open_doors": set()})
+        cur = ST["cur"]
+        # face the first neighbour, so it lands looking down a corridor
+        # rather than at whatever bearing it happened to be holding before
+        nb = next((v for v, _ in ST["adj"].get(cur, [])), None)
+        yaw = _az(cur, nb) if nb is not None else 0.0
+        core("/position", {"at": lab(cur), "look": _look_for(lab(cur)),
+                           "yaw_deg": round(math.degrees(yaw), 1)})
         with ST["lock"]:
-            ST.update({"cur": v, "prev": None, "face": None, "yaw": None,
-                       "open_doors": set()})
-    cur = ST["cur"]
-    # face the first neighbour, so it lands looking down a corridor rather
-    # than at whatever bearing it happened to be holding before
-    nb = next((v for v, _ in ST["adj"].get(cur, [])), None)
-    yaw = _az(cur, nb) if nb is not None else 0.0
-    core("/position", {"at": lab(cur), "look": _look_for(lab(cur)),
-                       "yaw_deg": round(math.degrees(yaw), 1)})
-    with ST["lock"]:
-        ST["yaw"] = yaw
-        ST["face"] = nb
-        ST["open_doors"] = set()
+            ST["yaw"] = yaw
+            ST["face"] = nb
+            ST["open_doors"] = set()
     # shut every door and lift, and stop the bridge holding any open —
     # otherwise its door_keeper republishes OPEN and undoes this
     shut = bridge("/close_all", {}) or {}
