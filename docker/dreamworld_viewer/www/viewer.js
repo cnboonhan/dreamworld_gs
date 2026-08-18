@@ -581,7 +581,7 @@ function strafe(d) {
 const px = plan.getContext('2d');
 let hits = [];
 function drawPlan() {
-  if (!graph || !st.at || plan.style.display === 'none') return;
+  if (!graph || !st.at || planBox.style.display === 'none') return;
   const me = graph.vertices[st.at];
   const L = graph.levels[me.level] || { walls: [] };
   const nbrs = neighbours(st.at);
@@ -644,22 +644,40 @@ function drawPlan() {
   px.moveTo(tip[0], tip[1]); px.lineTo(l[0], l[1]);
   px.lineTo(cx2, cy2); px.lineTo(r2[0], r2[1]); px.fill();
 }
-// the plan wears a CSS resize grip; keep the bitmap matched to the box
-// and the crossing panel tucked beneath whatever size it becomes
+// the box resizes by its bottom-left grip (the free corner — the box is
+// right-anchored); keep the bitmap matched and the crossing panel tucked
+// beneath whatever size it becomes
+const planBox = $('planbox');
 new ResizeObserver(() => {
-  const w = Math.max(160, plan.clientWidth | 0);
-  const h = Math.max(120, plan.clientHeight | 0);
+  const w = Math.max(160, planBox.clientWidth | 0);
+  const h = Math.max(120, planBox.clientHeight | 0);
   if (plan.width !== w || plan.height !== h) {
     plan.width = w; plan.height = h;
     drawPlan();
   }
   const pn = $('panel');
-  if (pn) pn.style.top = (plan.offsetTop + plan.offsetHeight + 10) + 'px';
-}).observe(plan);
+  if (pn) pn.style.top = (planBox.offsetTop + planBox.offsetHeight + 10) + 'px';
+}).observe(planBox);
+(() => {
+  const grip = $('plangrip');
+  let d = null;
+  grip.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const r = planBox.getBoundingClientRect();
+    d = { right: r.right, top: r.top };
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!d) return;
+    planBox.style.width = Math.max(160, d.right - e.clientX) + 'px';
+    planBox.style.height = Math.max(120, e.clientY - d.top) + 'px';
+  });
+  grip.addEventListener('pointerup', () => { d = null; });
+})();
 const planBtn = $('planBtn');
 planBtn.onclick = () => {
-  const off = plan.style.display === 'none';
-  plan.style.display = off ? '' : 'none';
+  const off = planBox.style.display === 'none';
+  planBox.style.display = off ? '' : 'none';
   $('panel').style.display = 'none';
   planBtn.textContent = off ? '−' : '☰';
   planBtn.title = off ? 'hide the plan' : 'show the plan';
