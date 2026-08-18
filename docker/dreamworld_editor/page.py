@@ -686,6 +686,33 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
         if sel["variant"] not in variants:
             sel["variant"] = None
         var = sel["variant"]
+        def replace_dialog():
+            with ui.dialog() as dlg, ui.card().classes("w-96"):
+                ui.label(f"replace the panorama at {name}?").classes(
+                    "font-bold")
+                ui.label("The new shot overwrites the original, clears the "
+                         "alignment, and DELETES this vertex's splat "
+                         "worlds and crossing videos — they were generated "
+                         "from the old capture. Variants stay. The vertex "
+                         "turns red until re-aligned."
+                         ).classes("text-xs text-gray-500")
+                safe = html_escape(name, quote=True)
+                ui.html(
+                    f'<label style="display:block;text-align:center;'
+                    f'padding:10px;border:1px dashed #4ea1ff;'
+                    f'border-radius:6px;cursor:pointer;color:#4ea1ff">'
+                    f'choose the new panorama'
+                    f'<input type="file" accept=".jpg,.jpeg,.png" '
+                    f'data-vertex="{safe}" data-replace="1" '
+                    f'style="display:none" '
+                    f'onchange="dwUpload(this, this.dataset.vertex)">'
+                    f'</label>'
+                    f'<div id="dwup-{safe}" class="text-xs text-gray-500" '
+                    f'style="margin-top:4px;min-height:1em"></div>'
+                ).classes("w-full")
+                ui.button("cancel", on_click=dlg.close).props("dense flat")
+            dlg.open()
+
         with ui.row().classes("w-full items-center gap-2"):
             ui.label("panorama").classes("font-bold")
             applied = store.applied_of(name)
@@ -697,6 +724,9 @@ def pano_card(name, v, dream, scale, sel, refresh_all):
             else:
                 ui.label("not yet aligned").classes("text-xs text-[#f0a35e]")
             ui.space()
+            if v["pano"]:
+                ui.button("replace", on_click=replace_dialog).props(
+                    "dense flat")
             ui.label(var or "original").classes("text-xs text-[#7aa2f7]")
 
         if not v["pano"]:

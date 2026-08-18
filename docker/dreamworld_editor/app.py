@@ -57,7 +57,8 @@ async def upload_pano(request: Request):
     if ("/" in name or ".." in name
             or not (DREAM / name / "vertex.json").is_file()):
         return PlainTextResponse(f"no such vertex: {name}", status_code=404)
-    if store.pano_of(name):
+    replace = q.get("replace") == "1"
+    if store.pano_of(name) and not replace:
         return PlainTextResponse(f"{name} already has a panorama",
                                  status_code=409)
     part = Path(tempfile.gettempdir()) / f"dw_upload_{uid}.part"
@@ -65,6 +66,18 @@ async def upload_pano(request: Request):
     with part.open("wb" if q.get("seq") == "0" else "ab") as f:
         f.write(data)
     if q.get("last") == "1":
+        if replace:
+            # a new shot of the same place: whatever extension the old one
+            # wore goes, and the alignment record with it — the new pixels
+            # arrive with an unknown correction, so the vertex turns red
+            # until it is re-aligned. Everything GENERATED from the old
+            # shot goes too (splat worlds, crossing videos at this
+            # vertex); variants stay, they are edits the user made.
+            for ext in (".jpg", ".jpeg", ".png"):
+                if ext != suffix:
+                    (DREAM / name / f"pano{ext}").unlink(missing_ok=True)
+            (DREAM / name / "aligned.json").unlink(missing_ok=True)
+            await run.io_bound(store.purge_worlds, name)
         await run.io_bound(shutil.move, str(part),
                            str(DREAM / name / f"pano{suffix}"))
         await run.io_bound(store.preview_of, name)

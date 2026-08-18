@@ -14,13 +14,16 @@ async function dwUpload(input, vertex) {
   const GAP = 300;                    // ms of silence between slices
   const total = Math.max(1, Math.ceil(f.size / CHUNK));
   const id = Math.random().toString(36).slice(2, 10);
+  // data-replace="1" on the input turns the upload into a replacement:
+  // the route then overwrites the existing panorama and resets alignment
+  const replace = input.dataset.replace === '1' ? '&replace=1' : '';
   input.disabled = true;
   try {
     for (let i = 0; i < total; i++) {
       const r = await fetch('upload_pano?vertex=' + encodeURIComponent(vertex)
                             + '&id=' + id + '&seq=' + i
                             + '&last=' + (i === total - 1 ? 1 : 0)
-                            + '&name=' + encodeURIComponent(f.name),
+                            + '&name=' + encodeURIComponent(f.name) + replace,
                             { method: 'POST',
                               body: f.slice(i * CHUNK, (i + 1) * CHUNK) });
       if (!r.ok) throw new Error(await r.text());

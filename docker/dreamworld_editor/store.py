@@ -549,6 +549,38 @@ def preview_of(name: str, variant: str | None = None) -> Path:
     return p
 
 
+def purge_worlds(name: str) -> dict:
+    """A replaced panorama orphans everything GENERATED from it: the
+    vertex's splat worlds and every crossing video that starts or ends at
+    this vertex. Variants stay — they are edits, not generations.
+
+    Deletion is by EXACT vertex name. A crossing dir is <a>[@look]__<b>
+    [@look]; each side is compared to `name` after stripping its look, so
+    L1.lift1 can never take L11.lift1's crossings with it, and a dir that
+    does not split into exactly two sides is left alone rather than
+    guessed at."""
+    d = DREAM / name
+    removed = {"splats": 0, "crossings": 0}
+    if d.is_dir():
+        for child in sorted(d.iterdir()):
+            if child.is_dir() and (child.name == "splat"
+                                   or child.name.startswith("splat@")):
+                shutil.rmtree(child)
+                removed["splats"] += 1
+    cross = DREAM / ".crossings"
+    if cross.is_dir():
+        for job in sorted(cross.iterdir()):
+            if not job.is_dir():
+                continue
+            sides = job.name.split("__")
+            if len(sides) != 2:
+                continue
+            if any(s.split("@", 1)[0] == name for s in sides):
+                shutil.rmtree(job)
+                removed["crossings"] += 1
+    return removed
+
+
 def apply_roll(name: str, degrees: float) -> int:
     """Roll the PLACE by `degrees`: the original, every variant, and every
     undo stash turn together, each by its own pixel count for the same
