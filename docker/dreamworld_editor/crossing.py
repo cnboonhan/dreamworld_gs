@@ -36,9 +36,12 @@ PROMPTS = {
                  "the camera steps forward out of the lift into the space "
                  "beyond, ending outside the lift. Smooth steady forward "
                  "camera motion, photorealistic indoor lighting."),
-    "lift_ride": ("First-person lift ride. The lift doors directly ahead "
-                  "close, the cabin rides to another floor, and the doors "
-                  "open again onto the destination level; the camera holds "
+    # a template, not a prompt: default_prompt() fills {motion} with the
+    # ride's real direction, read from the two levels' elevations
+    "lift_ride": ("First-person lift ride. The metallic lift doors "
+                  "directly ahead slide fully shut, the closed cabin "
+                  "{motion}, and on arrival the metallic doors slide open "
+                  "again onto the destination level; the camera holds "
                   "steady facing the doors throughout. Photorealistic "
                   "indoor lighting."),
     "open": ("First-person walkthrough. The camera moves smoothly forward "
@@ -82,7 +85,16 @@ def saved_prompt(frm, la, to, lb):
 
 
 def default_prompt(frm, to):
-    return PROMPTS[store.edge_kind(frm, to)]
+    kind = store.edge_kind(frm, to)
+    if kind != "lift_ride":
+        return PROMPTS[kind]
+    dream = store.load_dream()
+    elev = {ln: L.get("elevation", 0)
+            for ln, L in store.load_levels().items()}
+    up = elev.get(dream[to]["level"], 0) > elev.get(dream[frm]["level"], 0)
+    return PROMPTS["lift_ride"].format(
+        motion="rises to another floor" if up
+        else "descends to another floor")
 
 
 def ready() -> bool:
