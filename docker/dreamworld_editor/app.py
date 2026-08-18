@@ -16,6 +16,7 @@ NiceGUI mounts ITSELF at MOUNT, so the proxy passes the prefix through
 unstripped and page, assets and socket all agree on where they live.
 """
 
+import json
 import re
 import shutil
 import tempfile
@@ -42,6 +43,19 @@ def graph():
     # cannot import crossing (crossing imports store)
     doc["edge_colors"] = {f"{a}__{b}": crossing.edge_color(a, b)
                           for a, b in doc.get("edges") or []}
+    # bake it beside the tree it describes: the proxy serves this FILE
+    # whenever no editor is running (the minimal launch), so the viewer
+    # and the harness keep their graph. Written only on change — a fresh
+    # mtime on every poll would spin the signature watcher forever.
+    baked = DREAM / ".graph.json"
+    txt = json.dumps(doc)
+    try:
+        if not baked.is_file() or baked.read_text() != txt:
+            tmp = baked.with_suffix(".json.tmp")
+            tmp.write_text(txt)
+            tmp.replace(baked)
+    except OSError:
+        pass
     return doc
 
 

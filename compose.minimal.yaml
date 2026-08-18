@@ -1,6 +1,9 @@
 # MINIMAL: walk + simulate + command an already-generated dreamworld.
 # One GPU (the mission agent's VLM); no generators, no traffic editor.
-# Every service definition lives in compose.yaml — this file only picks.
+# Every service definition lives in compose.full.yaml — this file only
+# picks. No editor here: the proxy serves the dreamworld files itself,
+# and the graph the editor BAKED on its last change — author in the
+# full stack at least once first.
 #
 #   just minimal        (or: docker compose -f compose.minimal.yaml up -d)
 #
@@ -13,12 +16,6 @@ services:
     extends: {file: compose.full.yaml, service: proxy}
   rmfsim:
     extends: {file: compose.full.yaml, service: rmfsim}
-  # not here to author: the editor is the ASSET SERVER — the viewer fetches
-  # its graph and every world through /dreamworld_editor/*, and the harness
-  # reads the same graph for looks and colors. Costs no GPU. Its generate
-  # buttons will simply report the generators absent.
-  dreamworld_editor:
-    extends: {file: compose.full.yaml, service: dreamworld_editor}
   dreamworld_core:
     extends: {file: compose.full.yaml, service: dreamworld_core}
   dreamworld_viewer:

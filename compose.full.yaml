@@ -23,6 +23,12 @@ services:
     container_name: dreamworld-proxy
     ports:
       - "${DW_PORT:-8080}:80"
+    volumes:
+      # read-only: the proxy serves the dreamworld files itself, and the
+      # baked graph when no editor is running — the minimal launch
+      - ./assets/projects:/projects:ro
+    environment:
+      DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
     restart: unless-stopped
 
   # The traffic editor — author the building map, over noVNC at /sim_editor.
@@ -195,7 +201,8 @@ services:
     environment:
       HOME: /tmp
       CORE_URL: "http://dreamworld_core:8000"
-      EDITOR_URL: "http://dreamworld_editor:8080/dreamworld_editor"
+      # through the PROXY, which answers even with no editor running
+      EDITOR_URL: "http://proxy/dreamworld_editor"
       BRIDGE_URL: "http://rmfsim:8090"
       VLM_BASE_URL: "http://vlm:8000/v1"
     restart: unless-stopped

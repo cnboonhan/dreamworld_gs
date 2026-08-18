@@ -35,16 +35,28 @@ server {
         return 302 "/sim_editor/vnc.html?autoconnect=true&resize=remote&path=sim_editor/websockify";
     }
 
-    # the project files — panoramas, worlds — often ride a developer's SSH
-    # tunnel, and a full-rate 30MB burst starves the tunnel's keepalives
-    # until VS Code declares the connection dead. Metered, the same bytes
-    # arrive a few seconds later and the tunnel stays alive.
+    # the project files, served straight off the mounted assets — the
+    # editor is not needed on the read path, which is what lets the
+    # minimal launch drop it. Metered: a full-rate 30MB burst starves an
+    # SSH tunnel's keepalives until VS Code declares the connection dead.
     location /dreamworld_editor/files/ {
+        alias /projects/${DW_PROJECT}/dreamworld/;
+        limit_rate 8m;
+    }
+
+    # the graph: the LIVE editor answers when it is running; without one
+    # (minimal), the file the editor baked on its last change stands in
+    location = /dreamworld_editor/graph {
         set $editor dreamworld_editor;
         proxy_pass http://$editor:8080;
-        proxy_http_version 1.1;
         proxy_set_header Host $host;
-        limit_rate 8m;
+        proxy_intercept_errors on;
+        error_page 502 504 = @baked_graph;
+    }
+
+    location @baked_graph {
+        root /projects/${DW_PROJECT}/dreamworld;
+        try_files /.graph.json =404;
     }
 
     # the dreamworld editor mounts ITSELF at /dreamworld_editor (NiceGUI's
