@@ -1777,10 +1777,9 @@ main{display:flex;flex:1;overflow:hidden;gap:1px;background:#30363d}
 .ph b{color:#58a6ff}
 .pb{flex:1;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
 .pb::-webkit-scrollbar{width:6px}.pb::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
-#pad{display:flex;gap:6px;flex-wrap:wrap;align-items:stretch;justify-content:center}
-#pad button{background:#21262d;border:1px solid #30363d;color:#e6edf3;font-size:18px;padding:8px 14px;border-radius:5px;cursor:pointer}
+#pad{display:flex;gap:5px;align-items:stretch;justify-content:flex-end}
+#pad button{background:#21262d;border:1px solid #30363d;color:#e6edf3;font-size:15px;padding:5px 11px;border-radius:5px;cursor:pointer}
 #pad button:hover{background:#30363d}
-#pad .wide{font-size:13px}
 .bar{display:flex;gap:6px}
 input{flex:1;padding:9px;font-size:13px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:5px;font-family:inherit}
 input:focus{outline:0;border-color:#1f6feb}
@@ -1790,7 +1789,15 @@ input:focus{outline:0;border-color:#1f6feb}
 .go.running{background:#9e6a03}   /* mission running -> button shows PAUSE (amber) */
 .go.paused{background:#238636}    /* paused -> button shows RESUME (green) */
 .hint{color:#6e7681;font-size:11px}
-#mapwrap{padding:4px;overflow:hidden;background:#0a0d12;flex:1;min-height:0;display:flex}
+#mapwrap{padding:4px;overflow:hidden;background:#0a0d12;flex:1;min-height:0;display:flex;position:relative}
+/* movement + reset ride the map as an overlay, out of the panels' way */
+#mapctl{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;
+ gap:6px;align-items:flex-end;background:rgba(13,17,23,.88);border:1px solid #30363d;
+ border-radius:6px;padding:8px;z-index:5}
+#mapctl input{width:150px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+ border-radius:4px;padding:4px 6px;font-size:11px}
+#mapctl input#tplevel{width:44px}
+#mapctl .row{display:flex;gap:4px;align-items:center}
 /* The sim, embedded: rmfsim's noVNC screen between the floorplan and the
    controls, resizable by the splitter above it. Sized by flex-basis (height
    on a flex child loses to it); the map above flexes. */
@@ -1852,29 +1859,31 @@ header #mbox{flex:1;min-width:140px}
     <span><i style="background:#e0a030"></i>door</span>
     <span><i style="background:#d24dcf"></i>lift</span>
     <span><i style="background:#0d1117;border:1px solid #484f58"></i>no world yet</span></span></div>
-   <div id=mapwrap><canvas id=map></canvas></div>
+   <div id=mapwrap><canvas id=map></canvas>
+    <div id=mapctl>
+     <div id=pad>
+      <button onclick="cmd('turn left')" title="turn left">↰</button>
+      <button onclick="cmd('forward')" title="straight ahead">↑</button>
+      <button onclick="cmd('turn right')" title="turn right">↱</button>
+     </div>
+     <div class=row>
+      <input id=tpwhere placeholder="reset at — click a waypoint"
+       title="puts the robot there, shuts every door and lift, and starts
+ again — an operator move, not something the agent can do">
+      <input id=tplevel placeholder="level">
+      <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
+    </div>
+   </div>
    <div id=middrag title="drag to resize the simulation"></div>
    <div class=ph style="border-top:1px solid #30363d"><b style="color:#58a6ff">building</b>
     <a id=simpop target=_blank rel=noopener>open full ↗</a></div>
    <div id=sim><iframe id=simframe title="gazebo simulation over noVNC"></iframe></div>
-   <div class=ph style="border-top:1px solid #30363d"><b>controls</b></div>
+   <div class=ph style="border-top:1px solid #30363d"><b>tools</b></div>
    <div class=pb style="flex:none;padding-bottom:0;align-items:stretch">
-    <div id=pad>
-     <button onclick="cmd('turn left')" title="←">↰</button>
-     <button onclick="cmd('forward')" title="↑">↑</button>
-     <button onclick="cmd('turn right')" title="→">↱</button>
-    </div>
     <div id=tools></div>
     <div class=bar id=toolarg style="display:none">
      <input id=argbox><button class=go onclick="runTool()">go</button></div>
     <div class=hint id=toolhint>click a tool — ones that need input reveal a field</div>
-    <div class=bar style="margin-top:6px">
-     <input id=tpwhere placeholder="reset at — waypoint, or click one on the map">
-     <input id=tplevel placeholder="level" style="flex:0 0 70px">
-     <button class=go id=tpgo style="background:#6e40c9">reset</button></div>
-    <div class=hint id=tphint>click a waypoint on the map to fill this. Puts the
-     robot there, shuts every door and lift, and starts again — an operator move,
-     not something the agent can do</div>
    </div>
   </div>
  </div>
