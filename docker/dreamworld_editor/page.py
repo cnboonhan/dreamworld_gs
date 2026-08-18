@@ -317,35 +317,42 @@ def index():
     seen = {}
 
     async def watch_done():
-        counts = []
-        for kind, mod in (("splat", splatgen), ("crossing video", crossing)):
-            st = await run.io_bound(mod.status) or {}
+        # one entry per generator INSTANCE (wangen may be several), each
+        # with its own dedupe key — folding their dones together would
+        # flip-flop and re-toast old completions
+        entries = [("splat", "splat", splatgen.short,
+                    await run.io_bound(splatgen.status))]
+        for u, s in await run.io_bound(crossing.statuses):
+            entries.append((f"video {u}", "crossing video",
+                            crossing.short, s))
+        counts = {"splat": None, "video": None}
+        for key, label, short, st in entries:
+            bucket = "splat" if label == "splat" else "video"
             if st:
-                counts.append(len(st.get("queue") or [])
-                              + (1 if st.get("busy") else 0))
-            else:
-                counts.append(None)     # the generator is not answering
-            d = st.get("done")
+                n = len(st.get("queue") or []) + (1 if st.get("busy") else 0)
+                counts[bucket] = (counts[bucket] or 0) + n
+            d = (st or {}).get("done")
             if not d:
                 continue
-            key = (d.get("scene"), d.get("ok"),
-                   d.get("seconds"), d.get("error"))
-            if seen.get(kind) == key:
+            dk = (d.get("scene"), d.get("ok"),
+                  d.get("seconds"), d.get("error"))
+            if seen.get(key) == dk:
                 continue
-            first = kind not in seen
-            seen[kind] = key
+            first = key not in seen
+            seen[key] = dk
             if first:
                 continue
-            nm = mod.short(d.get("scene") or "")
+            nm = short(d.get("scene") or "")
             if d.get("ok"):
-                ui.notify(f"{kind} ready — {nm}", type="positive")
+                ui.notify(f"{label} ready — {nm}", type="positive")
             else:
-                ui.notify(f"{kind} failed — {nm}: {d.get('error')}",
+                ui.notify(f"{label} failed — {nm}: {d.get('error')}",
                           type="negative", close_button="dismiss",
                           timeout=0)
-        ns, nv = counts
-        qlab.set_text(f"splat queue {'–' if ns is None else ns} · "
-                      f"video queue {'–' if nv is None else nv}")
+        qlab.set_text(
+            f"splat queue {'–' if counts['splat'] is None else counts['splat']}"
+            f" · video queue "
+            f"{'–' if counts['video'] is None else counts['video']}")
 
     ui.timer(5.0, watch_done)
 
@@ -550,30 +557,31 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
     wstat = crossing.status() or {}
     wq = [x.rstrip("/") for x in wstat.get("queue") or []]
     wmine = str(crossing.job_dir(frm, la, to, lb)).rstrip("/")
-    wrun = (wstat.get("scene") or "").rstrip("/")
+    running = wstat.get("running") or {}     # scene -> {elapsed, loaded}
 
-    if wstat.get("busy") and wrun == wmine:
+    if wmine in running:
         ui.linear_progress(show_value=False).props(
             "indeterminate").classes("w-full")
-        note = "" if wstat.get("loaded") else \
+        note = "" if running[wmine].get("loaded") else \
             " (first job loads the model, ~2 minutes)"
         el_lb = ui.label(f"generating{note}").classes(
             "text-xs text-gray-500")
 
         def tick():
             s = crossing.status() or {}
-            if not s.get("busy") or (s.get("scene") or "").rstrip("/") \
-                    != wmine:
+            r = (s.get("running") or {}).get(wmine)
+            if r is None:
                 refresh_all()
                 return
-            el_lb.set_text(f"generating — {s.get('elapsed', 0) // 60}m"
-                           f"{s.get('elapsed', 0) % 60:02d}s{note}")
+            el_lb.set_text(f"generating — {r.get('elapsed', 0) // 60}m"
+                           f"{r.get('elapsed', 0) % 60:02d}s{note}")
         ui.timer(5.0, tick)
         return
 
     if wmine in wq:
+        now = next(iter(running), None)
         ui.label(f"queued — position {wq.index(wmine) + 1} · generating "
-                 f"now: {crossing.short(wrun)}" if wrun else
+                 f"now: {crossing.short(now)}" if now else
                  f"queued — position {wq.index(wmine) + 1}").classes(
             "text-xs text-[#f0a35e]")
 
@@ -584,11 +592,12 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
         ui.timer(5.0, tick_q)
         return
 
-    done = wstat.get("done")
-    if done and (done.get("scene") or "").rstrip("/") == wmine \
-            and not done.get("ok"):
-        ui.label(f"last generation failed: {done.get('error')}").classes(
-            "text-xs text-[#f85149]")
+    for done in wstat.get("dones") or []:
+        if (done.get("scene") or "").rstrip("/") == wmine \
+                and not done.get("ok"):
+            ui.label(f"last generation failed: {done.get('error')}").classes(
+                "text-xs text-[#f85149]")
+            break
 
     have_panos = bool(store.pano_of(frm, la) and store.pano_of(to, lb))
     with ui.row().classes("w-full items-center gap-2"):

@@ -19,7 +19,11 @@ import store
 from config import DREAM
 from restyle import _extract_perspective
 
-URL = os.environ.get("WANGEN_URL", "http://wangen:8000")
+# one queue per generator instance; the client spreads the load. The
+# comma-separated WANGEN_URLS wins over the single-instance WANGEN_URL.
+URLS = [u.strip() for u in os.environ.get(
+    "WANGEN_URLS", os.environ.get("WANGEN_URL", "http://wangen:8000")
+    ).split(",") if u.strip()]
 CROSS = DREAM / ".crossings"
 
 PROMPTS = {
@@ -113,18 +117,49 @@ def default_prompt(frm, to):
 
 
 def ready() -> bool:
+    return any(_ready(u) for u in URLS)
+
+
+def _ready(url) -> bool:
     try:
-        return (requests.get(f"{URL}/health", timeout=3)
+        return (requests.get(f"{url}/health", timeout=3)
                 .json().get("status") == "ok")
     except (requests.RequestException, ValueError):
         return False
 
 
-def status():
+def status_of(url):
     try:
-        return requests.get(f"{URL}/status", timeout=3).json()
+        return requests.get(f"{url}/status", timeout=3).json()
     except (requests.RequestException, ValueError):
         return None
+
+
+def statuses():
+    """One entry per generator instance, None where one is not answering."""
+    return [(u, status_of(u)) for u in URLS]
+
+
+def status():
+    """Every instance folded into one page-readable document: the running
+    scenes with their clocks, the queues end to end, every last-finished
+    job — plus the single-instance fields for anything still reading them."""
+    sts = [s for _, s in statuses() if s]
+    if not sts:
+        return None
+    running = {}
+    for s in sts:
+        if s.get("busy") and s.get("scene"):
+            running[str(s["scene"]).rstrip("/")] = {
+                "elapsed": s.get("elapsed", 0),
+                "loaded": s.get("loaded", True)}
+    first = next(iter(running), None)
+    return {"busy": bool(running), "scene": first, "running": running,
+            "queue": [q for s in sts for q in (s.get("queue") or [])],
+            "dones": [s["done"] for s in sts if s.get("done")],
+            "done": next((s["done"] for s in sts if s.get("done")), None),
+            "elapsed": running[first]["elapsed"] if first else None,
+            "loaded": running[first]["loaded"] if first else True}
 
 
 def submit(frm, la, to, lb, prompt: str) -> dict:
@@ -151,7 +186,23 @@ def submit(frm, la, to, lb, prompt: str) -> dict:
     body = {"dir": str(d), "prompt": prompt}
     if a["level"] != b["level"]:
         body["negative"] = NEG_LIFT
-    r = requests.post(f"{URL}/generate", json=body, timeout=30)
+    # each instance only knows its own queue, so the dedupe and the routing
+    # both live here: refuse a crossing ANY instance already holds, then
+    # hand the job to the least-loaded one
+    mine = str(d).rstrip("/")
+    target, load = None, None
+    for u, s in statuses():
+        if s is None:
+            continue
+        held = [s.get("scene") or ""] + list(s.get("queue") or [])
+        if mine in (str(x).rstrip("/") for x in held):
+            raise RuntimeError("that crossing is already running or queued")
+        n = (1 if s.get("busy") else 0) + len(s.get("queue") or [])
+        if load is None or n < load:
+            target, load = u, n
+    if target is None:
+        raise RuntimeError("no video generator is answering")
+    r = requests.post(f"{target}/generate", json=body, timeout=30)
     if r.status_code == 409:
         raise RuntimeError("that crossing is already running or queued")
     r.raise_for_status()

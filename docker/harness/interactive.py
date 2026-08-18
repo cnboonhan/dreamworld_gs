@@ -637,6 +637,21 @@ def pose_pump():
                         ST["prev"], ST["cur"], ST["face"] = ST["cur"], i, None
                     log(f"the core moved to {at} — following")
                     push_state()
+                elif i is None:
+                    # a name this level lacks: the walker crossed levels
+                    # without this harness commanding it (the viewer rode a
+                    # lift). Find whose name it is and move the whole
+                    # world model there — just like the viewer would.
+                    for lvl in (ST.get("levels") or []):
+                        if lvl == ST["level"]:
+                            continue
+                        try:
+                            find_vertex(load_nav(ST["nav"], lvl)[1], at)
+                        except SystemExit:
+                            continue
+                        log(f"the core moved to {at} — following to {lvl}")
+                        switch_level(lvl, land_on=at)
+                        break
             if not st:
                 continue
             yawd = st.get("yaw_deg")
@@ -1900,7 +1915,7 @@ input:focus{outline:0;border-color:#1f6feb}
 .ev .t{color:#484f58;margin-right:5px}
 .leg{display:flex;gap:12px;font-size:10px;color:#8b949e;flex-wrap:wrap}
 .leg i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px;vertical-align:middle}
-header h1,#stat,#pos,#vlink{flex-shrink:0}
+header h1,#stat,#vlink{flex-shrink:0}
 #vlink{font-size:12px;color:#8b949e;text-decoration:none;border:1px solid #30363d;
  border-radius:4px;padding:3px 8px}
 #vlink:hover{border-color:#58a6ff;color:#58a6ff}
@@ -1915,8 +1930,7 @@ header #mbox{flex:1;min-width:140px}
 <input id=mbox placeholder="mission for the agent — describe the goal, then Run">
 <button class=go id=runbtn onclick="onRunBtn()">run mission</button>
 <button id=cancelbtn onclick="cancelMission()" title="cancel the running mission and clear it">✕ clear mission</button>
-<span id=stat>connecting…</span><a id=vlink target=_blank rel=noopener></a>
-<span id=pos></span></header>
+<span id=stat>connecting…</span><a id=vlink target=_blank rel=noopener></a></header>
 <main>
  <div id=stack>
   <div class="panel" id=mid>
@@ -2196,9 +2210,6 @@ function onState(s){
  if(s.dir==null&&last&&last.dir)s.dir=last.dir;
  last=s;if(s.level)curLevel=s.level;
  if(!$('tplevel').value)$('tplevel').value=curLevel;   // never blank on arrival
- $('pos').textContent='@ '+s.cur_label+(s.level?'  ·  '+s.level:'')
-  +(s.heading!=null?'  ·  hdg '+s.heading+'°':'')
-  +(s.door_open?'  ·  door→'+s.door_open+' open':'');
  setMission(s.mission);setTodos(s.todos);viewerLink(s);drawMap(s);
  if(s.agent_busy!=null){agentRunning=!!s.agent_busy;
   agentPaused=agentRunning&&!!s.agent_paused;updateRunBtn()}}
@@ -2213,7 +2224,6 @@ function onState(s){
 // the page — a walk is then visibly under way instead of looking like a stall.
 function onPose(d){if(!last)return;
  last.px=d.px;last.py=d.py;last.dir=d.dir;
- $('pos').classList.toggle('moving',!!d.moving);
  drawMap(last)}
 
 function viewerLink(s){const a=$('vlink');if(!a||!s.scene)return;
