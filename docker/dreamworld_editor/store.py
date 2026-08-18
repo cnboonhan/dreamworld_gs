@@ -292,7 +292,8 @@ def graph_doc() -> dict:
     doc = {"levels": {}, "vertices": {}, "edges": load_edges(),
            "crossings": []}
     for lname, L in load_levels().items():
-        doc["levels"][lname] = {"walls": L["walls"], "scale": L["scale"]}
+        doc["levels"][lname] = {"walls": L["walls"], "scale": L["scale"],
+                                "elevation": L.get("elevation", 0)}
     for name, v in load_dream().items():
         looks = {}
         for lk in [None] + variants_of(name):

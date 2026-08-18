@@ -644,6 +644,37 @@ function drawPlan() {
     px.fillText(label, lx, cy2 + (y - cy2) * 0.62 - 3);
     if (built) hits.push({ n, x, y });
   }
+  // standing in a lift: its stops on other levels are the ways out —
+  // drawn as the editor draws them, vertical arrows one per level,
+  // clickable like any neighbour (go spins to the cabin door, then the
+  // ride video carries the level change)
+  if (me.lift) {
+    const elev = l => (graph.levels[l] || {}).elevation || 0;
+    const mates = nbrs.filter(n => graph.vertices[n].level !== me.level)
+      .sort((p, q) => elev(graph.vertices[p].level)
+                    - elev(graph.vertices[q].level));
+    let up = 0, dn = 0;
+    px.font = '11px system-ui'; px.textAlign = 'left';
+    for (const n of mates) {
+      const v = graph.vertices[n];
+      const rising = elev(v.level) > elev(me.level);
+      const y = rising ? cy2 - 28 - 22 * up++ : cy2 + 28 + 22 * dn++;
+      const built = Object.keys(v.looks).length > 0;
+      px.fillStyle = built ? '#d24dcf' : '#5a4458';
+      px.beginPath();
+      if (rising) {
+        px.moveTo(cx2, y - 7); px.lineTo(cx2 - 6, y + 4);
+        px.lineTo(cx2 + 6, y + 4);
+      } else {
+        px.moveTo(cx2, y + 7); px.lineTo(cx2 - 6, y - 4);
+        px.lineTo(cx2 + 6, y - 4);
+      }
+      px.closePath(); px.fill();
+      px.fillText(v.level, cx2 + 10, y + 4);
+      if (built) hits.push({ n, x: cx2, y });
+    }
+    px.textAlign = 'start';
+  }
   // us: a green triangle carrying the heading, as the dashboard drew it
   // (yaw is a building bearing; the drawing's y runs down)
   const a2 = -st.cam.yaw;
@@ -710,6 +741,14 @@ function neighbours(n) {
     if (a === n) out.push(b);
     if (b === n) out.push(a);
   }
+  // the same lift's stops on other levels: the building's vertical edges.
+  // Making them neighbours is what turns a commanded ride into a real
+  // TRANSITION — spin to the doors, the ride video, arrive upstairs —
+  // instead of a fade-cut, and lets preheat warm the ride ahead of time.
+  const me = graph.vertices[n];
+  if (me && me.lift)
+    for (const [k, v] of Object.entries(graph.vertices))
+      if (k !== n && v.lift === me.lift && v.level !== me.level) out.push(k);
   return out;
 }
 const tagOf = (n, look) => look === 'original' ? n : `${n}@${look}`;
