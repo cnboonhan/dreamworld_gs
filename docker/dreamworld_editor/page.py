@@ -403,8 +403,9 @@ def edge_card(edge, dream, sel, refresh_all):
                      "does, in /sim_editor").classes(
                 "text-xs text-[#d24dcf]")
         else:
-            ui.button("delete", color="negative", on_click=delete).props(
-                "dense flat")
+            with ui.row().classes("w-full justify-center"):
+                ui.button("delete", color="negative",
+                          on_click=delete).props("dense")
 
 
 def _elook(sel, nm):
@@ -696,8 +697,9 @@ def vertex_card(name, v, sel, refresh_all):
                         ui.button("keep", on_click=dlg.close)
                 dlg.open()
 
-            ui.button("delete", color="negative",
-                      on_click=delete).props("dense")
+            with ui.row().classes("w-full justify-center"):
+                ui.button("delete", color="negative",
+                          on_click=delete).props("dense")
 
 
 def pano_card(name, v, dream, scale, sel, refresh_all):
