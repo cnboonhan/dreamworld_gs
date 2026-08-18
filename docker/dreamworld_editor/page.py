@@ -552,7 +552,11 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
                 ui.notify("say what the crossing should do",
                           type="negative")
                 return
-            if not crossing.ready():
+            # spinner first — extracting the two frames takes long enough
+            # that a silent button reads as a missed click
+            vid_btn.props(add="loading")
+            if not await run.io_bound(crossing.ready):
+                vid_btn.props(remove="loading")
                 ui.notify("wangen is not ready — still starting, or not "
                           "running", type="negative")
                 return
@@ -560,6 +564,7 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
                 doc = await run.io_bound(crossing.submit, frm, la, to, lb,
                                          prompt)
             except Exception as err:
+                vid_btn.props(remove="loading")
                 ui.notify(str(err), type="negative")
                 return
             pos = doc.get("position", 1)
@@ -567,9 +572,9 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
                       else f"queued at position {pos}")
             refresh_all()
 
-        ui.button("regenerate transition" if vid else
-                  "generate transition", color="primary",
-                  on_click=gen_video).props(
+        vid_btn = ui.button("regenerate transition" if vid else
+                            "generate transition", color="primary",
+                            on_click=gen_video).props(
             "dense" + ("" if have_panos else " disable"))
         if not have_panos:
             ui.label("both looks need panoramas first").classes(
@@ -1056,13 +1061,19 @@ def splat_card(name, v, sel, refresh_all):
 
         with ui.row().classes("w-full items-center gap-2"):
             async def generate():
-                if not splatgen.ready():
+                # the spinner FIRST: preparing the panorama and talking to
+                # the generator takes long enough that a silent button
+                # reads as a missed click
+                gen_btn.props(add="loading")
+                if not await run.io_bound(splatgen.ready):
+                    gen_btn.props(remove="loading")
                     ui.notify("the generator is not ready — still loading, "
                               "or not running", type="negative")
                     return
                 try:
                     doc = await run.io_bound(splatgen.submit, name, svar)
                 except Exception as err:
+                    gen_btn.props(remove="loading")
                     ui.notify(str(err), type="negative")
                     return
                 pos = doc.get("position", 1)
@@ -1073,8 +1084,9 @@ def splat_card(name, v, sel, refresh_all):
 
             busy_other = bool(gen.get("busy"))
             props = "dense" + ("" if has_pano else " disable")
-            ui.button("regenerate" if ply else "generate splat",
-                      color="primary", on_click=generate).props(props)
+            gen_btn = ui.button("regenerate" if ply else "generate splat",
+                                color="primary",
+                                on_click=generate).props(props)
             if not has_pano:
                 ui.label("this look has no panorama yet").classes(
                     "text-xs text-gray-500")

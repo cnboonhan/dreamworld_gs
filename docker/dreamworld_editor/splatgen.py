@@ -34,8 +34,13 @@ def status():
 def submit(name: str, variant: str | None, steps: int = 2000) -> dict:
     scene = store.splat_dir(name, variant)
     scene.mkdir(parents=True, exist_ok=True)
-    Image.open(store.pano_of(name, variant)).convert("RGB").save(
-        scene / "panorama.png")
+    src = store.pano_of(name, variant)
+    png = scene / "panorama.png"
+    # PNG-encoding a full equirect costs seconds — pay it only when the
+    # source panorama is newer than the copy the generator reads (alignment
+    # rolls the pano in place, so a re-roll bumps its mtime and re-encodes)
+    if not png.is_file() or png.stat().st_mtime <= src.stat().st_mtime:
+        Image.open(src).convert("RGB").save(png)
     r = requests.post(f"{URL}/generate",
                       json={"scene": str(scene), "steps": steps}, timeout=30)
     if r.status_code == 409:
