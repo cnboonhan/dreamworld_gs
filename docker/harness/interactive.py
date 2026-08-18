@@ -2930,7 +2930,9 @@ def r_vlm_health():
         return jsonify(ok=False, error="no VLM configured")
     t0 = time.time()
     try:
-        req = urllib.request.Request(f"{VLM_BASE_URL.rstrip('/')}/models")
+        req = urllib.request.Request(
+            f"{VLM_BASE_URL.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {VLM_API_KEY}"})
         with urllib.request.urlopen(req, timeout=3) as r:
             r.read()
         return jsonify(ok=True, ms=round((time.time() - t0) * 1000))

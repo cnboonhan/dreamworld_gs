@@ -28,7 +28,7 @@ Three sizes. Each is a superset of the one before.
 | tier | command | how it runs | needs | you get |
 | --- | --- | --- | --- | --- |
 | **demo** | `just bundle` then `just demo` | a static site — no Docker, no backend | any machine with a browser | the walkthrough alone: walk the splat worlds, cross edges through the generated videos. |
-| **minimal** | `just minimal` | `compose.minimal.yaml` | 1 GPU (~20 GB) | walk + simulate + command an already-generated dreamworld: viewer, Gazebo+RMF sim, harness dashboard and its mission agent (the GPU is the agent's VLM). |
+| **minimal** | `just minimal` | `compose.minimal.yaml` | no GPU — bring an OpenAI-compatible VLM (a cliproxyapi, a remote vLLM) for the agent: `DW_VLM_URL` / `DW_VLM_MODEL` / `DW_VLM_KEY` in `.env`, default the host's `:8000` | walk + simulate + command an already-generated dreamworld: viewer, Gazebo+RMF sim, harness dashboard and its mission agent. |
 | **full** | `just up` | `compose.full.yaml` | 8 GPUs (see times below) | everything: authoring UIs and all the generators — splats, crossing videos, panorama variants. |
 
 The demo bundle is a **self-contained static site**: `just bundle` folds

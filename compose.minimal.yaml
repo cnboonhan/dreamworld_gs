@@ -1,5 +1,10 @@
 # MINIMAL: walk + simulate + command an already-generated dreamworld.
-# One GPU (the mission agent's VLM); no generators, no traffic editor.
+# No GPU and no local models: the mission agent speaks to an
+# OpenAI-compatible VLM you already run — a cliproxyapi, a remote vLLM —
+# reached at DW_VLM_URL (default: the HOST's :8000). Set in .env:
+#   DW_VLM_URL=http://host.docker.internal:8000/v1
+#   DW_VLM_MODEL=<model name the endpoint serves>
+#   DW_VLM_KEY=<api key, if the endpoint wants one>
 # Every service definition lives in compose.full.yaml — this file only
 # picks. No editor here: the proxy serves the dreamworld files itself,
 # and the graph the editor BAKED on its last change — author in the
@@ -22,5 +27,10 @@ services:
     extends: {file: compose.full.yaml, service: dreamworld_viewer}
   harness:
     extends: {file: compose.full.yaml, service: harness}
-  vlm:
-    extends: {file: compose.full.yaml, service: vlm}
+    # host-gateway: the VLM lives on the HOST here, not in the stack
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      VLM_BASE_URL: "${DW_VLM_URL:-http://host.docker.internal:8000/v1}"
+      VLM_MODEL: "${DW_VLM_MODEL:-Qwen/Qwen3-VL-8B-Instruct}"
+      VLM_API_KEY: "${DW_VLM_KEY:-x}"
