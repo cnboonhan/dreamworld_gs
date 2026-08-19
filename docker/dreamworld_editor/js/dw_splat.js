@@ -591,6 +591,25 @@ void main () {
   }).then(ab => {
     prog.remove();
     const packed = plyUrl.split('?')[0].endsWith('.splat');
+    // the sorter packs 2 texels per gaussian into a 2048-wide texture;
+    // more gaussians than the GPU's texture height allows fails the
+    // allocation SILENTLY — a black box. The records are importance-
+    // sorted, so keeping the head is the right degradation.
+    if (packed) {
+      const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 8192;
+      const maxN = Math.floor((maxTex * 2048) / 2);
+      const n = Math.floor(ab.byteLength / 32);
+      if (n > maxN) {
+        console.warn(`splat capped: ${n} -> ${maxN} gaussians (GPU texture limit)`);
+        const note = document.createElement('div');
+        note.style.cssText = 'position:absolute;right:8px;bottom:8px;z-index:5;'
+          + 'font:11px system-ui;color:#e3b341;background:rgba(10,13,18,.85);'
+          + 'padding:2px 8px;border-radius:6px;pointer-events:none';
+        note.textContent = `showing top ${(maxN / 1e6).toFixed(1)}M of ${(n / 1e6).toFixed(1)}M gaussians (GPU limit)`;
+        if (cv.parentElement) cv.parentElement.appendChild(note);
+        ab = ab.slice(0, maxN * 32);
+      }
+    }
     worker.postMessage(packed ? { records: ab } : { ply: ab }, [ab]);
   }).catch(err => {
     prog.textContent = 'load failed';

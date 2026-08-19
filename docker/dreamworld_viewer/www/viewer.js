@@ -577,6 +577,17 @@ async function preheat() {
   heat.busy = false;
 }
 function showRecords(ab) {
+  // 2 texels per gaussian in a 2048-wide texture: beyond the GPU's
+  // texture height the allocation fails SILENTLY and the world is a
+  // black screen. Importance-sorted records make head-truncation the
+  // right degradation.
+  const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 8192;
+  const maxN = Math.floor((maxTex * 2048) / 2);
+  const n = Math.floor(ab.byteLength / 32);
+  if (n > maxN) {
+    console.warn(`splat capped: ${n} -> ${maxN} gaussians (GPU texture limit)`);
+    ab = ab.slice(0, maxN * 32);
+  }
   return new Promise(res => {
     onLoaded = res;
     st.vertexCount = 0;
