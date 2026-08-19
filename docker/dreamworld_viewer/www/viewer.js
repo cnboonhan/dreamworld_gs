@@ -271,6 +271,12 @@ function followTruth(pos, seq) {
 }
 async function enact(to, look, yawDeg) {
   if (!graph.vertices[to] || !graph.vertices[to].looks[look]) return;
+  // a look without a compass cannot be STOOD IN — refuse before the
+  // shade goes down, or the fade to black never comes back up
+  if (!graph.vertices[to].looks[look].meta) {
+    console.warn(`look ${look} at ${to} has no meta — not walking there`);
+    return;
+  }
   if (to === st.at && look === st.look) {
     // same place: the command is a TURN — the harness's face and turn
     // tools ride the position's yaw
