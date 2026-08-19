@@ -561,13 +561,41 @@ void main () {
       reset: () => { viewMatrix = baseView; },
     };
   }
-  fetch(plyUrl).then(r => {
+  // stream the records so the wait is legible — a 342MB world through
+  // the metered route is most of a minute, and the cube alone says nothing
+  const prog = document.createElement('div');
+  prog.style.cssText = 'position:absolute;left:8px;bottom:8px;z-index:5;'
+    + 'font:12px system-ui;color:#9cc7ff;background:rgba(10,13,18,.85);'
+    + 'padding:2px 8px;border-radius:6px;pointer-events:none';
+  if (cv.parentElement) cv.parentElement.appendChild(prog);
+  fetch(plyUrl).then(async r => {
     if (!r.ok) throw new Error(r.status);
-    return r.arrayBuffer();
+    const total = +r.headers.get('Content-Length') || 0;
+    if (!r.body) return r.arrayBuffer();
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      prog.textContent = total
+        ? `downloading ${(got / 1e6).toFixed(0)} / ${(total / 1e6).toFixed(0)} MB — ${Math.round(100 * got / total)}%`
+        : `downloading ${(got / 1e6).toFixed(0)} MB`;
+    }
+    const buf = new Uint8Array(got);
+    let o = 0;
+    for (const c of chunks) { buf.set(c, o); o += c.length; }
+    return buf.buffer;
   }).then(ab => {
+    prog.remove();
     const packed = plyUrl.split('?')[0].endsWith('.splat');
     worker.postMessage(packed ? { records: ab } : { ply: ab }, [ab]);
-  }).catch(err => console.error('splat load failed', err));
+  }).catch(err => {
+    prog.textContent = 'load failed';
+    console.error('splat load failed', err);
+  });
 
   const frame = () => {
     if (!cv.isConnected) { worker.terminate(); return; }

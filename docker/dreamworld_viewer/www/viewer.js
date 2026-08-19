@@ -506,7 +506,31 @@ async function fetchRecords(name, look) {
   const url = `${FILES}/${name}/${info.dir}/${info.records}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} for ${url}`);
-  const ab = await r.arrayBuffer();
+  // stream, so the bar can say how much world is left to arrive
+  let ab;
+  const note = $('lookNote');
+  const total = +r.headers.get('Content-Length') || 0;
+  if (r.body && note) {
+    const reader = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      note.textContent = total
+        ? `· loading ${(got / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`
+        : `· loading ${(got / 1e6).toFixed(0)} MB`;
+    }
+    note.textContent = '';
+    const buf = new Uint8Array(got);
+    let o = 0;
+    for (const c of chunks) { buf.set(c, o); o += c.length; }
+    ab = buf.buffer;
+  } else {
+    ab = await r.arrayBuffer();
+  }
   heat.records.set(key, ab);
   while (heat.records.size > KEEP)
     heat.records.delete(heat.records.keys().next().value);
