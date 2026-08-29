@@ -206,6 +206,8 @@ const st = {
 // broker holds, anyone may ask. Pushed on change and heartbeaten each
 // second, so /dreamworld_editor/viewer/state is never more than a beat old.
 let lastPush = 0, lastSent = '', coreOk = 0;
+// bundled (DW_BASE set) means there is no core to talk to at all
+const DEMO = !!DW.files;
 // the bar says whether dreamworld_core is hearing us: green while pushes
 // land, red within seconds of them failing — the harness's view of this
 // walker is only as good as this light
@@ -357,7 +359,7 @@ function postPosition(at, look) {
     body: JSON.stringify({ at, look }) }).catch(() => {});
 }
 function pushState(force) {
-  if (!graph || !st.at) return;
+  if (DEMO || !graph || !st.at) return;
   const now = performance.now();
   if (!force && now - lastPush < 250) return;
   const me = graph.vertices[st.at];
@@ -883,7 +885,7 @@ function distOf(frm, to) {
 }
 function crossingSecs(frm, to) {
   const d = distOf(frm, to);
-  return d == null ? null : Math.min(15, Math.max(1.5, d / WALK_SPEED));
+  return d == null ? null : Math.min(15, Math.max(2.5, d / WALK_SPEED));
 }
 function playVideo(url, secs) {
   return new Promise(res => {
@@ -893,7 +895,11 @@ function playVideo(url, secs) {
     v.onerror = () => res(false);
     v.oncanplay = () => {
       if (secs && v.duration)
-        v.playbackRate = Math.min(4, Math.max(0.25, v.duration / secs));
+        // distance still sets the pace, but inside a band where motion
+        // still READS: this building's capture points are ~1.2m apart,
+        // and at 3.4x a five-second crossing went past as a blur that
+        // looked like no animation at all
+        v.playbackRate = Math.min(1.8, Math.max(0.6, v.duration / secs));
       v.style.opacity = '1';
       v.play();
     };
