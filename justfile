@@ -71,6 +71,10 @@ bundle proj=project:
     dest={{assets}}/projects/{{proj}}/bundle
     cp -r {{repo}}/docker/dreamworld_viewer/www/. "$dest/"
     sed -i 's|<script src="viewer.js|<script>window.DW_BASE={files:"files",graph:"graph.json"}</script>\n  <script src="viewer.js|' "$dest/index.html"
+    # A public bundle must say what it is: the world models' acceptable-use
+    # terms require machine-generated content in a public context to be
+    # conspicuously identified. On the hint overlay, always on screen.
+    sed -i 's|plan to cross</div>|plan to cross<br><b style="color:#e3b341">AI-generated</b> — every view is a machine-made reconstruction</div>|' "$dest/index.html"
     echo "self-contained site at $dest — any static file server can host it"
 
 # DEMO: serve the bundle locally — it is a static site, so no Docker,

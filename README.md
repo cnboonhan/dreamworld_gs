@@ -1,5 +1,18 @@
 # dreamworld_gs
 
+<div align="center">
+
+## 🌐 &nbsp;[**► WALK THE LIVE DEMO ◄**](https://cnboonhan.github.io/dreamworld_gs)
+
+**[cnboonhan.github.io/dreamworld_gs](https://cnboonhan.github.io/dreamworld_gs)**
+
+*in your browser, nothing to install — walk the splat worlds,<br>
+cross doors and ride the lifts through their generated videos*
+
+</div>
+
+---
+
 Grow a photorealistic, walkable twin of a building — one 360 photo at a
 time. **RMF** simulates the building's infrastructure (doors, lifts) from
 an annotated floorplan. **Gaussian splatting** shows what each place looks
