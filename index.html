@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>dreamworld viewer</title>
+<style>
+  :root { color-scheme: dark }
+  html, body { margin: 0; height: 100%; background: #0a0d12; color: #dfe6ef;
+               font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+               overflow: hidden }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%;
+        cursor: grab; touch-action: none; outline: none }
+  #bar { position: absolute; top: 0; left: 0; right: 0; display: flex;
+         gap: 10px; align-items: center; padding: 8px 14px;
+         background: rgba(11,14,19,.85); border-bottom: 1px solid #232c38;
+         z-index: 5 }
+  #bar b { color: #4ea1ff }
+  #bar .k { color: #8b98a8 }
+  /* the same rounded chip the harness header wears */
+  #core { font-size: 12px; border: 1px solid #2f3a48; border-radius: 10px;
+          padding: 2px 8px; color: #8b98a8; cursor: pointer }
+  #core.up { color: #56d364; border-color: #238636 }
+  #core.down { color: #f85149; border-color: #da3633 }
+  /* the canvas cannot wear a native resize grip (replaced element), and
+     the box is RIGHT-anchored — so a custom grip sits on the free corner,
+     bottom-left */
+  #planbox { position: absolute; top: 52px; right: 28px; width: 320px;
+             height: 220px; overflow: hidden; background: #0a0d12;
+             border: 1px solid #232c38; border-radius: 8px; z-index: 5 }
+  #plan { display: block; width: 100%; height: 100%; cursor: pointer }
+  #plangrip { position: absolute; left: 0; bottom: 0; width: 18px;
+              height: 18px; cursor: sw-resize; z-index: 6 }
+  #plangrip::after { content: ''; position: absolute; left: 3px; bottom: 3px;
+                     border-left: 9px solid #4ea1ff;
+                     border-top: 9px solid transparent; opacity: .5 }
+  #plangrip:hover::after { opacity: 1 }
+  #panel { position: absolute; top: 282px; right: 28px; width: 320px;
+           background: rgba(17,21,28,.95); border: 1px solid #232c38;
+           border-radius: 8px; padding: 10px; z-index: 5; display: none }
+  #panel select, #panel button {
+    background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
+    border-radius: 6px; padding: 4px 8px; font: inherit }
+  #panel button.go { background: #2c6e3f; border-color: #3a8a52;
+                     cursor: pointer }
+  #panel button { cursor: pointer }
+  #vid { position: absolute; inset: 0; width: 100%; height: 100%;
+         object-fit: cover; z-index: 8; opacity: 0;
+         transition: opacity .25s; pointer-events: none; background: #000 }
+  #shade { position: absolute; inset: 0; background: #000; z-index: 7;
+           opacity: 0; transition: opacity .3s; pointer-events: none }
+  #hint { position: absolute; left: 14px; bottom: 10px; color: #8b98a8;
+          z-index: 5; text-shadow: 0 1px 3px #000 }
+  #spin { position: absolute; inset: 0; display: flex; align-items: center;
+          justify-content: center; z-index: 6; pointer-events: none }
+  .cube-wrapper { transform-style: preserve-3d }
+  .cube { transform-style: preserve-3d;
+          transform: rotateX(45deg) rotateZ(45deg);
+          animation: rot 2s infinite }
+  .cube-faces { transform-style: preserve-3d; height: 50px; width: 50px;
+                position: relative; transform-origin: 0 0;
+                transform: translateZ(-25px) }
+  .cube-face { position: absolute; inset: 0; background: #0017ff;
+               border: solid 1px #fff }
+  .cube-face.top { transform: translateZ(50px) }
+  .cube-face.front { transform-origin: 0 50%; transform: rotateY(-90deg) }
+  .cube-face.back { transform-origin: 0 50%;
+                    transform: rotateY(-90deg) translateZ(-50px) }
+  .cube-face.right { transform-origin: 50% 0;
+                     transform: rotateX(-90deg) translateY(-50px) }
+  .cube-face.left { transform-origin: 50% 0;
+                    transform: rotateX(-90deg) translateY(-50px)
+                               translateZ(50px) }
+  @keyframes rot {
+    0% { transform: rotateX(45deg) rotateY(0) rotateZ(45deg);
+         animation-timing-function: cubic-bezier(.17,.84,.44,1) }
+    50% { transform: rotateX(45deg) rotateY(0) rotateZ(225deg);
+          animation-timing-function: cubic-bezier(.76,.05,.86,.06) }
+    100% { transform: rotateX(45deg) rotateY(0) rotateZ(405deg) } }
+</style>
+</head>
+<body>
+  <canvas id="cv" tabindex="0"></canvas>
+  <div id="shade"></div>
+  <video id="vid" muted playsinline></video>
+  <div id="spin" style="display:none">
+    <div class="cube-wrapper"><div class="cube"><div class="cube-faces">
+      <div class="cube-face bottom"></div><div class="cube-face top"></div>
+      <div class="cube-face left"></div><div class="cube-face right"></div>
+      <div class="cube-face back"></div><div class="cube-face front"></div>
+    </div></div></div>
+  </div>
+  <div id="bar">
+    <b>dreamworld viewer</b>
+    <span class="k">at</span> <span id="at">…</span>
+    <span class="k" id="lookNote"></span>
+    <span class="k" style="margin-left:auto">speed</span>
+    <select id="speed" title="walking speed — every crossing video is
+warped so motion covers this many metres per second"
+            style="background:#1e2530; color:#dfe6ef; border:1px solid #2f3a48;
+                   border-radius:6px; padding:2px 6px; font:inherit">
+      <option value="0.7">0.7 m/s</option>
+      <option value="1.4" selected>1.4 m/s</option>
+      <option value="2.0">2.0 m/s</option>
+      <option value="3.0">3.0 m/s</option>
+      <option value="5.0">5.0 m/s</option>
+    </select>
+    <span id="core"
+          title="the core is the one writer of position and this viewer
+follows it — click to walk free, click again to catch up">core …</span>
+  </div>
+  <button id="planBtn" title="hide the plan"
+          style="position:absolute; top:56px; right:32px; z-index:6;
+                 background:#1e2530; color:#dfe6ef; border:1px solid #2f3a48;
+                 border-radius:6px; width:26px; height:24px; cursor:pointer">
+    −</button>
+  <div id="planbox">
+    <canvas id="plan" width="320" height="220"></canvas>
+    <div id="plangrip" title="drag to resize the plan"></div>
+  </div>
+  <div id="panel">
+    <div style="margin-bottom:8px">walk to <b id="tgt"></b></div>
+    <div style="display:flex; gap:6px; align-items:center">
+      <span class="k">arrive as</span>
+      <select id="tlook"></select>
+      <button class="go" id="goBtn">go</button>
+      <button id="cancelBtn">×</button>
+    </div>
+    <div class="k" id="tnote" style="margin-top:6px"></div>
+  </div>
+  <div id="hint">drag to look · wheel to walk · click a neighbour on the
+    plan to cross<br><b style="color:#e3b341">AI-generated</b> — every view is a machine-made reconstruction</div>
+  <script>window.DW_BASE={files:"files",graph:"graph.json"}</script>
+  <script src="viewer.js?v=27"></script>
+</body>
+</html>
