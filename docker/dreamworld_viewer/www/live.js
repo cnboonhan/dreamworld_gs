@@ -37,16 +37,11 @@ function showPano() {
 }
 
 function fillPickers() {
-  const where = $('where'), look = $('look');
-  const names = Object.keys(st.graph.vertices)
-    .filter(n => Object.keys(st.graph.vertices[n].panos || {}).length)
-    .sort();
-  where.innerHTML = names.map(n =>
-    `<option${n === st.at ? ' selected' : ''}>${n}</option>`).join('');
+  // where you stand is the plan's business now; the bar only reports it
   const looks = Object.keys(st.graph.vertices[st.at].panos || {});
   if (!looks.includes(st.look)) st.look = looks[0];
-  look.innerHTML = looks.map(l =>
-    `<option${l === st.look ? ' selected' : ''}>${l}</option>`).join('');
+  $('where').textContent =
+    st.at + (st.look === 'original' ? '' : ` · ${st.look}`);
 }
 
 // The seed is the view itself: full width of what is on screen and a
@@ -159,11 +154,6 @@ setInterval(() => {
   lastHeading = key;
 }, 150);
 
-$('where').onchange = e => {
-  st.at = e.target.value;
-  fillPickers(); showPano(); settle();
-};
-$('look').onchange = e => { st.look = e.target.value; showPano(); settle(); };
 $('apply').onclick = () => seed();
 $('prompt').addEventListener('keydown', e => {
   if (e.key === 'Enter') seed();

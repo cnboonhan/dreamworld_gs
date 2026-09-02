@@ -58,11 +58,18 @@ REANCHOR = int(os.environ.get("DW_LINGBOT_REANCHOR", "8"))
 # and right about the up axis, returning through centre every period, so
 # the net movement over a cycle is zero and the view never wanders off.
 # Set SWAY_DEG=0 for a hard-locked camera.
-SWAY_DEG = float(os.environ.get("DW_LINGBOT_SWAY_DEG", "2.0"))
+SWAY_DEG = float(os.environ.get("DW_LINGBOT_SWAY_DEG", "0"))
 SWAY_FRAMES = int(os.environ.get("DW_LINGBOT_SWAY_FRAMES", "64"))
+# The pose track is a perfect "do not move" signal — relative poses are
+# frame-to-frame, so identity everywhere is exactly zero motion — but the
+# video model still has a prior of its own and wanders. So close the loop:
+# measure how far the newest frame has slid from the SEED and, past this
+# many pixels, rebuild the cache from the seed. Drift then cannot exceed
+# the threshold, because exceeding it is what triggers the snap back.
+DRIFT_PX = float(os.environ.get("DW_LINGBOT_DRIFT_PX", "10"))
 
 STATE = {"loaded": False, "seeded_at": 0.0, "prompt": "", "blocks": 0,
-         "fps": 0.0, "error": None}
+         "fps": 0.0, "error": None, "drift": 0.0, "reanchors": 0}
 LOCK = threading.Lock()
 FRAME = {"jpeg": None, "n": 0}
 NEW_FRAME = threading.Condition()
@@ -128,8 +135,30 @@ def sway_camera(frames, fov, device, t0):
     return CameraControlInput(intrinsics=K, poses=poses, world_scale=1.0)
 
 
+def _gray_small(arr):
+    """Quarter-scale luma, the cheap basis for the drift measurement."""
+    a = arr[::4, ::4, :].astype(np.float32)
+    return a[:, :, 0] * 0.299 + a[:, :, 1] * 0.587 + a[:, :, 2] * 0.114
+
+
+def drift_of(a, b):
+    """Global displacement between two frames, by phase correlation, in
+    full-resolution pixels. Robust to the content changing underneath —
+    it is the SHIFT we care about, not the difference."""
+    A, B = np.fft.rfft2(a), np.fft.rfft2(b)
+    C = A * np.conj(B)
+    C /= np.maximum(np.abs(C), 1e-9)
+    r = np.fft.irfft2(C, s=a.shape)
+    py, pxi = np.unravel_index(int(np.argmax(r)), r.shape)
+    dy = py - a.shape[0] if py > a.shape[0] // 2 else py
+    dx = pxi - a.shape[1] if pxi > a.shape[1] // 2 else pxi
+    return abs(dx) * 4.0, abs(dy) * 4.0
+
+
 def publish(frames):
-    """Hand finished frames to whoever is streaming, newest wins."""
+    """Hand finished frames to whoever is streaming, newest wins, and
+    return the last frame's luma so the loop can measure its drift."""
+    last = None
     for f in frames:
         a = f.detach().float().clamp(-1, 1)
         if a.ndim == 4:
@@ -137,12 +166,15 @@ def publish(frames):
         if a.shape[0] in (1, 3):          # CHW -> HWC
             a = a.permute(1, 2, 0)
         arr = ((a + 1.0) * 127.5).round().clamp(0, 255).to(torch.uint8)
+        rgb = arr.cpu().numpy()
+        last = _gray_small(rgb)
         buf = io.BytesIO()
-        Image.fromarray(arr.cpu().numpy()).save(buf, "JPEG", quality=JPEG_Q)
+        Image.fromarray(rgb).save(buf, "JPEG", quality=JPEG_Q)
         with NEW_FRAME:
             FRAME["jpeg"] = buf.getvalue()
             FRAME["n"] += 1
             NEW_FRAME.notify_all()
+    return last
 
 
 def model_loop():
@@ -164,7 +196,9 @@ def model_loop():
         if pend["seq"] != seq and pend["image"] is not None:
             # a new view or a new prompt: the cache belongs to the old one
             seq, cache, step, done, t0 = pend["seq"], None, 0, 0, time.time()
-            STATE.update(seeded_at=t0, prompt=pend["prompt"] or "", blocks=0)
+            anchor = None
+            STATE.update(seeded_at=t0, prompt=pend["prompt"] or "", blocks=0,
+                         drift=0.0, reanchors=0)
         if seq < 0 or pend["image"] is None:
             time.sleep(0.05)
             continue
@@ -188,9 +222,20 @@ def model_loop():
                     input=sway_camera(n, float(pend["fov"] or 1.2),
                                       "cuda", done))
                 pipe.finalize(autoregressive_index=step, cache=cache)
-            publish(frames)
+            luma = publish(frames)
             step += 1
             done += n
+            if anchor is None:
+                anchor = _gray_small(np.asarray(Image.open(
+                    io.BytesIO(pend["image"])).convert("RGB").resize(
+                        (WIDTH, HEIGHT), Image.LANCZOS)))
+            if luma is not None:
+                dx, dy = drift_of(anchor, luma)
+                STATE["drift"] = round(max(dx, dy), 1)
+                if DRIFT_PX and max(dx, dy) > DRIFT_PX:
+                    # slid too far from the photograph — start again from it
+                    cache, step = None, 0
+                    STATE["reanchors"] = STATE.get("reanchors", 0) + 1
             STATE.update(blocks=step,
                          fps=round(done / max(time.time() - t0, 1e-3), 2))
         except Exception as e:                                 # noqa: BLE001

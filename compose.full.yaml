@@ -175,9 +175,11 @@ services:
       # how far the held camera sways each way, and over how many frames;
       # 0 degrees locks it hard, which the model honours less well than a
       # small definite trajectory
-      DW_LINGBOT_SWAY_DEG: "${DW_LINGBOT_SWAY_DEG:-2.0}"
+      DW_LINGBOT_SWAY_DEG: "${DW_LINGBOT_SWAY_DEG:-0}"
       DW_LINGBOT_SWAY_FRAMES: "${DW_LINGBOT_SWAY_FRAMES:-64}"
       DW_LINGBOT_REANCHOR: "${DW_LINGBOT_REANCHOR:-8}"
+      # snap back to the seed once the view has slid this far
+      DW_LINGBOT_DRIFT_PX: "${DW_LINGBOT_DRIFT_PX:-10}"
     deploy:
       resources:
         reservations:
