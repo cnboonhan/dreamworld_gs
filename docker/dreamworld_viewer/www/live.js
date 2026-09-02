@@ -48,6 +48,20 @@ function fillPickers() {
     `<option${l === st.look ? ' selected' : ''}>${l}</option>`).join('');
 }
 
+// The seed is the view itself: full width of what is on screen and a
+// centred band at the model's 832x464 aspect, so the horizontal field of
+// view the viewer reports is exactly the one the rollout inherits and
+// nothing is stretched to fit.
+function captureView() {
+  const src = $('pano');
+  const out = document.createElement('canvas');
+  out.width = 832; out.height = 464;
+  const sw = src.width, sh = Math.min(src.height, src.width * 464 / 832);
+  out.getContext('2d').drawImage(src, 0, (src.height - sh) / 2, sw, sh,
+                                 0, 0, 832, 464);
+  return out.toDataURL('image/jpeg', 0.92);
+}
+
 // ---- the rollout ----------------------------------------------------------
 function stopStream() {
   st.streaming = false;
@@ -64,7 +78,7 @@ async function seed() {
     // the canvas IS the conditioning: exactly the framing on screen, so the
     // rollout inherits the viewer's own field of view rather than guessing
     const view = window.dwp('live', 'view') || { fov: 1.6 };
-    const image = $('pano').toDataURL('image/jpeg', 0.92);
+    const image = captureView();
     const r = await fetch(`${LINGBOT}/seed`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image, prompt: $('prompt').value,

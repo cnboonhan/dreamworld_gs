@@ -172,6 +172,12 @@ services:
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
       DW_LINGBOT_RUNNER: "${DW_LINGBOT_RUNNER:-lingbot-world-fast-taehv-window15-sink3}"
+      # how far the held camera sways each way, and over how many frames;
+      # 0 degrees locks it hard, which the model honours less well than a
+      # small definite trajectory
+      DW_LINGBOT_SWAY_DEG: "${DW_LINGBOT_SWAY_DEG:-2.0}"
+      DW_LINGBOT_SWAY_FRAMES: "${DW_LINGBOT_SWAY_FRAMES:-64}"
+      DW_LINGBOT_REANCHOR: "${DW_LINGBOT_REANCHOR:-8}"
     deploy:
       resources:
         reservations:

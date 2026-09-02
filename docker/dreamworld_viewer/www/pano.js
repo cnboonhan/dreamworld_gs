@@ -16,7 +16,12 @@ window.dwp = (ns, fn, arg) => {
   return a && a[fn] ? a[fn](arg) : null;
 };
 window.dwPano = (id, url, offId, ns, opts) => {
-  const cv = document.getElementById('c' + id);
+  // NiceGUI names its elements c<n>; this viewer uses plain ids,
+  // and passing one that resolved to nothing silently rendered
+  // NO panorama — which then seeded the world model with a blank
+  // frame instead of the view.
+  const cv = document.getElementById('c' + id)
+          || document.getElementById(id);
   if (!cv || cv.dataset.dw) return;
   cv.dataset.dw = 1;
   opts = opts || {};

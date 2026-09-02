@@ -39,6 +39,27 @@ RUNNER = os.environ.get("DW_LINGBOT_RUNNER",
 WIDTH = int(os.environ.get("DW_LINGBOT_WIDTH", "832"))
 HEIGHT = int(os.environ.get("DW_LINGBOT_HEIGHT", "464"))
 JPEG_Q = int(os.environ.get("DW_LINGBOT_JPEG_Q", "80"))
+# The camera is held still by the POSE track (identity every frame, which
+# the encoder turns into zero relative motion and anchors across blocks).
+# The video model still carries its own motion prior, though, and the
+# pipeline takes no negative prompt — so the only other lever is to say it
+# in the positive one, on every rollout, whatever the viewer typed.
+STILL = os.environ.get(
+    "DW_LINGBOT_STILL",
+    "static locked-off camera on a tripod, fixed viewpoint, "
+    "no camera movement, no panning, no zooming; only the scene itself moves")
+# Re-anchor: rebuild the cache from the SAME seed every N blocks, so drift
+# cannot accumulate past a few seconds. The camera has not moved, so the
+# seed is still the right view and the snap back is nearly invisible.
+REANCHOR = int(os.environ.get("DW_LINGBOT_REANCHOR", "8"))
+# A null pose track asks the model to hold perfectly still, and it drifts
+# anyway — a camera-controllable model follows a DEFINITE trajectory far
+# better than an absent one. So give it a small sway: a few degrees left
+# and right about the up axis, returning through centre every period, so
+# the net movement over a cycle is zero and the view never wanders off.
+# Set SWAY_DEG=0 for a hard-locked camera.
+SWAY_DEG = float(os.environ.get("DW_LINGBOT_SWAY_DEG", "2.0"))
+SWAY_FRAMES = int(os.environ.get("DW_LINGBOT_SWAY_FRAMES", "64"))
 
 STATE = {"loaded": False, "seeded_at": 0.0, "prompt": "", "blocks": 0,
          "fps": 0.0, "error": None}
@@ -79,18 +100,32 @@ def seed_tensor(raw: bytes, device):
     return (a.permute(2, 0, 1) / 127.5 - 1.0).unsqueeze(0).to(torch.bfloat16)
 
 
-def still_camera(frames, fov, device):
-    """A camera that does not move: the viewer owns panning (it turns the
-    panorama and re-seeds), so the rollout's job is to animate the scene,
-    not to fly through it. Intrinsics come from the crop's own field of
-    view, so the generated motion matches the framing the walker sees."""
+def sway_camera(frames, fov, device, t0):
+    """The camera the rollout is told to hold: no translation ever, and a
+    gentle yaw that swings SWAY_DEG each way and back.
+
+    The viewer owns real panning — it turns the PANORAMA and re-seeds — so
+    the rollout never needs to travel. `t0` is the frame index the rollout
+    has reached, which keeps the sway continuous across autoregressive
+    blocks (the encoder takes each chunk relative to the last pose, so a
+    phase jump at a block boundary would read as a lurch).
+
+    Intrinsics come from the crop's own field of view, so what the model
+    generates matches the framing the walker is actually looking at."""
     fx = 0.5 * WIDTH / math.tan(fov / 2.0)
     K = torch.tensor([[fx, fx, WIDTH / 2.0, HEIGHT / 2.0]],
                      device=device, dtype=torch.float32).repeat(frames, 1)
-    poses = torch.eye(4, device=device, dtype=torch.float32)
-    return CameraControlInput(intrinsics=K,
-                              poses=poses.unsqueeze(0).repeat(frames, 1, 1),
-                              world_scale=1.0)
+    poses = torch.eye(4, device=device,
+                      dtype=torch.float32).unsqueeze(0).repeat(frames, 1, 1)
+    if SWAY_DEG > 0 and SWAY_FRAMES > 0:
+        i = torch.arange(t0, t0 + frames, device=device, dtype=torch.float32)
+        a = math.radians(SWAY_DEG) * torch.sin(2 * math.pi * i / SWAY_FRAMES)
+        c, s_ = torch.cos(a), torch.sin(a)
+        # yaw about the up axis of the OpenCV camera frame (x right,
+        # y down, z forward): translation stays exactly zero
+        poses[:, 0, 0], poses[:, 0, 2] = c, s_
+        poses[:, 2, 0], poses[:, 2, 2] = -s_, c
+    return CameraControlInput(intrinsics=K, poses=poses, world_scale=1.0)
 
 
 def publish(frames):
@@ -139,15 +174,19 @@ def model_loop():
             # from outside that mode is refused a few blocks in — long
             # enough to look like a mid-stream failure rather than a
             # missing context manager
+            if REANCHOR and step and step % REANCHOR == 0:
+                cache, step = None, 0          # back to the photograph
             with torch.inference_mode():
                 if cache is None:
+                    text = ", ".join(x for x in (pend["prompt"], STILL) if x)
                     cache = pipe.initialize_cache(
-                        text=[pend["prompt"] or ""],
+                        text=[text],
                         image=seed_tensor(pend["image"], "cuda"))
                 n = int(pipe.get_num_output_frames(step))
                 frames = pipe.generate(
                     autoregressive_index=step, cache=cache,
-                    input=still_camera(n, float(pend["fov"] or 1.2), "cuda"))
+                    input=sway_camera(n, float(pend["fov"] or 1.2),
+                                      "cuda", done))
                 pipe.finalize(autoregressive_index=step, cache=cache)
             publish(frames)
             step += 1
@@ -181,6 +220,20 @@ class Handler(BaseHTTPRequestHandler):
                 "runner": RUNNER, "error": STATE["error"]})
         if self.path.startswith("/status"):
             return self._send(200, {**STATE, "frames": FRAME["n"]})
+        if self.path.startswith("/seed.jpg"):
+            # the last conditioning frame, so "what is it actually seeded
+            # with" is a question you can answer by looking
+            with LOCK:
+                raw = PENDING["image"]
+            if not raw:
+                return self._send(404, {"error": "nothing seeded yet"})
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if self.path.startswith("/stream"):
             return self.stream()
         self._send(404, {"error": "?"})
