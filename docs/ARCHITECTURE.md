@@ -92,6 +92,7 @@ docker/
   dreamworld_editor/       the NiceGUI editor and its store
   dreamworld_viewer/       the walkthrough (static, fed by the editor)
   dreamworld_core/         the state holder — the seam's fixed address
+  streamer/                the live layer: a world model behind /streamer
   harness/                 the dashboard, tools and mission agent
   qwen/                    Qwen-Image-Edit-2509 (panorama variants)
   wangen/                  Wan 2.2 (crossing videos) behind the same queue
@@ -100,8 +101,8 @@ assets/                    gitignored: weights (hf/, models/), projects/
 ```
 
 GPUs on this box: **0** vLLM (Qwen3-VL — the mission agent) ·
-**1–4** free · **5** qwen image edit · **6** wan video ·
-**7** wan video (second instance).
+**1** the live streamer · **2–4** free · **5** qwen image edit ·
+**6** wan video · **7** wan video (second instance).
 
 ## The harness seam
 
