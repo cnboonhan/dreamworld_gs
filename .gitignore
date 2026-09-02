@@ -5,3 +5,6 @@ __pycache__/
 .env
 dist/
 .up.lock
+
+# trial clones and their weights — never tracked
+staging/

@@ -149,9 +149,9 @@ def plan(project: str, map_name: str, rows: list[dict]) -> dict:
                      "lift": bool(props.get("lift") or props.get("lift_cabin"))}
             levels.setdefault(level, {"vertices": [], "edges": []})
             levels[level]["vertices"].append(entry)
-            # One panorama per waypoint, as a file rather than a folder:
-            # HY-World imagines a whole world from a single vantage point, so
-            # standing at a place and shooting once is the whole capture. The
+            # One panorama per waypoint, as a file rather than a folder: a
+            # world is reconstructed from a single vantage point, so standing
+            # at a place and shooting once is the whole capture. The
             # corridors between them are then walks across worlds, not
             # captures of their own.
             capture.append({"kind": "vertex", "id": vid, "level": level,

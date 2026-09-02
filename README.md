@@ -68,22 +68,21 @@ Measured on this box (NVIDIA H200s), generating the sample office:
 
 | job | model | cards | VRAM | time |
 | --- | --- | --- | --- | --- |
-| splat world | HY-World 2.0 | 4 | large | **15–20 min** per place |
 | crossing video | Wan 2.2 FLF (×2 instances) | 1 each | ~72 GB | **6–7 min** per video (+~2 min model load on a cold instance) |
 | panorama variant | Qwen-Image-Edit-2509 | 1 | ~60 GB | **~1 min** per edit |
-| mission agent / planner | Qwen3-VL-8B (vLLM) | 1 | ~17 GB | interactive |
+| mission agent | Qwen3-VL-8B (vLLM) | 1 | ~17 GB | interactive |
 
-A building of V places and E edges costs roughly `V × 17 min` of splat
-time (4 cards) and `2E × 6.5 min` of video time (halved across the two
-wangen instances) — the queues run unattended and the editor toasts each
-completion.
+A building of E edges costs roughly `2E × 6.5 min` of video time, halved
+across the two wangen instances — the queue runs unattended and the
+editor toasts each completion. **Splat worlds are no longer generated
+here**: they arrive with the project (`just unpack`), and the editor
+views them rather than building them.
 
 ## The flow, in one paragraph
 
 Trace walls, doors and lifts in `/sim_editor`; drop vertices and edges on
-the plan in `/dreamworld_editor`; upload a 360 panorama per vertex, align
-it to the building, generate its splat world; per edge, generate the
-crossing videos (prompts default by what the map says the walk passes —
+the plan in `/dreamworld_editor`; upload a 360 panorama per vertex and
+align it to the building; per edge, generate the crossing videos (prompts default by what the map says the walk passes —
 a door opens, a lift rides); then walk it in `/dreamworld_viewer` or hand
 the harness agent a mission. Vertices and edges wear traffic lights
 everywhere: red — not started/unaligned, yellow — in progress, green —

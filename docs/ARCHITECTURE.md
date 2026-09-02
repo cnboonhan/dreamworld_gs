@@ -26,9 +26,11 @@ harness rides, and which GPU holds what.
    named look; aim the free-look viewer's rectangle at what should
    change, write a prompt, *edit* — Qwen-Image-Edit repaints only where
    you aimed. Undo swaps back; the original is never touched.
-6. **Splats**: per look, *generate splat* queues HY-World 2.0 — six
-   stages, four GPUs, ~17 minutes a world. The box shows the stage and
-   the queue; the viewer opens the result at its spawn camera.
+6. **Splats**: the splat box picks a look and views the world built for
+   it, opening at its spawn camera. Worlds are NOT generated here any
+   more — they arrive with the project (`just unpack`), each carrying
+   its own compass (`gs_result/ply/position_meta_info.json`: building
+   east, up, and the capture point in ply coordinates).
 7. **Crossings**: select an edge; each direction card shows both
    panoramas faced along the walk's own bearing and the splat
    walkthrough, with a *video transition* box beneath. The prompt
@@ -91,16 +93,15 @@ docker/
   dreamworld_viewer/       the walkthrough (static, fed by the editor)
   dreamworld_core/         the state holder — the seam's fixed address
   harness/                 the dashboard, tools and mission agent
-  splatgen/                HY-World 2.0 behind a one-job queue
   qwen/                    Qwen-Image-Edit-2509 (panorama variants)
   wangen/                  Wan 2.2 (crossing videos) behind the same queue
 scripts/                   fetch_assets.py, models.txt, pack.py
 assets/                    gitignored: weights (hf/, models/), projects/
 ```
 
-GPUs on this box: **0** vLLM (Qwen3-VL — trajectory planning and the
-mission agent) · **1–4** splat generation · **5** qwen image edit ·
-**6** wan video · **7** wan video (second instance).
+GPUs on this box: **0** vLLM (Qwen3-VL — the mission agent) ·
+**1–4** free · **5** qwen image edit · **6** wan video ·
+**7** wan video (second instance).
 
 ## The harness seam
 
@@ -170,6 +171,6 @@ read it for the same map.
   (named vertices, lanes) is the dreamworld editor's, regenerated
   wholesale on every change. Last writer wins on the file — keep the
   traffic editor closed while tracing nav, or reopen it after.
-- Restarting `splatgen` or `wangen` kills the job they are running (the
-  queue is memory-only, by design — every job's inputs are on disk and
-  resubmission costs one click). Don't rebuild them mid-generation.
+- Restarting `wangen` kills the job it is running (the queue is
+  memory-only, by design — every job's inputs are on disk and
+  resubmission costs one click). Don't rebuild it mid-generation.

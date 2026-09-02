@@ -17,7 +17,6 @@ from nicegui import run, ui
 from config import C_BG, C_WALL, CURSOR, DREAM, MOUNT, PROJ, PROJECT
 import crossing
 import restyle
-import splatgen
 import store
 from scene import level_scene
 
@@ -56,10 +55,10 @@ def index():
         ui.label("dreamworld editor").classes("text-lg font-bold text-[#4ea1ff]")
         ui.label(PROJECT).classes("text-sm text-gray-500")
         ui.space()
-        # the generators' backlog, running job included — fed by the same
-        # 5-second poll that raises the completion toasts
+        # the video generators' backlog, running job included — fed by the
+        # same 5-second poll that raises the completion toasts
         with ui.label("").classes("text-xs text-gray-500") as qlab:
-            ui.tooltip("generation backlog, the running job included")
+            ui.tooltip("crossing-video backlog, the running job included")
 
     def refresh_all():
         state["sig"] = store.signature()
@@ -320,17 +319,15 @@ def index():
         # one entry per generator INSTANCE (wangen may be several), each
         # with its own dedupe key — folding their dones together would
         # flip-flop and re-toast old completions
-        entries = [("splat", "splat", splatgen.short,
-                    await run.io_bound(splatgen.status))]
+        entries = []
         for u, s in await run.io_bound(crossing.statuses):
             entries.append((f"video {u}", "crossing video",
                             crossing.short, s))
-        counts = {"splat": None, "video": None}
+        count = None
         for key, label, short, st in entries:
-            bucket = "splat" if label == "splat" else "video"
             if st:
                 n = len(st.get("queue") or []) + (1 if st.get("busy") else 0)
-                counts[bucket] = (counts[bucket] or 0) + n
+                count = (count or 0) + n
             d = (st or {}).get("done")
             if not d:
                 continue
@@ -349,10 +346,7 @@ def index():
                 ui.notify(f"{label} failed — {nm}: {d.get('error')}",
                           type="negative", close_button="dismiss",
                           timeout=0)
-        qlab.set_text(
-            f"splat queue {'–' if counts['splat'] is None else counts['splat']}"
-            f" · video queue "
-            f"{'–' if counts['video'] is None else counts['video']}")
+        qlab.set_text(f"video queue {'–' if count is None else count}")
 
     ui.timer(5.0, watch_done)
 
@@ -1011,9 +1005,9 @@ def variants_card(name, v, sel, refresh_all):
 
 
 def splat_card(name, v, sel, refresh_all):
-    """The same layout as the variants box, for worlds: pick a look, view
-    its splat if one is built, or send it to the generator — HY-World's six
-    stages on four cards, about seventeen minutes a world, one at a time."""
+    """The same layout as the variants box, for worlds: pick a look and
+    view the splat built for it. Worlds are no longer generated here —
+    they are carried in with the project."""
     with ui.card().classes("w-full bg-[#11151c]"):
         variants = store.variants_of(name)
         if sel["splat_var"] not in variants:
@@ -1035,13 +1029,6 @@ def splat_card(name, v, sel, refresh_all):
                           splat_var=None if e.value == "original"
                           else e.value), refresh_all())
                       ).classes("w-40").props("dense options-dense")
-
-        gen = splatgen.status() or {}
-        queue = [q.rstrip("/") for q in (gen.get("queue") or [])]
-        mine = str(scene).rstrip("/")
-        running = (gen.get("scene") or "").rstrip("/")
-        busy_here = bool(gen.get("busy") and running == mine)
-        queued_here = mine in queue
 
         if ply:
             # the world itself: main's renderer, minimal. Drag looks,
@@ -1109,94 +1096,6 @@ def splat_card(name, v, sel, refresh_all):
                     f"'{base}/world.cam.json?t={t}', 'vsplat')")
             ui.timer(0.15, boot, once=True)
 
-        if busy_here:
-            ui.label(f"generating {svar or 'original'} …").classes(
+        else:
+            ui.label("no world built for this look").classes(
                 "text-xs text-gray-500")
-            ui.linear_progress(show_value=False).props(
-                "indeterminate").classes("w-full")
-            stage_lb = ui.label(gen.get("stage") or "starting").classes(
-                "text-xs text-gray-500")
-            el_lb = ui.label("").classes("text-xs text-gray-500")
-
-            def tick():
-                s = splatgen.status()
-                if not s or not s.get("busy") \
-                        or s.get("scene") != str(scene):
-                    refresh_all()
-                    return
-                stage_lb.set_text(s.get("stage") or "starting")
-                el_lb.set_text(f"{s.get('elapsed', 0) // 60}m"
-                               f"{s.get('elapsed', 0) % 60:02d}s elapsed")
-            ui.timer(5.0, tick)
-            return
-
-        if queued_here:
-            # waiting its turn: say so, and say whose turn it is
-            pos = queue.index(mine) + 1
-            ui.label(f"queued — position {pos} of {len(queue)}").classes(
-                "text-xs text-[#f0a35e]")
-            if running:
-                ui.label(f"generating now: {splatgen.short(running)} "
-                         f"({gen.get('stage') or 'starting'})").classes(
-                    "text-xs text-gray-500")
-
-            def tick_q():
-                s = splatgen.status() or {}
-                if mine not in [q.rstrip("/")
-                                for q in (s.get("queue") or [])]:
-                    refresh_all()      # our turn came, or the queue died
-            ui.timer(5.0, tick_q)
-            return
-
-        has_pano = store.pano_of(name, svar) is not None
-        done = gen.get("done")
-        if done and done.get("scene") == str(scene) and not done.get("ok"):
-            ui.label(f"last generation failed: {done.get('error')}").classes(
-                "text-xs text-[#f85149]")
-
-        with ui.row().classes("w-full items-center gap-2"):
-            async def generate():
-                # the spinner FIRST: preparing the panorama and talking to
-                # the generator takes long enough that a silent button
-                # reads as a missed click
-                gen_btn.props(add="loading")
-                if not await run.io_bound(splatgen.ready):
-                    gen_btn.props(remove="loading")
-                    ui.notify("the generator is not ready — still loading, "
-                              "or not running", type="negative")
-                    return
-                try:
-                    doc = await run.io_bound(splatgen.submit, name, svar)
-                except Exception as err:
-                    gen_btn.props(remove="loading")
-                    ui.notify(str(err), type="negative")
-                    return
-                pos = doc.get("position", 1)
-                ui.notify("generation started — six stages, roughly "
-                          "fifteen to twenty minutes" if pos <= 1 else
-                          f"queued at position {pos}")
-                refresh_all()
-
-            busy_other = bool(gen.get("busy"))
-            props = "dense" + ("" if has_pano else " disable")
-            gen_btn = ui.button("regenerate" if ply else "generate splat",
-                                color="primary",
-                                on_click=generate).props(props)
-            if not has_pano:
-                ui.label("this look has no panorama yet").classes(
-                    "text-xs text-gray-500")
-            elif busy_other:
-                ui.label(f"will queue behind "
-                         f"{splatgen.short(running)}").classes(
-                    "text-xs text-gray-500")
-
-        if busy_other:
-            # a status() hiccup or a job submitted elsewhere can leave this
-            # card idle while ITS OWN world starts — watch, and become the
-            # progress bar the moment that happens
-            def tick_i():
-                s = splatgen.status() or {}
-                now = (s.get("scene") or "").rstrip("/")
-                if now == mine or not s.get("busy"):
-                    refresh_all()
-            ui.timer(5.0, tick_i)
