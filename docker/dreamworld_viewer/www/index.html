@@ -36,12 +36,51 @@
   #prompt { flex: 1 }
   #hint { position: absolute; left: 14px; bottom: 56px; color: #8b98a8;
           z-index: 5; text-shadow: 0 1px 3px #000 }
+  #vid { position: absolute; inset: 0; width: 100%; height: 100%;
+         object-fit: cover; z-index: 8; opacity: 0; transition: opacity .25s;
+         pointer-events: none; background: #000 }
+  #shade { position: absolute; inset: 0; background: #000; z-index: 7;
+           opacity: 0; transition: opacity .3s; pointer-events: none }
+  #planbox { position: absolute; top: 52px; right: 28px; width: 320px;
+             height: 220px; overflow: hidden; background: rgba(10,13,18,.92);
+             border: 1px solid #232c38; border-radius: 8px; z-index: 5 }
+  #plan { display: block; width: 100%; height: 100%; cursor: pointer }
+  #plangrip { position: absolute; left: 0; bottom: 0; width: 18px;
+              height: 18px; cursor: sw-resize; z-index: 6 }
+  #plangrip::after { content: ''; position: absolute; left: 3px; bottom: 3px;
+                     border-left: 9px solid #4ea1ff;
+                     border-top: 9px solid transparent; opacity: .5 }
+  #plangrip:hover::after { opacity: 1 }
+  #planBtn { position: absolute; top: 56px; right: 32px; z-index: 6;
+             background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
+             border-radius: 6px; width: 26px; height: 24px; cursor: pointer }
+  #panel { position: absolute; top: 282px; right: 28px; width: 320px;
+           background: rgba(17,21,28,.95); border: 1px solid #232c38;
+           border-radius: 8px; padding: 10px; z-index: 5; display: none }
+  #panel button.go { background: #2c6e3f; border-color: #3a8a52 }
 </style>
 </head>
 <body>
   <div id="stage">
     <canvas id="pano"></canvas>
     <img id="live" alt="">
+    <video id="vid" muted playsinline></video>
+    <div id="shade"></div>
+  </div>
+  <button id="planBtn" title="hide the plan">−</button>
+  <div id="planbox">
+    <canvas id="plan" width="320" height="220"></canvas>
+    <div id="plangrip" title="drag to resize the plan"></div>
+  </div>
+  <div id="panel">
+    <div style="margin-bottom:8px">walk to <b id="tgt"></b></div>
+    <div style="display:flex; gap:6px; align-items:center">
+      <span class="k">arrive as</span>
+      <select id="tlook"></select>
+      <button class="go" id="goBtn">go</button>
+      <button id="cancelBtn">×</button>
+    </div>
+    <div class="k" id="tnote" style="margin-top:6px"></div>
   </div>
   <div id="bar">
     <b>dreamworld live</b>
@@ -61,6 +100,6 @@
     <button id="freeze" title="stop the rollout and show the photograph">freeze</button>
   </div>
   <script src="pano.js"></script>
-  <script src="live.js?v=2"></script>
+  <script src="live.js?v=3"></script>
 </body>
 </html>

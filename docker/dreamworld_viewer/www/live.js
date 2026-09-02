@@ -17,7 +17,8 @@ const STILL_MS = 600;          // held-still before the rollout is seeded
 
 const $ = id => document.getElementById(id);
 const st = { at: null, look: 'original', graph: null, seq: 0,
-             timer: null, streaming: false, seeding: false };
+             timer: null, streaming: false, seeding: false,
+             moving: false, target: null };
 
 function chip(cls, text) {
   const el = $('chip');
@@ -99,6 +100,7 @@ async function seed() {
 }
 
 function settle() {                 // called after every camera change
+  if (st.moving) return;            // a walk owns the screen until it lands
   stopStream();
   clearTimeout(st.timer);
   st.timer = setTimeout(seed, STILL_MS);
@@ -168,6 +170,256 @@ $('prompt').addEventListener('keydown', e => {
 });
 $('freeze').onclick = () => { clearTimeout(st.timer); stopStream();
                               chip('', 'frozen'); };
+
+
+
+// ---- the graph, as the walkthrough reads it ------------------------------
+const hasPano = n => Object.keys(
+  (st.graph.vertices[n] || {}).panos || {}).length > 0;
+const tagOf = (n, look) => (look === 'original' ? n : `${n}@${look}`);
+
+function neighbours(n) {
+  const out = [];
+  for (const [a, b] of st.graph.edges) {
+    if (a === n) out.push(b);
+    if (b === n) out.push(a);
+  }
+  // the same lift's stops on other levels are the building's own edges
+  const me = st.graph.vertices[n];
+  if (me && me.lift)
+    for (const [k, v] of Object.entries(st.graph.vertices))
+      if (k !== n && v.lift === me.lift && v.level !== me.level) out.push(k);
+  return out;
+}
+
+function bearingTo(to) {
+  const a = st.graph.vertices[st.at], b = st.graph.vertices[to];
+  // a lift ride is vertical: face the departing cabin's own door
+  if (a.level !== b.level) return a.door_bearing || 0;
+  return Math.atan2(-(b.y - a.y), b.x - a.x);
+}
+
+function crossingSecs(to) {
+  const a = st.graph.vertices[st.at], b = st.graph.vertices[to];
+  let d;
+  if (a.level !== b.level) {
+    const e = l => (st.graph.levels[l] || {}).elevation || 0;
+    d = Math.abs(e(b.level) - e(a.level));
+  } else {
+    const sc = (st.graph.levels[a.level] || {}).scale || 0.05;
+    d = Math.hypot(b.x - a.x, b.y - a.y) * sc;
+  }
+  return Math.min(15, Math.max(2.5, d / 1.4));
+}
+
+// ---- the plan -------------------------------------------------------------
+const plan = $('plan'), planBox = $('planbox'), px = plan.getContext('2d');
+let hits = [];
+
+function drawPlan() {
+  if (!st.graph || !st.at || planBox.style.display === 'none') return;
+  const me = st.graph.vertices[st.at];
+  const L = st.graph.levels[me.level] || { walls: [] };
+  const nbrs = neighbours(st.at);
+  const far = Math.max(40, ...nbrs.map(n => {
+    const v = st.graph.vertices[n];
+    return Math.hypot(v.x - me.x, v.y - me.y);
+  })) * 1.4;
+  const W = plan.width, H = plan.height;
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 15;
+  const P = (x, y) => [cx + (x - me.x) / far * R, cy + (y - me.y) / far * R];
+  px.clearRect(0, 0, W, H);
+  px.strokeStyle = '#3a4757'; px.lineWidth = 2; px.beginPath();
+  for (const w of L.walls) {
+    const a = P(w[0], w[1]), b = P(w[2], w[3]);
+    px.moveTo(a[0], a[1]); px.lineTo(b[0], b[1]);
+  }
+  px.stroke();
+  hits = [];
+  for (const n of nbrs) {
+    const v = st.graph.vertices[n];
+    if (v.level !== me.level) continue;
+    const [x, y] = P(v.x, v.y);
+    const ok = hasPano(n);            // a place you can STAND, here
+    px.strokeStyle = ok ? '#3a5f8f' : '#7d4348';
+    px.lineWidth = 1.5; px.beginPath();
+    px.moveTo(cx, cy); px.lineTo(x, y); px.stroke();
+    px.beginPath();
+    if (v.lift) {
+      px.save(); px.translate(x, y); px.rotate(Math.PI / 4);
+      px.fillStyle = ok ? '#d24dcf' : '#0a0d12';
+      px.strokeStyle = '#d24dcf';
+      px.fillRect(-4, -4, 8, 8); px.strokeRect(-4, -4, 8, 8);
+      px.restore();
+    } else {
+      px.fillStyle = ok ? '#9cc7ff' : '#0a0d12';
+      px.strokeStyle = ok ? '#9cc7ff' : '#ff9d97';
+      px.arc(x, y, 4, 0, 7); px.fill(); px.stroke();
+    }
+    px.fillStyle = ok ? '#9cc7ff' : '#ff9d97';
+    px.font = '11px system-ui';
+    const label = n.split('.').pop();
+    const lx = Math.min(cx + (x - cx) * 0.62 + 3,
+                        W - 4 - px.measureText(label).width);
+    px.fillText(label, lx, cy + (y - cy) * 0.62 - 3);
+    if (ok) hits.push({ n, x, y });
+  }
+  // standing in a lift: its stops on other levels, drawn as the editor
+  // draws them — vertical arrows, one per level, clickable like any way out
+  if (me.lift) {
+    const elev = l => (st.graph.levels[l] || {}).elevation || 0;
+    const mates = nbrs.filter(n => st.graph.vertices[n].level !== me.level)
+      .sort((a, b) => elev(st.graph.vertices[a].level)
+                    - elev(st.graph.vertices[b].level));
+    let up = 0, dn = 0;
+    px.font = '11px system-ui'; px.textAlign = 'left';
+    for (const n of mates) {
+      const v = st.graph.vertices[n];
+      const rising = elev(v.level) > elev(me.level);
+      const y = rising ? cy - 28 - 22 * up++ : cy + 28 + 22 * dn++;
+      const ok = hasPano(n);
+      px.fillStyle = ok ? '#d24dcf' : '#5a4458';
+      px.beginPath();
+      if (rising) { px.moveTo(cx, y - 7); px.lineTo(cx - 6, y + 4);
+                    px.lineTo(cx + 6, y + 4); }
+      else { px.moveTo(cx, y + 7); px.lineTo(cx - 6, y - 4);
+             px.lineTo(cx + 6, y - 4); }
+      px.closePath(); px.fill();
+      px.fillText(v.level, cx + 10, y + 4);
+      if (ok) hits.push({ n, x: cx, y });
+    }
+    px.textAlign = 'start';
+  }
+  // us: a triangle carrying the heading the panorama is actually showing
+  const v = window.dwp('live', 'view');
+  const a2 = -((v && v.yaw) || 0);
+  const T = (r, off) => [cx + r * Math.cos(a2 + off), cy + r * Math.sin(a2 + off)];
+  const tip = T(11, 0), l = T(8, 2.55), r2 = T(8, -2.55);
+  px.fillStyle = '#4ea1ff'; px.beginPath();
+  px.moveTo(tip[0], tip[1]); px.lineTo(l[0], l[1]);
+  px.lineTo(cx, cy); px.lineTo(r2[0], r2[1]); px.fill();
+}
+setInterval(drawPlan, 120);          // the heading moves as you pan
+
+new ResizeObserver(() => {
+  const w = Math.max(160, planBox.clientWidth | 0);
+  const h = Math.max(120, planBox.clientHeight | 0);
+  if (plan.width !== w || plan.height !== h) { plan.width = w; plan.height = h; }
+  $('panel').style.top = (planBox.offsetTop + planBox.offsetHeight + 10) + 'px';
+  drawPlan();
+}).observe(planBox);
+
+(() => {                              // the plan's own resize grip
+  const grip = $('plangrip'); let d = null;
+  grip.addEventListener('pointerdown', e => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const r = planBox.getBoundingClientRect(); d = { right: r.right, top: r.top };
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!d) return;
+    planBox.style.width = Math.max(160, d.right - e.clientX) + 'px';
+    planBox.style.height = Math.max(120, e.clientY - d.top) + 'px';
+  });
+  grip.addEventListener('pointerup', () => { d = null; });
+})();
+
+$('planBtn').onclick = () => {
+  const off = planBox.style.display === 'none';
+  planBox.style.display = off ? '' : 'none';
+  $('panel').style.display = 'none';
+  $('planBtn').textContent = off ? '−' : '☰';
+};
+
+plan.addEventListener('click', e => {
+  if (st.moving) return;
+  const r = plan.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  let best = null, bd = 14;
+  for (const h of hits) {
+    const d = Math.hypot(h.x - x, h.y - y);
+    if (d < bd) { best = h; bd = d; }
+  }
+  if (best) openPanel(best.n);
+});
+
+function openPanel(to) {
+  st.target = to;
+  $('tgt').textContent = to;
+  const looks = Object.keys(st.graph.vertices[to].panos || {});
+  $('tlook').innerHTML = looks.map(l =>
+    `<option${l === 'original' ? ' selected' : ''}>${l}</option>`).join('');
+  const key = tagOf(st.at, st.look) + '__' + tagOf(to, looks[0]);
+  $('tnote').textContent = (st.graph.crossings || []).includes(key)
+    ? 'a crossing video carries this walk' : 'no crossing video — it will cut';
+  $('panel').style.display = 'block';
+}
+$('cancelBtn').onclick = () => { $('panel').style.display = 'none'; };
+$('goBtn').onclick = () => {
+  $('panel').style.display = 'none';
+  if (st.target) walkTo(st.target, $('tlook').value);
+};
+
+// ---- crossing an edge -----------------------------------------------------
+function spinTo(bearing, ms) {
+  return new Promise(res => {
+    const from = window.dwp('live', 'heading') || 0;
+    let d = bearing - from;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    const t0 = performance.now();
+    (function step() {
+      const t = Math.min(1, (performance.now() - t0) / ms);
+      const e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;   // ease in-out
+      window.dwp('live', 'face', from + d * e);
+      if (t < 1) requestAnimationFrame(step); else res();
+    })();
+  });
+}
+
+function playVideo(url, secs) {
+  return new Promise(res => {
+    const v = $('vid');
+    v.src = url;
+    v.onended = () => res(true);
+    v.onerror = () => res(false);
+    v.oncanplay = () => {
+      if (secs && v.duration)
+        v.playbackRate = Math.min(1.8, Math.max(0.6, v.duration / secs));
+      v.style.opacity = '1';
+      v.play();
+    };
+    v.load();
+  });
+}
+
+async function walkTo(to, look) {
+  if (st.moving) return;
+  st.moving = true;
+  clearTimeout(st.timer);
+  stopStream();                       // the rollout belongs to where we were
+  chip('', 'walking…');
+  const bearing = bearingTo(to);
+  await spinTo(bearing, 700);         // 1. turn to face the way we go
+  const key = tagOf(st.at, st.look) + '__' + tagOf(to, look);
+  if ((st.graph.crossings || []).includes(key)) {
+    await playVideo(`${FILES}/.crossings/${key}/crossing.mp4`,
+                    crossingSecs(to));   // 2. the crossing carries the walk
+  } else {
+    $('shade').style.opacity = '1';
+    await new Promise(r => setTimeout(r, 350));
+  }
+  st.at = to; st.look = look;         // 3. arrive, facing the way we walked
+  fillPickers();
+  showPano();
+  window.dwp('live', 'face', bearing);
+  await new Promise(r => requestAnimationFrame(
+    () => requestAnimationFrame(r)));
+  $('vid').style.opacity = '0';
+  $('shade').style.opacity = '0';
+  st.moving = false;
+  drawPlan();
+  settle();                           // and the new view comes alive
+}
 
 // ---- boot -----------------------------------------------------------------
 (async () => {
