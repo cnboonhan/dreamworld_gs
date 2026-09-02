@@ -122,11 +122,27 @@ complete. The full authoring manual, layout and API seams live in
 
 ## Carrying it elsewhere
 
+Three sizes of move, smallest first:
+
 - `just bundle` — the walkable demo (graph + worlds + videos) into
-  `assets/projects/<project>/bundle`, servable by `just demo` anywhere
-  Docker runs. ~30 MB per world, a few MB per crossing.
-- `just pack` / `just unpack <tar>` — the WHOLE project (panoramas,
-  intermediates, everything) for another generation-capable box.
+  `assets/projects/<project>/bundle`, servable by `just demo` anywhere.
+  Static, no GPU, no weights. ~30 MB per world, a few MB per crossing.
+- `just pack` / `just unpack <tar>` — the WHOLE project: panoramas,
+  splat worlds, crossings, the map and its generated world. Tens of GB,
+  and it is the only part that cannot be re-downloaded.
+- **The full experience** on another box needs three things beyond the
+  repo:
+  1. **The project** — `just pack` here, `just unpack` there.
+  2. **The weights** — `just fetch` there (~300 GB, from the manifest in
+     `scripts/models.txt`). Faster from the hub than over scp, and it
+     skips anything already cached.
+  3. **A `.env`** — `just up` writes `DW_PROJECT` and the invoking
+     user's `DW_UID`/`DW_GID`; copy over any `DW_STREAMER_*` or GPU
+     assignments you have tuned, and set them to that box's free cards.
+
+  Then `just up` (8 cards) or `just minimal` (no GPU, bring your own
+  VLM endpoint). The images build from this repo and need network once,
+  for apt, pip and the checkpoint the streamer image bakes in.
 
 Assets are gitignored: photographs of real places never enter git, and
 nothing here publishes anything off this box.
