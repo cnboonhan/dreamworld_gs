@@ -31,8 +31,13 @@ function showPano() {
   const v = st.graph.vertices[st.at];
   const file = (v.panos || {})[st.look];
   if (!file) { chip('off', 'no panorama here'); return; }
-  dwPano($('pano').id, `${FILES}/${st.at}/${file}`, -1, 'live',
-         { free: true });
+  const url = `${FILES}/${st.at}/${file}`;
+  // first place: build the viewer. Every place after: swap the picture —
+  // dwPano refuses to re-initialise a canvas it already owns.
+  if (window.dwp('live', 'heading') === null)
+    dwPano($('pano').id, url, -1, 'live', { free: true });
+  else
+    window.dwp('live', 'load', url);
   $('note').textContent = `${Object.keys(v.panos).length} look(s)`;
 }
 

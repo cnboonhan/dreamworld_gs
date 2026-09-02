@@ -153,6 +153,11 @@ window.dwPano = (id, url, offId, ns, opts) => {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, im);
     st.ready = true; };
   im.src = url;
+  // swapping the picture, not rebuilding the viewer: the live page keeps
+  // one canvas for a whole walk, and re-calling dwPano is refused by the
+  // guard above — which is why arriving somewhere new used to leave the
+  // OLD panorama on screen
+  st.load = (nextUrl) => { st.ready = false; im.src = nextUrl; };
   const loop = () => {
     if (!cv.isConnected) return;               // gone with its card
     const w = cv.clientWidth, h = cv.clientHeight;
@@ -189,6 +194,7 @@ window.dwPano = (id, url, offId, ns, opts) => {
     },
     nudge: d => { st.off = (st.off + d + 360) % 360; readout(); },
     heading: () => st.look,
+    load: u => st.load(u),          // show a different panorama
     lookAt: (r, p) => { st.look = r;
       st.pitch = (opts.free && p != null) ? p : (opts.free ? st.pitch : 0);
       readout(); },
