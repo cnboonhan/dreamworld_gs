@@ -163,8 +163,6 @@ $('apply').onclick = () => seed();
 $('prompt').addEventListener('keydown', e => {
   if (e.key === 'Enter') seed();
 });
-$('freeze').onclick = () => { clearTimeout(st.timer); stopStream();
-                              chip('', 'frozen'); };
 
 
 
@@ -404,6 +402,7 @@ async function walkTo(to, look) {
     await new Promise(r => setTimeout(r, 350));
   }
   st.at = to; st.look = look;         // 3. arrive, facing the way we walked
+  $('prompt').value = '';             // that prompt was about where we were
   fillPickers();
   showPano();
   window.dwp('live', 'face', bearing);

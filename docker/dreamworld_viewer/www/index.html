@@ -57,7 +57,8 @@
   #panel { position: absolute; top: 282px; right: 28px; width: 320px;
            background: rgba(17,21,28,.95); border: 1px solid #232c38;
            border-radius: 8px; padding: 10px; z-index: 5; display: none }
-  #panel button.go { background: #2c6e3f; border-color: #3a8a52 }
+  #panel button.go, #apply { background: #2c6e3f;
+                             border-color: #3a8a52 }
 </style>
 </head>
 <body>
@@ -93,11 +94,10 @@
     hold still and the view comes alive</div>
   <div id="promptbar">
     <span class="k">prompt</span>
-    <input id="prompt" placeholder="what should happen in this view — e.g. people walking past, sunlight shifting">
-    <button id="apply">apply</button>
-    <button id="freeze" title="stop the rollout and show the photograph">freeze</button>
+    <input id="prompt" placeholder="what should happen in this view">
+    <button id="apply" class="go">apply</button>
   </div>
   <script src="pano.js"></script>
-  <script src="live.js?v=6"></script>
+  <script src="live.js?v=7"></script>
 </body>
 </html>

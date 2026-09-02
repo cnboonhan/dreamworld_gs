@@ -71,7 +71,11 @@ DRIFT_PX = float(os.environ.get("DW_STREAMER_DRIFT_PX", "48"))
 STATE = {"loaded": False, "seeded_at": 0.0, "prompt": "", "blocks": 0,
          "fps": 0.0, "error": None, "drift": 0.0, "reanchors": 0}
 LOCK = threading.Lock()
-FRAME = {"jpeg": None, "n": 0}
+# `seq` tags every frame with the rollout that produced it, so a
+# stream opened for a NEW seed can never be handed the last frame
+# of the old one — which is what made "warming up" flash the
+# previous location before the first real frame arrived.
+FRAME = {"jpeg": None, "n": 0, "seq": 0}
 NEW_FRAME = threading.Condition()
 # the pending seed, picked up by the model thread at a block boundary
 PENDING = {"image": None, "prompt": None, "seq": 0}
@@ -165,7 +169,7 @@ def drift_of(a, b):
     return abs(dx) * 4.0, abs(dy) * 4.0
 
 
-def publish(frames):
+def publish(frames, seq):
     """Hand finished frames to whoever is streaming, newest wins, and
     return the last frame's luma so the loop can measure its drift."""
     last = None
@@ -183,6 +187,7 @@ def publish(frames):
         with NEW_FRAME:
             FRAME["jpeg"] = buf.getvalue()
             FRAME["n"] += 1
+            FRAME["seq"] = seq
             NEW_FRAME.notify_all()
     return last
 
@@ -237,7 +242,7 @@ def model_loop():
                           pipe.generate(autoregressive_index=step,
                                         cache=cache))
                 pipe.finalize(autoregressive_index=step, cache=cache)
-            luma = publish(frames)
+            luma = publish(frames, seq)
             step += 1
             done += n
             if anchor is None:
@@ -299,6 +304,11 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "?"})
 
     def stream(self):
+        want = 0
+        if "?" in self.path:
+            from urllib.parse import parse_qs
+            want = int((parse_qs(self.path.split("?", 1)[1]).get("s")
+                        or ["0"])[0] or 0)
         self.send_response(200)
         self.send_header("Content-Type",
                          "multipart/x-mixed-replace; boundary=dwframe")
@@ -310,7 +320,8 @@ class Handler(BaseHTTPRequestHandler):
             while True:
                 with NEW_FRAME:
                     if not NEW_FRAME.wait_for(
-                            lambda: FRAME["n"] != last and FRAME["jpeg"],
+                            lambda: (FRAME["n"] != last and FRAME["jpeg"]
+                                     and (not want or FRAME["seq"] == want)),
                             timeout=30):
                         continue
                     jpeg, last = FRAME["jpeg"], FRAME["n"]
