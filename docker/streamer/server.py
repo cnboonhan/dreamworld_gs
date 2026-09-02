@@ -1,4 +1,4 @@
-"""LingBot-World as a re-seedable live stream.
+"""The live layer: a streaming image-to-video model, re-seedable.
 
 The dreamworld's other generators take a job and hand back a file. This one
 holds a rollout open: seed it with an image and a prompt, and it streams
@@ -10,20 +10,26 @@ runs long enough to drift far from it.
     GET  /health   {"status": "ok"|"loading", "runner": ...}
     GET  /status   the live rollout: seeded at, prompt, blocks, fps
     POST /seed     {"image": "<base64 jpg/png>", "prompt": "...",
-                    "fov": 1.2}  -> drop the cache and start again
+                    }  -> drop the cache and start again
     GET  /stream   multipart/x-mixed-replace MJPEG of the rollout
 
-One rollout at a time, on purpose: the model holds ~120GB and the cache is
-per-rollout, so a second concurrent viewer would not fit. Re-seeding is
-cheap by comparison — the pipeline stays loaded and only the AR cache is
-rebuilt, which is what makes turning the camera feel like a new stream
-rather than a new session.
+One rollout at a time, on purpose: the cache is per-rollout, so a second
+concurrent viewer would need its own. Re-seeding is cheap by comparison —
+the pipeline stays loaded and only the AR cache is rebuilt, which is what
+makes turning the camera feel like a new stream rather than a new session.
+
+The model steers no camera: it is plain image-to-video, so the view holds
+because there is nothing to move it, and the panorama the viewer is
+showing supplies the frame. The drift watchdog below still measures how
+far the rollout has slid from that frame and rebuilds the cache when it
+goes too far.
 """
 import base64
 import io
 import json
 import math
 import os
+import inspect
 import threading
 import time
 import traceback
@@ -34,39 +40,33 @@ import numpy as np
 import torch
 from PIL import Image
 
-RUNNER = os.environ.get("DW_LINGBOT_RUNNER",
-                        "lingbot-world-fast-taehv-window15-sink3")
-WIDTH = int(os.environ.get("DW_LINGBOT_WIDTH", "832"))
-HEIGHT = int(os.environ.get("DW_LINGBOT_HEIGHT", "464"))
-JPEG_Q = int(os.environ.get("DW_LINGBOT_JPEG_Q", "80"))
+RUNNER = os.environ.get("DW_STREAMER_RUNNER",
+                        "causal-forcing-wan2.1-i2v-1.3b-framewise")
+WIDTH = int(os.environ.get("DW_STREAMER_WIDTH", "832"))
+HEIGHT = int(os.environ.get("DW_STREAMER_HEIGHT", "480"))
+JPEG_Q = int(os.environ.get("DW_STREAMER_JPEG_Q", "80"))
 # The camera is held still by the POSE track (identity every frame, which
 # the encoder turns into zero relative motion and anchors across blocks).
 # The video model still carries its own motion prior, though, and the
 # pipeline takes no negative prompt — so the only other lever is to say it
 # in the positive one, on every rollout, whatever the viewer typed.
 STILL = os.environ.get(
-    "DW_LINGBOT_STILL",
+    "DW_STREAMER_STILL",
     "static locked-off camera on a tripod, fixed viewpoint, "
     "no camera movement, no panning, no zooming; only the scene itself moves")
-# Re-anchor: rebuild the cache from the SAME seed every N blocks, so drift
-# cannot accumulate past a few seconds. The camera has not moved, so the
-# seed is still the right view and the snap back is nearly invisible.
-REANCHOR = int(os.environ.get("DW_LINGBOT_REANCHOR", "8"))
-# A null pose track asks the model to hold perfectly still, and it drifts
-# anyway — a camera-controllable model follows a DEFINITE trajectory far
-# better than an absent one. So give it a small sway: a few degrees left
-# and right about the up axis, returning through centre every period, so
-# the net movement over a cycle is zero and the view never wanders off.
-# Set SWAY_DEG=0 for a hard-locked camera.
-SWAY_DEG = float(os.environ.get("DW_LINGBOT_SWAY_DEG", "0"))
-SWAY_FRAMES = int(os.environ.get("DW_LINGBOT_SWAY_FRAMES", "64"))
+# Re-anchor: rebuild the cache from the SAME seed every N FRAMES, so drift
+# cannot accumulate past a few seconds. Counted in frames, not blocks,
+# because a framewise runner emits ONE frame per block and a block-based
+# count then rebuilt the cache twice a second — which costs far more than
+# the drift it was preventing.
+REANCHOR = int(os.environ.get("DW_STREAMER_REANCHOR", "160"))
 # The pose track is a perfect "do not move" signal — relative poses are
 # frame-to-frame, so identity everywhere is exactly zero motion — but the
 # video model still has a prior of its own and wanders. So close the loop:
 # measure how far the newest frame has slid from the SEED and, past this
 # many pixels, rebuild the cache from the seed. Drift then cannot exceed
 # the threshold, because exceeding it is what triggers the snap back.
-DRIFT_PX = float(os.environ.get("DW_LINGBOT_DRIFT_PX", "10"))
+DRIFT_PX = float(os.environ.get("DW_STREAMER_DRIFT_PX", "48"))
 
 STATE = {"loaded": False, "seeded_at": 0.0, "prompt": "", "blocks": 0,
          "fps": 0.0, "error": None, "drift": 0.0, "reanchors": 0}
@@ -74,12 +74,31 @@ LOCK = threading.Lock()
 FRAME = {"jpeg": None, "n": 0}
 NEW_FRAME = threading.Condition()
 # the pending seed, picked up by the model thread at a block boundary
-PENDING = {"image": None, "prompt": None, "fov": 1.2, "seq": 0}
+PENDING = {"image": None, "prompt": None, "seq": 0}
+
+
+def build_pipeline():
+    from flashdreams.configs.runner_configs import all_runners
+    cfg = all_runners().get(RUNNER)
+    if cfg is None:
+        raise SystemExit(f"unknown runner {RUNNER!r}; have "
+                         f"{sorted(all_runners())}")
+    pcfg = cfg.pipeline
+    # the causal-forcing pipelines ship with enable_sync_and_profile=True,
+    # whose own comment in upstream reads "Warning: This will slow down the
+    # e2e latency" — it synchronises the device every step to time it. We
+    # are serving, not benchmarking.
+    if getattr(pcfg, "enable_sync_and_profile", False):
+        from flashdreams.infra.config import derive_config
+        pcfg = derive_config(pcfg, enable_sync_and_profile=False)
+        print("disabled per-step sync/profiling", flush=True)
+    pipe = pcfg.setup().to("cuda").eval()
+    return pipe
 
 
 @dataclass
 class CameraControlInput:
-    """What the pipeline reads off the camera each block. Mirrors
+    """What a camera-steering pipeline reads each block. Mirrors
     cam2v.session's dataclass so the pipeline sees the shape it expects
     without this server depending on the interactive app."""
     intrinsics: torch.Tensor
@@ -87,13 +106,32 @@ class CameraControlInput:
     world_scale: float
 
 
-def build_pipeline():
-    from flashdreams.configs.runner_configs import all_runners
-    cfg = all_runners().get(RUNNER)
-    if cfg is None:
-        raise SystemExit(f"unknown runner {RUNNER!r}")
-    pipe = cfg.pipeline.setup().to("cuda").eval()
-    return pipe
+def still_camera(frames, device):
+    """The camera held exactly still: an identity pose for every frame.
+
+    Relative poses are computed frame-to-frame upstream, so identity
+    everywhere is precisely zero rotation and zero translation — the same
+    thing the action mapping emits for "no keys held". Intrinsics are the
+    frame's own, and world_scale is moot when translation is nil."""
+    fx = 0.5 * WIDTH / math.tan(0.6)
+    K = torch.tensor([[fx, fx, WIDTH / 2.0, HEIGHT / 2.0]],
+                     device=device, dtype=torch.float32).repeat(frames, 1)
+    poses = torch.eye(4, device=device,
+                      dtype=torch.float32).unsqueeze(0).repeat(frames, 1, 1)
+    return CameraControlInput(intrinsics=K, poses=poses, world_scale=1.0)
+
+
+def steers_camera(pipe):
+    """Whether this pipeline takes a camera track at all.
+
+    LingBot is camera-controllable and wants a pose per frame; the causal
+    Wan streamers are plain image-to-video and take no camera input. Asked
+    by signature rather than by runner name, so a new runner slug needs no
+    change here."""
+    try:
+        return "input" in inspect.signature(pipe.generate).parameters
+    except (TypeError, ValueError):
+        return True
 
 
 def seed_tensor(raw: bytes, device):
@@ -105,34 +143,6 @@ def seed_tensor(raw: bytes, device):
         (WIDTH, HEIGHT), Image.LANCZOS)
     a = torch.from_numpy(np.asarray(im)).to(device=device, dtype=torch.float32)
     return (a.permute(2, 0, 1) / 127.5 - 1.0).unsqueeze(0).to(torch.bfloat16)
-
-
-def sway_camera(frames, fov, device, t0):
-    """The camera the rollout is told to hold: no translation ever, and a
-    gentle yaw that swings SWAY_DEG each way and back.
-
-    The viewer owns real panning — it turns the PANORAMA and re-seeds — so
-    the rollout never needs to travel. `t0` is the frame index the rollout
-    has reached, which keeps the sway continuous across autoregressive
-    blocks (the encoder takes each chunk relative to the last pose, so a
-    phase jump at a block boundary would read as a lurch).
-
-    Intrinsics come from the crop's own field of view, so what the model
-    generates matches the framing the walker is actually looking at."""
-    fx = 0.5 * WIDTH / math.tan(fov / 2.0)
-    K = torch.tensor([[fx, fx, WIDTH / 2.0, HEIGHT / 2.0]],
-                     device=device, dtype=torch.float32).repeat(frames, 1)
-    poses = torch.eye(4, device=device,
-                      dtype=torch.float32).unsqueeze(0).repeat(frames, 1, 1)
-    if SWAY_DEG > 0 and SWAY_FRAMES > 0:
-        i = torch.arange(t0, t0 + frames, device=device, dtype=torch.float32)
-        a = math.radians(SWAY_DEG) * torch.sin(2 * math.pi * i / SWAY_FRAMES)
-        c, s_ = torch.cos(a), torch.sin(a)
-        # yaw about the up axis of the OpenCV camera frame (x right,
-        # y down, z forward): translation stays exactly zero
-        poses[:, 0, 0], poses[:, 0, 2] = c, s_
-        poses[:, 2, 0], poses[:, 2, 2] = -s_, c
-    return CameraControlInput(intrinsics=K, poses=poses, world_scale=1.0)
 
 
 def _gray_small(arr):
@@ -185,8 +195,11 @@ def model_loop():
         STATE["error"] = f"{type(e).__name__}: {e}"
         traceback.print_exc()
         return
+    cam = steers_camera(pipe)
     STATE["loaded"] = True
-    print(f"lingbot ready on :8000 — runner {RUNNER}, {WIDTH}x{HEIGHT}",
+    STATE["camera"] = cam
+    print(f"streamer ready on :8000 — {RUNNER}, {WIDTH}x{HEIGHT}, "
+          f"camera: {'held still' if cam else 'none to steer'}",
           flush=True)
 
     cache, step, seq, t0, done = None, 0, -1, 0.0, 0
@@ -208,8 +221,8 @@ def model_loop():
             # from outside that mode is refused a few blocks in — long
             # enough to look like a mid-stream failure rather than a
             # missing context manager
-            if REANCHOR and step and step % REANCHOR == 0:
-                cache, step = None, 0          # back to the photograph
+            if REANCHOR and done and done >= REANCHOR:
+                cache, step, done = None, 0, 0     # back to the photograph
             with torch.inference_mode():
                 if cache is None:
                     text = ", ".join(x for x in (pend["prompt"], STILL) if x)
@@ -217,10 +230,12 @@ def model_loop():
                         text=[text],
                         image=seed_tensor(pend["image"], "cuda"))
                 n = int(pipe.get_num_output_frames(step))
-                frames = pipe.generate(
-                    autoregressive_index=step, cache=cache,
-                    input=sway_camera(n, float(pend["fov"] or 1.2),
-                                      "cuda", done))
+                frames = (pipe.generate(autoregressive_index=step,
+                                        cache=cache,
+                                        input=still_camera(n, "cuda"))
+                          if cam else
+                          pipe.generate(autoregressive_index=step,
+                                        cache=cache))
                 pipe.finalize(autoregressive_index=step, cache=cache)
             luma = publish(frames)
             step += 1
@@ -322,8 +337,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "need an image"})
         with LOCK:
             PENDING.update(image=raw, prompt=str(req.get("prompt") or ""),
-                           fov=float(req.get("fov") or 1.2),
-                           seq=PENDING["seq"] + 1)
+                                   seq=PENDING["seq"] + 1)
         return self._send(200, {"ok": True, "seq": PENDING["seq"]})
 
 

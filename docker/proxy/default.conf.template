@@ -106,12 +106,12 @@ server {
         return 302 /harness/;
     }
 
-    # the live layer: LingBot's MJPEG rollout and its seed endpoint.
+    # the live layer: the streamer's MJPEG rollout and its seed endpoint.
     # proxy_buffering off — a multipart stream that nginx buffers arrives
     # in lumps, which is exactly what a live view must not do.
-    location ~ ^/lingbot(/.*)$ {
-        set $lingbot lingbot;
-        proxy_pass http://$lingbot:8000$1$is_args$args;
+    location ~ ^/streamer(/.*)$ {
+        set $streamer streamer;
+        proxy_pass http://$streamer:8000$1$is_args$args;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_buffering off;

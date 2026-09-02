@@ -12,7 +12,7 @@
 
 const FILES = '/dreamworld_editor/files';
 const GRAPH = '/dreamworld_editor/graph';
-const LINGBOT = '/lingbot';
+const STREAMER = '/streamer';
 const STILL_MS = 600;          // held-still before the rollout is seeded
 
 const $ = id => document.getElementById(id);
@@ -75,7 +75,7 @@ async function seed() {
     // rollout inherits the viewer's own field of view rather than guessing
     const view = window.dwp('live', 'view') || { fov: 1.6 };
     const image = captureView();
-    const r = await fetch(`${LINGBOT}/seed`, {
+    const r = await fetch(`${STREAMER}/seed`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image, prompt: $('prompt').value,
                              fov: view.fov })
@@ -84,11 +84,11 @@ async function seed() {
     const doc = await r.json();
     st.seq = doc.seq;
     // cache-bust so the browser opens a NEW multipart response per rollout
-    $('live').src = `${LINGBOT}/stream?s=${doc.seq}`;
+    $('live').src = `${STREAMER}/stream?s=${doc.seq}`;
     st.streaming = true;
     chip('wait', 'warming up…');
   } catch (e) {
-    chip('off', 'lingbot unreachable');
+    chip('off', 'streamer unreachable');
   } finally {
     st.seeding = false;
   }
@@ -424,9 +424,9 @@ async function walkTo(to, look) {
   showPano();
   // say whether the model is even up before the first still moment
   try {
-    const h = await (await fetch(`${LINGBOT}/health`)).json();
+    const h = await (await fetch(`${STREAMER}/health`)).json();
     chip(h.status === 'ok' ? '' : 'wait',
-         h.status === 'ok' ? 'lingbot ready' : 'lingbot loading…');
-  } catch (e) { chip('off', 'lingbot offline'); }
+         h.status === 'ok' ? 'streamer ready' : 'streamer loading…');
+  } catch (e) { chip('off', 'streamer offline'); }
   settle();
 })();

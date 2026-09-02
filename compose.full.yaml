@@ -95,7 +95,7 @@ services:
       DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
       QWEN_URL: "http://qwen:8000"
       WANGEN_URLS: "http://wangen:8000,http://wangen2:8000"
-      LINGBOT_URL: "http://lingbot:8000"
+      STREAMER_URL: "http://streamer:8000"
     restart: unless-stopped
 
   # Wan 2.2 — edge-crossing videos from first+last frames: door openings,
@@ -152,17 +152,17 @@ services:
               device_ids: ["${DW_WAN2_GPU:-7}"]
     restart: unless-stopped
 
-  # LingBot-World through NVIDIA's FlashDreams — the viewer's live layer:
-  # seed it with the panorama crop the walker is looking at plus a prompt,
-  # and it streams that view alive until the camera turns and re-seeds it.
-  # Holds ~120GB, so it gets the cards HY-World used to.
-  lingbot:
+  # The viewer's live layer: a streaming image-to-video model. Seed it
+  # with the panorama crop the walker is looking at plus a prompt, and it
+  # streams that view alive until the camera turns and re-seeds it.
+  # 1.3B, so one card carries it with room to spare.
+  streamer:
     <<: *as-caller
     build:
       context: ./docker
-      dockerfile: lingbot/lingbot.Dockerfile
-    image: dreamworld/lingbot:latest
-    container_name: dreamworld-lingbot
+      dockerfile: streamer/streamer.Dockerfile
+    image: dreamworld/streamer:latest
+    container_name: dreamworld-streamer
     shm_size: 32gb
     volumes:
       - /etc/passwd:/etc/passwd:ro
@@ -171,22 +171,19 @@ services:
       HOME: /tmp
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
-      DW_LINGBOT_RUNNER: "${DW_LINGBOT_RUNNER:-lingbot-world-fast-taehv-window15-sink3}"
-      # how far the held camera sways each way, and over how many frames;
-      # 0 degrees locks it hard, which the model honours less well than a
-      # small definite trajectory
-      DW_LINGBOT_SWAY_DEG: "${DW_LINGBOT_SWAY_DEG:-0}"
-      DW_LINGBOT_SWAY_FRAMES: "${DW_LINGBOT_SWAY_FRAMES:-64}"
-      DW_LINGBOT_REANCHOR: "${DW_LINGBOT_REANCHOR:-8}"
-      # snap back to the seed once the view has slid this far
-      DW_LINGBOT_DRIFT_PX: "${DW_LINGBOT_DRIFT_PX:-10}"
+      DW_STREAMER_RUNNER: "${DW_STREAMER_RUNNER:-causal-forcing-wan2.1-i2v-1.3b-framewise}"
+      DW_STREAMER_WIDTH: "${DW_STREAMER_WIDTH:-832}"
+      DW_STREAMER_HEIGHT: "${DW_STREAMER_HEIGHT:-480}"
+      # rebuild the rollout from its seed once the view has slid this far
+      DW_STREAMER_DRIFT_PX: "${DW_STREAMER_DRIFT_PX:-48}"
+      DW_STREAMER_REANCHOR: "${DW_STREAMER_REANCHOR:-160}"
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               capabilities: [gpu]
-              device_ids: ["${DW_LINGBOT_GPU:-1}"]
+              device_ids: ["${DW_STREAMER_GPU:-1}"]
     restart: unless-stopped
 
   # The state holder — the seam between the walk and the building. The
