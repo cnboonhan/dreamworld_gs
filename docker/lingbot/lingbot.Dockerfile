@@ -11,6 +11,7 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates ffmpeg python3 python3-venv curl \
+        python3-dev build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
@@ -31,8 +32,25 @@ RUN uv pip install --python .venv/bin/python \
 # whichever of CWD or the script's own directory lands on sys.path first
 # wins, and `import flashdreams` then finds a directory with no modules in
 # it. /srv has no such neighbour.
+# The checkpoint (~70GB) is baked IN, so the image is self-contained on a
+# box with no assets tree. Baked at the same path the compose mount uses:
+# where assets/hf IS mounted it simply shadows this copy, and either way
+# the runtime never reaches the network.
+ARG LINGBOT_REPO=robbyant/lingbot-world-fast
+RUN HF_HOME=/assets/hf HF_HUB_OFFLINE=0 \
+    /opt/flashdreams/.venv/bin/python -c \
+    "from huggingface_hub import snapshot_download as d; d('${LINGBOT_REPO}')" \
+    && du -sh /assets/hf
+
 WORKDIR /srv
 COPY lingbot/server.py /srv/server.py
-ENV PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 UV_CACHE_DIR=/tmp/uv
+# Inductor compiles a small CUDA helper at first run: it needs Python.h
+# (python3-dev, above — without it the first generate() dies in a gcc
+# subprocess rather than anywhere near the model) and it links -lcuda,
+# whose real .so.1 the NVIDIA runtime injects but whose LINK-time stub
+# lives in the toolkit's stubs dir that gcc does not search by default.
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+ENV PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 UV_CACHE_DIR=/tmp/uv \
+    TRITON_CACHE_DIR=/tmp/triton TORCHINDUCTOR_CACHE_DIR=/tmp/inductor
 EXPOSE 8000
 CMD ["/opt/flashdreams/.venv/bin/python", "/srv/server.py"]

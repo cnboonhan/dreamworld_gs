@@ -69,12 +69,14 @@ def build_pipeline():
 
 
 def seed_tensor(raw: bytes, device):
-    """The seed image, letterboxed to the model's frame and scaled to
-    [-1, 1] CHW — the range every Wan-family checkpoint here works in."""
+    """The seed image, sized to the model's frame and scaled to [-1, 1]
+    CHW — the range every Wan-family checkpoint here works in. bfloat16,
+    like the reference app: the weights are bf16 and a float32 frame
+    fails at the first convolution's bias."""
     im = Image.open(io.BytesIO(raw)).convert("RGB").resize(
         (WIDTH, HEIGHT), Image.LANCZOS)
     a = torch.from_numpy(np.asarray(im)).to(device=device, dtype=torch.float32)
-    return (a.permute(2, 0, 1) / 127.5 - 1.0).unsqueeze(0)
+    return (a.permute(2, 0, 1) / 127.5 - 1.0).unsqueeze(0).to(torch.bfloat16)
 
 
 def still_camera(frames, fov, device):
@@ -132,15 +134,21 @@ def model_loop():
             time.sleep(0.05)
             continue
         try:
-            if cache is None:
-                cache = pipe.initialize_cache(
-                    text=[pend["prompt"] or ""],
-                    image=seed_tensor(pend["image"], "cuda"))
-            n = int(pipe.get_num_output_frames(step))
-            frames = pipe.generate(
-                autoregressive_index=step, cache=cache,
-                input=still_camera(n, float(pend["fov"] or 1.2), "cuda"))
-            pipe.finalize(autoregressive_index=step, cache=cache)
+            # the whole rollout lives in inference mode: the cache the
+            # pipeline builds holds inference tensors, and updating them
+            # from outside that mode is refused a few blocks in — long
+            # enough to look like a mid-stream failure rather than a
+            # missing context manager
+            with torch.inference_mode():
+                if cache is None:
+                    cache = pipe.initialize_cache(
+                        text=[pend["prompt"] or ""],
+                        image=seed_tensor(pend["image"], "cuda"))
+                n = int(pipe.get_num_output_frames(step))
+                frames = pipe.generate(
+                    autoregressive_index=step, cache=cache,
+                    input=still_camera(n, float(pend["fov"] or 1.2), "cuda"))
+                pipe.finalize(autoregressive_index=step, cache=cache)
             publish(frames)
             step += 1
             done += n

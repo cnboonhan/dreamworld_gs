@@ -69,6 +69,10 @@ bundle proj=project:
         python bundle.py /projects/{{proj}}/bundle
     dest={{assets}}/projects/{{proj}}/bundle
     cp -r {{repo}}/docker/dreamworld_viewer/www/. "$dest/"
+    # the bundle is the splat walkthrough: the live page needs LingBot on a
+    # GPU behind it, which a static host by definition does not have
+    mv -f "$dest/walk.html" "$dest/index.html"
+    rm -f "$dest/live.js" "$dest/pano.js"
     sed -i 's|<script src="viewer.js|<script>window.DW_BASE={files:"files",graph:"graph.json"}</script>\n  <script src="viewer.js|' "$dest/index.html"
     # A public bundle must say what it is: the world models' acceptable-use
     # terms require machine-generated content in a public context to be

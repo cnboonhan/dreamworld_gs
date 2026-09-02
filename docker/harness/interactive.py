@@ -2378,7 +2378,7 @@ function onPose(d){if(!last)return;
  drawMap(last)}
 
 function viewerLink(s){const a=$('vlink');if(!a||!s.scene)return;
- a.href=`${VIEWER}/?at=${s.scene}`
+ a.href=`${VIEWER}/walk.html?at=${s.scene}`
        +`&agent=${encodeURIComponent(location.origin)}`;
  a.textContent=(s.viewer?'viewer':'open the viewer')+' ↗';
  a.className=s.viewer?'on':''}
@@ -3016,7 +3016,7 @@ def main():
     plan, px_of = build_plan(a.building, level)
     ST["plan"], ST["px_of"] = plan, px_of
     ST["viewer_base"] = a.viewer.rstrip("/")
-    ST["viewer_url"] = f"{a.viewer}/?at={lab(ST['cur'])}"
+    ST["viewer_url"] = f"{a.viewer}/walk.html?at={lab(ST['cur'])}"
 
     core_resync()
     threading.Thread(target=pose_pump, daemon=True).start()
