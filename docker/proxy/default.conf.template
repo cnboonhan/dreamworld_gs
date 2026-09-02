@@ -106,6 +106,18 @@ server {
         return 302 /harness/;
     }
 
+    # the live layer: LingBot's MJPEG rollout and its seed endpoint.
+    # proxy_buffering off — a multipart stream that nginx buffers arrives
+    # in lumps, which is exactly what a live view must not do.
+    location ~ ^/lingbot(/.*)$ {
+        set $lingbot lingbot;
+        proxy_pass http://$lingbot:8000$1$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+
     # the state holder: the seam between the walk and the building
     location ~ ^/dreamworld_core(/.*)$ {
         set $core dreamworld_core;

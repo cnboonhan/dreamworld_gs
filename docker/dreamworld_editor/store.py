@@ -313,6 +313,16 @@ def graph_doc() -> dict:
             # colors this editor's plan does
             "state": state_color(v),
         }
+        # the PANORAMAS, separate from the built worlds: the live viewer
+        # stands in the photograph itself, so a look with a pano and no
+        # splat still matters there. Kept in its own map so the splat
+        # walkthrough's `looks` keeps meaning "has a world".
+        panos = {}
+        for lk in [None] + variants_of(name):
+            if pano_of(name, lk) is None:
+                continue
+            panos[lk or "original"] = preview_of(name, lk).name
+        doc["vertices"][name]["panos"] = panos
         if v.get("lift"):
             # which way the cabin's door faces — the ride's true heading
             doc["vertices"][name]["door_bearing"] = round(

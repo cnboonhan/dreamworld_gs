@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>dreamworld live</title>
+<style>
+  :root { color-scheme: dark }
+  html, body { margin: 0; height: 100%; background: #0a0d12; color: #dfe6ef;
+               font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+               overflow: hidden }
+  #stage { position: absolute; inset: 0 }
+  /* the panorama and the rollout occupy the same rectangle: panning shows
+     the photograph, standing still shows it alive */
+  #pano, #live { position: absolute; inset: 0; width: 100%; height: 100%;
+                 display: block; object-fit: cover }
+  #live { opacity: 0; transition: opacity .35s; background: #000;
+          pointer-events: none }
+  #live.on { opacity: 1 }
+  #bar { position: absolute; top: 0; left: 0; right: 0; display: flex;
+         gap: 10px; align-items: center; padding: 8px 14px; z-index: 5;
+         background: rgba(11,14,19,.85); border-bottom: 1px solid #232c38 }
+  #bar b { color: #4ea1ff }
+  .k { color: #8b98a8 }
+  select, input, button {
+    background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
+    border-radius: 6px; padding: 4px 8px; font: inherit }
+  button { cursor: pointer }
+  #chip { font-size: 12px; border: 1px solid #2f3a48; border-radius: 10px;
+          padding: 2px 8px; color: #8b98a8; margin-left: auto }
+  #chip.on { color: #56d364; border-color: #238636 }
+  #chip.wait { color: #e3b341; border-color: #9e6a03 }
+  #chip.off { color: #f85149; border-color: #da3633 }
+  #promptbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+               display: flex; gap: 8px; align-items: center; padding: 10px 14px;
+               background: rgba(11,14,19,.85); border-top: 1px solid #232c38 }
+  #prompt { flex: 1 }
+  #hint { position: absolute; left: 14px; bottom: 56px; color: #8b98a8;
+          z-index: 5; text-shadow: 0 1px 3px #000 }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="pano"></canvas>
+    <img id="live" alt="">
+  </div>
+  <div id="bar">
+    <b>dreamworld live</b>
+    <span class="k">at</span>
+    <select id="where"></select>
+    <select id="look"></select>
+    <span class="k" id="note"></span>
+    <span id="chip">lingbot …</span>
+  </div>
+  <div id="hint">A/D or ←/→ turn · W/S or ↑/↓ tilt · Q/E zoom ·
+    hold still and the view comes alive</div>
+  <div id="promptbar">
+    <span class="k">prompt</span>
+    <input id="prompt" placeholder="what should happen in this view — e.g. people walking past, sunlight shifting">
+    <button id="apply">apply</button>
+    <button id="freeze" title="stop the rollout and show the photograph">freeze</button>
+  </div>
+  <script src="pano.js"></script>
+  <script src="live.js?v=1"></script>
+</body>
+</html>
