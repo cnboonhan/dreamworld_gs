@@ -183,7 +183,10 @@ services:
       DW_STREAMER_HEIGHT: "${DW_STREAMER_HEIGHT:-480}"
       # rebuild the rollout from its seed once the view has slid this far
       DW_STREAMER_DRIFT_PX: "${DW_STREAMER_DRIFT_PX:-48}"
-      DW_STREAMER_REANCHOR: "${DW_STREAMER_REANCHOR:-160}"
+      DW_STREAMER_REANCHOR: "${DW_STREAMER_REANCHOR:-480}"
+      # ...or this many seconds, whichever comes first: the loop you
+      # watch is this long
+      DW_STREAMER_LOOP_S: "${DW_STREAMER_LOOP_S:-15}"
     deploy:
       resources:
         reservations:

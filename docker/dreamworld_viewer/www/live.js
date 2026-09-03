@@ -15,6 +15,7 @@ const GRAPH = '/dreamworld_editor/graph';
 const STREAMER = '/streamer';
 const STILL_MS = 600;          // held-still before the rollout is seeded
 const SEED_MS = 15000;         // a seed request that misses this is lost
+const WARM_MS = 45000;         // ...and a rollout that never arrives
 
 const $ = id => document.getElementById(id);
 const st = { at: null, look: 'original', graph: null, seq: 0,
@@ -22,7 +23,7 @@ const st = { at: null, look: 'original', graph: null, seq: 0,
              moving: false, target: null,
              // the core is the one writer of position and this page
              // follows it, exactly as the splat walkthrough does
-             follow: true };
+             follow: true, warm: null };
 
 function chip(cls, text) {
   const el = $('chip');
@@ -69,6 +70,7 @@ function captureView() {
 
 // ---- the rollout ----------------------------------------------------------
 function stopStream() {
+  clearTimeout(st.warm);
   st.streaming = false;
   $('live').classList.remove('on');
   // drop the connection: an MJPEG <img> keeps its socket open forever
@@ -104,6 +106,16 @@ async function seed() {
     $('live').src = `${STREAMER}/stream?s=${doc.seq}`;
     st.streaming = true;
     chip('wait', 'warming up…');
+    // the <img> only fires load once a frame lands. If none ever does —
+    // the model is still compiling, or the rollout died — this used to
+    // sit on "warming up…" for good. Give it a bound and start over.
+    clearTimeout(st.warm);
+    st.warm = setTimeout(() => {
+      if (!st.streaming || $('live').classList.contains('on')) return;
+      chip('off', 'no frames yet — starting over');
+      stopStream();
+      settle();
+    }, WARM_MS);
   } catch (e) {
     chip('off', e.name === 'AbortError' ? 'seed timed out — retrying'
                                         : 'streamer unreachable');
@@ -124,6 +136,7 @@ function settle() {                 // called after every camera change
 // the stream fades in only once real frames arrive, so a slow first block
 // never shows a black rectangle over a perfectly good photograph
 $('live').addEventListener('load', () => {
+  clearTimeout(st.warm);
   if (st.streaming) { $('live').classList.add('on'); chip('on', 'live'); }
 });
 $('live').addEventListener('error', () => {
@@ -610,7 +623,8 @@ $('core').onclick = async () => {
   try {
     const h = await (await fetch(`${STREAMER}/health`)).json();
     chip(h.status === 'ok' ? '' : 'wait',
-         h.status === 'ok' ? 'streamer ready' : 'streamer loading…');
+         { ok: 'streamer ready', warming: 'streamer warming up…' }[h.status]
+         || 'streamer loading…');
   } catch (e) { chip('off', 'streamer offline'); }
   settle();
 })();
