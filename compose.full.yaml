@@ -36,10 +36,12 @@ services:
   # vertices added one at a time as the places they mark are photographed.
   sim_editor:
     <<: *as-caller
-    build:
-      context: ./docker
-      dockerfile: rmf-tools/rmf-tools.Dockerfile
+    # rmfsim builds this image; declaring the build here too made `up`
+    # build it TWICE, in parallel, racing on the same tag. rmfsim owns it
+    # because rmfsim is in both launches and this service is full-tier
+    # only — so the tag always exists by the time this starts.
     image: dreamworld/rmf-tools:latest
+    depends_on: [rmfsim]
     container_name: dreamworld-sim_editor
     command: ["editor", "${DW_PROJECT:-multilevel_office}"]
     volumes:
@@ -130,10 +132,9 @@ services:
   # backlog drains twice as fast. Same image, the spare card.
   wangen2:
     <<: *as-caller
-    build:
-      context: ./docker
-      dockerfile: wangen/wangen.Dockerfile
+    # the same image wangen builds — one builder, or `up` builds it twice
     image: dreamworld/wangen:latest
+    depends_on: [wangen]
     container_name: dreamworld-wangen2
     volumes:
       - /etc/passwd:/etc/passwd:ro

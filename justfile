@@ -23,6 +23,13 @@ fetch:
 pack proj=project dest="dist":
     @python3 {{repo}}/scripts/pack.py pack {{assets}} {{proj}} {{dest}}
 
+# Push a project's assets to a PRIVATE HuggingFace dataset repo. The
+# weights are not included — `just fetch` pulls those from the hub.
+# Pass --public only deliberately: these are photographs of a real place.
+push-hf owner proj=project *FLAGS:
+    HF_HOME={{assets}}/hf uv run --with huggingface_hub --no-project \
+        {{repo}}/scripts/push_project.py {{assets}} {{proj}} {{owner}} {{FLAGS}}
+
 # Restore a packed project, in place (merges into an existing one, with a note).
 unpack FILE:
     @python3 {{repo}}/scripts/pack.py unpack {{repo}} {{FILE}}
