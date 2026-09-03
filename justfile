@@ -38,6 +38,11 @@ _env:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p {{assets}}/projects
+    # made HERE, as the invoking user: a bind mount whose source is
+    # missing is created by docker as root, and the services run as
+    # you, so the compile cache would be read-only to them
+    mkdir -p {{assets}}/cache/streamer/triton \
+             {{assets}}/cache/streamer/inductor
     grep -q "^DW_PROJECT=" {{repo}}/.env 2>/dev/null || \
         echo "DW_PROJECT={{project}}" >> {{repo}}/.env
     grep -q "^DW_UID=" {{repo}}/.env 2>/dev/null || \

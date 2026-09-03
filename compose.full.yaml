@@ -181,6 +181,12 @@ services:
     volumes:
       - /etc/passwd:/etc/passwd:ro
       - ./assets/hf:/assets/hf:ro
+      # Triton and Inductor compile kernels on the first generate() —
+      # about 75 seconds, and the same 260MB every time the container was
+      # recreated. Kept on the host, a recreate reuses them. The cache is
+      # keyed by torch version and GPU arch, so a stale entry misses
+      # rather than misleads: it is always safe to delete.
+      - ./assets/cache/streamer:/cache
     environment:
       HOME: /tmp
       USER: dreamworld
