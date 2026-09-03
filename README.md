@@ -144,5 +144,12 @@ Three sizes of move, smallest first:
   VLM endpoint). The images build from this repo and need network once,
   for apt, pip and the checkpoint the streamer image bakes in.
 
+  Nothing to copy for `assets/cache/` — the streamer's Triton and
+  Inductor kernel caches (~280 MB) live there so that recreating the
+  container does not recompile them: the first prompt after a fresh
+  `just up` costs ~85s with the cache cold and ~20s once it has filled,
+  which takes two or three runs. It is keyed by torch version and GPU
+  arch, so it is machine-specific and always safe to delete.
+
 Assets are gitignored: photographs of real places never enter git, and
 nothing here publishes anything off this box.

@@ -49,7 +49,13 @@ COPY streamer/server.py /srv/server.py
 # Python.h (python3-dev, above) and links -lcuda, whose link-time stub
 # gcc does not search for by default.
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+# Those compiles cost ~75s on the first generate() and land in the
+# container's writable layer, so every `up --force-recreate` paid for them
+# again. Point them at /cache, which compose backs with a host directory
+# that outlives the container. Created world-writable so the image still
+# runs unmounted (as any uid), just without the saving.
+RUN mkdir -p /cache/triton /cache/inductor && chmod -R 777 /cache
 ENV PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 UV_CACHE_DIR=/tmp/uv \
-    TRITON_CACHE_DIR=/tmp/triton TORCHINDUCTOR_CACHE_DIR=/tmp/inductor
+    TRITON_CACHE_DIR=/cache/triton TORCHINDUCTOR_CACHE_DIR=/cache/inductor
 EXPOSE 8000
 CMD ["/opt/flashdreams/.venv/bin/python", "/srv/server.py"]
