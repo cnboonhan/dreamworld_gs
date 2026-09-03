@@ -6,25 +6,72 @@
 #   sim      that world running headless under RMF, shown over noVNC
 #   editor   the traffic editor itself, shown over noVNC
 #
-# One image because all three want the same base: ghcr.io/open-rmf/rmf/rmf_demos
-# ships Gazebo Harmonic, rmf_building_map_tools and traffic-editor already. What
-# it lacks is a display — the sim GUI and the editor are both Qt apps, and this
-# stack is used over ssh with forwarded ports, not X11. So we add a virtual X
-# server and publish it as a web page: Xvfb -> x11vnc -> websockify -> noVNC.
+# NOT on ghcr.io/open-rmf/rmf/rmf_demos: that image is published for
+# linux/amd64 only (every tag — jazzy, kilted, rolling, lyrical, latest), so
+# on aarch64 there is nothing to pull. Nothing needs building from source
+# though: every RMF debian is released for arm64 as well as amd64 — the two
+# package lists are identical, 47 each — and ros:jazzy is multi-arch. So the
+# base is stock ROS and RMF arrives through apt, which is how the upstream
+# image's own contents get there.
+#
+# Gazebo Harmonic comes with it: ros-gz-sim pulls ROS's gz-*-vendor packages,
+# so Harmonic needs no second apt source. gz-tools-vendor is named explicitly
+# because entrypoint.sh shells out to the `gz` CLI to wait for the server
+# (`gz topic -l`) and to attach the GUI (`gz sim -g`).
+#
+# What the base lacks is a display — the sim GUI and the editor are both Qt
+# apps, and this stack is used over ssh with forwarded ports, not X11. So we
+# add a virtual X server and publish it as a web page: Xvfb -> x11vnc ->
+# websockify -> noVNC.
 #
 # Rendering is software (llvmpipe). Passing a GPU through to a GLX app inside a
 # container needs a real X server on the host, which defeats the point; these are
 # floorplan-scale scenes and the physics runs on the CPU regardless.
 #
 # Build: just setup images   (or: docker compose build rmfsim)
-FROM ghcr.io/open-rmf/rmf/rmf_demos:jazzy-rmf-latest
+FROM ros:jazzy-ros-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-rmf-traffic-editor \
+        ros-jazzy-rmf-traffic-editor-assets \
+        ros-jazzy-rmf-building-map-tools \
+        ros-jazzy-rmf-traffic-ros2 \
+        ros-jazzy-rmf-fleet-adapter \
+        ros-jazzy-rmf-task-ros2 \
+        ros-jazzy-rmf-building-sim-gz-plugins \
+        ros-jazzy-rmf-robot-sim-gz-plugins \
+        ros-jazzy-ros-gz-sim \
+        ros-jazzy-ros-gz-bridge \
+        ros-jazzy-gz-tools-vendor \
+        ros-jazzy-ros2launch \
         xvfb x11vnc novnc websockify openbox xterm \
         x11-utils xdotool libgl1-mesa-dri libglx-mesa0 mesa-utils \
         python3-venv \
+        python3-flask \
     && rm -rf /var/lib/apt/lists/*
+
+# python3-flask above is the one thing the old rmf_demos base carried that
+# stock ros:jazzy does not: infra_bridge.py serves doors, lifts and items to
+# the harness over HTTP, and robot_bridge.py does the same for the robot.
+# From apt, not pip — ROS's python tree is externally managed (PEP 668), and
+# both scripts run under the system interpreter.
+
+# The scripts source /rmf_demos_ws/install/setup.bash — the from-source overlay
+# the upstream image carried. Here RMF is debians under /opt/ros/jazzy, so
+# stand that path up as a shim rather than editing five scripts: the world,
+# sim, editor and galaxea roles then keep working untouched.
+RUN mkdir -p /rmf_demos_ws/install \
+    && printf '%s\n' '. /opt/ros/jazzy/setup.bash' \
+        > /rmf_demos_ws/install/setup.bash
+
+# ROS installs a package's executables under lib/<pkg>/ rather than on PATH,
+# and entrypoint.sh calls `traffic-editor` bare. Link it wherever the deb put
+# it — and fail the build here, not at first launch, if it is not there.
+RUN set -eux; \
+    editor="$(find /opt/ros/jazzy -type f -perm -u+x -name traffic-editor | head -1)"; \
+    test -n "$editor"; \
+    ln -sf "$editor" /usr/local/bin/traffic-editor
 
 # Prefect, so world generation is a tracked job like everything else. In its own
 # venv: this base pins ROS's python packages system-wide and pip refuses to
