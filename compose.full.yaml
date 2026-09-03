@@ -6,10 +6,18 @@ name: dreamworld
 
 x-as-caller: &as-caller
   # run as the invoking user so outputs aren't root-owned; that uid has no
-  # entry in the image's passwd, which some libraries insist on reading
+  # entry in the image's passwd, which some libraries insist on reading.
+  # USER is that reading: getpass.getuser() consults $USER before it asks
+  # pwd, so naming it is what stops the lookup ever reaching a uid that
+  # SSSD owns and no passwd file on this box lists. Torch reaches for it to
+  # name a compile cache; flashdreams calls default_cache_dir() directly,
+  # so pointing TORCHINDUCTOR_CACHE_DIR somewhere writable is not enough.
+  # NOTE: a service's own `environment:` REPLACES this block rather than
+  # merging into it, which is why both keys are repeated below per service.
   user: "${DW_UID:-1000}:${DW_GID:-1000}"
   environment:
     HOME: /tmp
+    USER: dreamworld
 
 services:
 
@@ -48,6 +56,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: dreamworld
       DISPLAY: ":99"
     restart: unless-stopped
 
@@ -69,6 +78,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: dreamworld
       DISPLAY: ":99"
       # sim wall-clock speed: doors open and lifts ride this many times
       # faster than real time
@@ -92,6 +102,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: dreamworld
       DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
       QWEN_URL: "http://qwen:8000"
       WANGEN_URLS: "http://wangen:8000,http://wangen2:8000"
@@ -114,6 +125,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: dreamworld
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
     deploy:
@@ -141,6 +153,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: dreamworld
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
     deploy:
@@ -169,6 +182,7 @@ services:
       - ./assets/hf:/assets/hf:ro
     environment:
       HOME: /tmp
+      USER: dreamworld
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
       DW_STREAMER_RUNNER: "${DW_STREAMER_RUNNER:-causal-forcing-wan2.1-i2v-1.3b-framewise}"
@@ -234,6 +248,7 @@ services:
       - ./assets/projects:/projects:ro
     environment:
       HOME: /tmp
+      USER: dreamworld
       CORE_URL: "http://dreamworld_core:8000"
       # through the PROXY, which answers even with no editor running
       EDITOR_URL: "http://proxy/dreamworld_editor"
@@ -244,7 +259,10 @@ services:
   # Qwen3-VL — the mission agent's brain, behind the harness at /harness.
   # ~17GB loaded, a card of its own.
   vlm:
-    image: vllm/vllm-openai:v0.11.0
+    build:
+      context: ./docker
+      dockerfile: vlm/vlm.Dockerfile
+    image: dreamworld/vlm:latest
     container_name: dreamworld-vlm
     ipc: host
     volumes:
@@ -252,6 +270,19 @@ services:
     environment:
       HF_HOME: /hf
       HF_HUB_OFFLINE: "1"
+      # --trust-remote-code below makes vLLM stand up a module cache under
+      # HF_HOME on boot, and that mount is read-only on purpose. Point the
+      # cache at scratch instead: the weights stay read-only, and the model
+      # still resolves out of them.
+      HF_MODULES_CACHE: /tmp/hf_modules
+      # FlashInfer ships PRECOMPILED cubins and this build has none for
+      # sm_103, so its sampler dies with "no kernel image is available for
+      # execution on the device" during the profile run. The newer ptxas
+      # next door cannot help — nothing is being assembled here, the kernel
+      # simply was not built for this card. Fall back to the torch-native
+      # top-k/top-p sampler, which is compiled for it.
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+
     command:
       - --model=Qwen/Qwen3-VL-8B-Instruct
       - --port=8000
@@ -288,6 +319,7 @@ services:
       - ./assets/hf:/assets/hf:ro
     environment:
       HOME: /tmp
+      USER: dreamworld
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
       # the repo id, resolved out of the mounted cache — not a bare path,

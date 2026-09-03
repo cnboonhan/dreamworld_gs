@@ -6,7 +6,7 @@
 # checkpoint is distilled specifically to suppress long-horizon drift)
 # and Causal-Forcing Wan 2.1 1.3B I2V (no camera to steer, an eleventh
 # the size). The server asks the pipeline which one it is by signature.
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+FROM nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,12 +23,19 @@ WORKDIR /opt/flashdreams
 
 RUN uv sync --project integrations/lingbot
 RUN uv sync --package flashdreams-causal-forcing --inexact
-# LAST, and after every sync: uv resolves torch cu130 and this box's
-# driver is CUDA 12.8. The mismatch surfaces as "driver too old", or
-# worse as a torchaudio import error that empties the runner registry.
+# LAST, and after every sync: uv's own resolution has to be overridden so
+# the three stay a matched set — a mismatch surfaces as "driver too old",
+# or worse as a torchaudio import error that empties the runner registry.
+# cu130 here because this box's driver IS CUDA 13.0 and a GB300 is sm_103,
+# which no cu128 build carries kernels for. The versions are forced by
+# aarch64 availability: torchvision 0.24.1 and torchaudio 2.9.1 — the pair
+# to torch 2.9.1 — were never built for aarch64 in any CUDA index. 2.11.0
+# is both available there and the version flashdreams' own lock targets,
+# so transformer-engine-torch — built from source against the resolved
+# torch — keeps a matching ABI.
 RUN uv pip install --python .venv/bin/python \
-        --index-url https://download.pytorch.org/whl/cu128 \
-        torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1
+        --index-url https://download.pytorch.org/whl/cu130 \
+        torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
 
 # The weights bake in, so the image is self-contained on a box with no
 # assets tree — 22GB all told, against 70GB for a camera model. Baked at
