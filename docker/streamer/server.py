@@ -60,7 +60,14 @@ STILL = os.environ.get(
 # because a framewise runner emits ONE frame per block and a block-based
 # count then rebuilt the cache twice a second — which costs far more than
 # the drift it was preventing.
-REANCHOR = int(os.environ.get("DW_STREAMER_REANCHOR", "160"))
+REANCHOR = int(os.environ.get("DW_STREAMER_REANCHOR", "480"))
+# and a wall-clock bound on the same thing, because frames are not
+# seconds: the runner's rate moves with the prompt and the card, so a
+# frame count alone makes the loop's LENGTH drift even when the picture
+# does not. Whichever bound falls first sends the rollout back to the
+# photograph, so what you watch is a ~15s loop of the view you are
+# standing in rather than an ever-lengthening improvisation away from it.
+LOOP_S = float(os.environ.get("DW_STREAMER_LOOP_S", "15"))
 # The pose track is a perfect "do not move" signal — relative poses are
 # frame-to-frame, so identity everywhere is exactly zero motion — but the
 # video model still has a prior of its own and wanders. So close the loop:
@@ -70,7 +77,8 @@ REANCHOR = int(os.environ.get("DW_STREAMER_REANCHOR", "160"))
 DRIFT_PX = float(os.environ.get("DW_STREAMER_DRIFT_PX", "48"))
 
 STATE = {"loaded": False, "seeded_at": 0.0, "prompt": "", "blocks": 0,
-         "fps": 0.0, "error": None, "drift": 0.0, "reanchors": 0}
+         "fps": 0.0, "error": None, "drift": 0.0, "reanchors": 0,
+         "loops": 0, "loop_s": 0.0, "warm": False, "warm_s": None}
 LOCK = threading.Lock()
 # Frames leave the model in BLOCKS — a dozen at once, then a pause while
 # the next block computes — and handing them to the browser as they land
@@ -232,6 +240,43 @@ def pacer():
         time.sleep(interval)
 
 
+def warm_up(pipe, cam):
+    """Run a rollout nobody watches, so the first one somebody does is fast.
+
+    Even with the kernel caches on disk there is ~19s of first-generate
+    warmup — allocator, cuda graphs, the shapes this runner only meets
+    once it is actually generating. Paying it here, against a flat grey
+    frame, means the container reports ready when it IS ready rather than
+    when it has merely finished loading weights. The frames are thrown
+    away: nothing from this reaches a viewer."""
+    t0 = time.time()
+    try:
+        buf = io.BytesIO()
+        Image.new("RGB", (WIDTH, HEIGHT), (32, 36, 44)).save(
+            buf, "JPEG", quality=90)
+        with torch.inference_mode():
+            cache = pipe.initialize_cache(
+                text=[STILL], image=seed_tensor(buf.getvalue(), "cuda"))
+            # two blocks: the first block and the steady-state block are
+            # different code paths, and both are wanted warm
+            for step in range(2):
+                n = int(pipe.get_num_output_frames(step))
+                (pipe.generate(autoregressive_index=step, cache=cache,
+                               input=still_camera(n, "cuda"))
+                 if cam else
+                 pipe.generate(autoregressive_index=step, cache=cache))
+                pipe.finalize(autoregressive_index=step, cache=cache)
+        del cache
+        torch.cuda.empty_cache()
+        STATE["warm_s"] = round(time.time() - t0, 1)
+    except Exception as e:                                     # noqa: BLE001
+        # a failed warmup is not a failed server: say so and serve anyway
+        print(f"warmup failed after {time.time() - t0:.1f}s: "
+              f"{type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+    STATE["warm"] = True
+
+
 def model_loop():
     """Load once, then roll forever: seed, generate blocks, re-seed."""
     try:
@@ -243,11 +288,15 @@ def model_loop():
     cam = steers_camera(pipe)
     STATE["loaded"] = True
     STATE["camera"] = cam
-    print(f"streamer ready on :8000 — {RUNNER}, {WIDTH}x{HEIGHT}, "
-          f"camera: {'held still' if cam else 'none to steer'}",
+    print(f"streamer loaded — {RUNNER}, {WIDTH}x{HEIGHT}, "
+          f"camera: {'held still' if cam else 'none to steer'}; warming",
+          flush=True)
+    warm_up(pipe, cam)
+    print(f"streamer ready on :8000 — warmed in {STATE.get('warm_s')}s",
           flush=True)
 
     cache, step, seq, t0, done = None, 0, -1, 0.0, 0
+    anchored_at, blk = 0.0, 0.0
     while True:
         with LOCK:
             pend = dict(PENDING)
@@ -256,7 +305,7 @@ def model_loop():
             seq, cache, step, done, t0 = pend["seq"], None, 0, 0, time.time()
             anchor = None
             STATE.update(seeded_at=t0, prompt=pend["prompt"] or "", blocks=0,
-                         drift=0.0, reanchors=0)
+                         drift=0.0, reanchors=0, loops=0)
         if seq < 0 or pend["image"] is None:
             time.sleep(0.05)
             continue
@@ -266,15 +315,23 @@ def model_loop():
             # from outside that mode is refused a few blocks in — long
             # enough to look like a mid-stream failure rather than a
             # missing context manager
-            if REANCHOR and done and done >= REANCHOR:
+            if cache is not None and (
+                    (REANCHOR and done >= REANCHOR)
+                    or (LOOP_S and time.time() - anchored_at + blk / 2
+                        >= LOOP_S)):
                 cache, step, done = None, 0, 0     # back to the photograph
+                STATE["loops"] = STATE.get("loops", 0) + 1
             with torch.inference_mode():
                 if cache is None:
+                    if anchored_at:
+                        STATE["loop_s"] = round(time.time() - anchored_at, 1)
+                    anchored_at = time.time()
                     text = ", ".join(x for x in (pend["prompt"], STILL) if x)
                     cache = pipe.initialize_cache(
                         text=[text],
                         image=seed_tensor(pend["image"], "cuda"))
                 n = int(pipe.get_num_output_frames(step))
+                tblk = time.time()
                 frames = (pipe.generate(autoregressive_index=step,
                                         cache=cache,
                                         input=still_camera(n, "cuda"))
@@ -282,6 +339,7 @@ def model_loop():
                           pipe.generate(autoregressive_index=step,
                                         cache=cache))
                 pipe.finalize(autoregressive_index=step, cache=cache)
+                blk = time.time() - tblk
             luma = publish(frames, seq)
             step += 1
             done += n
@@ -321,7 +379,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             return self._send(200, {
-                "status": "ok" if STATE["loaded"] else "loading",
+                # ok means READY TO GENERATE, not merely holding
+                # weights: a viewer that seeds the moment it sees "ok"
+                # should not then wait out the first compile
+                "status": ("ok" if STATE["warm"]
+                           else "warming" if STATE["loaded"] else "loading"),
                 "runner": RUNNER, "error": STATE["error"]})
         if self.path.startswith("/status"):
             return self._send(200, {**STATE, "frames": FRAME["n"]})
