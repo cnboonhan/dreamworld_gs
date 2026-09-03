@@ -27,6 +27,11 @@
   button { cursor: pointer }
   #chip { font-size: 12px; border: 1px solid #2f3a48; border-radius: 10px;
           padding: 2px 8px; color: #8b98a8; margin-left: auto }
+  #core { font-size: 12px; border: 1px solid #2f3a48; border-radius: 10px;
+          padding: 2px 8px; color: #8b98a8; cursor: pointer;
+          user-select: none }
+  #core.on { color: #56d364; border-color: #238636 }
+  #core.off { color: #f85149; border-color: #da3633 }
   #chip.on { color: #56d364; border-color: #238636 }
   #chip.wait { color: #e3b341; border-color: #9e6a03 }
   #chip.off { color: #f85149; border-color: #da3633 }
@@ -89,6 +94,9 @@
     <span class="k" id="note"></span>
     <a href="walk.html" class="k" title="the splat walkthrough">walk ↗</a>
     <span id="chip">streamer …</span>
+    <span id="core"
+          title="the core is the one writer of position and this viewer
+follows it — click to walk free, click again to catch up">core …</span>
   </div>
   <div id="hint">A/D or ←/→ turn · W/S or ↑/↓ tilt · Q/E zoom ·
     hold still and the view comes alive</div>
@@ -98,6 +106,6 @@
     <button id="apply" class="go">apply</button>
   </div>
   <script src="pano.js"></script>
-  <script src="live.js?v=8"></script>
+  <script src="live.js?v=10"></script>
 </body>
 </html>

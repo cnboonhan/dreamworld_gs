@@ -335,10 +335,16 @@ function bearingToFrom(frm, to) {
 // regardless of tab visibility; it re-sends the last state doc each
 // second and hands responses back for the follow protocol.
 const hb = new Worker(URL.createObjectURL(new Blob([
+  // an absolute url, baked in: a blob worker's base is the blob itself,
+  // and "/dreamworld_core/..." against that is not a url at all — it
+  // threw once a second into the empty catch below, which is a quiet way
+  // for a heartbeat to not exist
+  "const URL_=" + JSON.stringify(
+    location.origin + "/dreamworld_core/viewer/state") + ";" +
   "let body=null;" +
   "onmessage=e=>{body=e.data};" +
   "setInterval(()=>{if(!body)return;" +
-  "fetch('/dreamworld_core/viewer/state',{method:'POST'," +
+  "fetch(URL_,{method:'POST'," +
   "headers:{'Content-Type':'application/json'},body:body})" +
   ".then(async r=>{if(r.ok)postMessage(await r.json())})" +
   ".catch(()=>{})},1000)"], { type: 'application/javascript' })));
