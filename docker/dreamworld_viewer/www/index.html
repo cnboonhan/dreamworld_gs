@@ -17,7 +17,7 @@
           pointer-events: none }
   #live.on { opacity: 1 }
   #bar { position: absolute; top: 0; left: 0; right: 0; display: flex;
-         gap: 10px; align-items: center; padding: 8px 14px; z-index: 5;
+         gap: 10px; align-items: center; padding: 8px 14px; z-index: 10;
          background: rgba(11,14,19,.85); border-bottom: 1px solid #232c38 }
   #bar b { color: #4ea1ff }
   .k { color: #8b98a8 }
@@ -30,7 +30,7 @@
   #chip.on { color: #56d364; border-color: #238636 }
   #chip.wait { color: #e3b341; border-color: #9e6a03 }
   #chip.off { color: #f85149; border-color: #da3633 }
-  #promptbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+  #promptbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
                display: flex; gap: 8px; align-items: center; padding: 10px 14px;
                background: rgba(11,14,19,.85); border-top: 1px solid #232c38 }
   #prompt { flex: 1 }
@@ -43,20 +43,20 @@
            opacity: 0; transition: opacity .3s; pointer-events: none }
   #planbox { position: absolute; top: 52px; right: 28px; width: 320px;
              height: 220px; overflow: hidden; background: rgba(10,13,18,.92);
-             border: 1px solid #232c38; border-radius: 8px; z-index: 5 }
+             border: 1px solid #232c38; border-radius: 8px; z-index: 10 }
   #plan { display: block; width: 100%; height: 100%; cursor: pointer }
   #plangrip { position: absolute; left: 0; bottom: 0; width: 18px;
-              height: 18px; cursor: sw-resize; z-index: 6 }
+              height: 18px; cursor: sw-resize; z-index: 11 }
   #plangrip::after { content: ''; position: absolute; left: 3px; bottom: 3px;
                      border-left: 9px solid #4ea1ff;
                      border-top: 9px solid transparent; opacity: .5 }
   #plangrip:hover::after { opacity: 1 }
-  #planBtn { position: absolute; top: 56px; right: 32px; z-index: 6;
+  #planBtn { position: absolute; top: 56px; right: 32px; z-index: 11;
              background: #1e2530; color: #dfe6ef; border: 1px solid #2f3a48;
              border-radius: 6px; width: 26px; height: 24px; cursor: pointer }
   #panel { position: absolute; top: 282px; right: 28px; width: 320px;
            background: rgba(17,21,28,.95); border: 1px solid #232c38;
-           border-radius: 8px; padding: 10px; z-index: 5; display: none }
+           border-radius: 8px; padding: 10px; z-index: 10; display: none }
   #panel button.go, #apply { background: #2c6e3f;
                              border-color: #3a8a52 }
 </style>
@@ -98,6 +98,6 @@
     <button id="apply" class="go">apply</button>
   </div>
   <script src="pano.js"></script>
-  <script src="live.js?v=7"></script>
+  <script src="live.js?v=8"></script>
 </body>
 </html>

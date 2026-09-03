@@ -25,6 +25,7 @@ far the rollout has slid from that frame and rebuilds the cache when it
 goes too far.
 """
 import base64
+import collections
 import io
 import json
 import math
@@ -71,6 +72,15 @@ DRIFT_PX = float(os.environ.get("DW_STREAMER_DRIFT_PX", "48"))
 STATE = {"loaded": False, "seeded_at": 0.0, "prompt": "", "blocks": 0,
          "fps": 0.0, "error": None, "drift": 0.0, "reanchors": 0}
 LOCK = threading.Lock()
+# Frames leave the model in BLOCKS — a dozen at once, then a pause while
+# the next block computes — and handing them to the browser as they land
+# plays as a burst followed by a freeze. So the model thread only queues
+# them, and a publisher thread releases them at a steady cadence it
+# adapts from the backlog. The JPEG encoding moves there too, off the
+# thread that could be generating.
+PENDING_FRAMES = collections.deque()
+PACE = threading.Condition()
+MAX_BACKLOG = 48          # a couple of seconds; older frames are dropped
 # `seq` tags every frame with the rollout that produced it, so a
 # stream opened for a NEW seed can never be handed the last frame
 # of the old one — which is what made "warming up" flash the
@@ -170,8 +180,8 @@ def drift_of(a, b):
 
 
 def publish(frames, seq):
-    """Hand finished frames to whoever is streaming, newest wins, and
-    return the last frame's luma so the loop can measure its drift."""
+    """Queue a block's frames for paced release, and return the last
+    frame's luma so the loop can measure its drift."""
     last = None
     for f in frames:
         a = f.detach().float().clamp(-1, 1)
@@ -182,6 +192,29 @@ def publish(frames, seq):
         arr = ((a + 1.0) * 127.5).round().clamp(0, 255).to(torch.uint8)
         rgb = arr.cpu().numpy()
         last = _gray_small(rgb)
+        with PACE:
+            PENDING_FRAMES.append((rgb, seq))
+            while len(PENDING_FRAMES) > MAX_BACKLOG:
+                PENDING_FRAMES.popleft()
+            PACE.notify_all()
+    return last
+
+
+def pacer():
+    """Release queued frames evenly, at the rate they are being made.
+
+    The interval tracks the backlog rather than a fixed target: a growing
+    queue means the model is ahead, so drain faster; an empty one means it
+    is behind, so stretch. Bounded either side, because neither a stall
+    nor a flood is worth showing."""
+    interval = 1.0 / 8
+    while True:
+        with PACE:
+            if not PENDING_FRAMES:
+                PACE.wait(timeout=1.0)
+                continue
+            rgb, seq = PENDING_FRAMES.popleft()
+            backlog = len(PENDING_FRAMES)
         buf = io.BytesIO()
         Image.fromarray(rgb).save(buf, "JPEG", quality=JPEG_Q)
         with NEW_FRAME:
@@ -189,7 +222,14 @@ def publish(frames, seq):
             FRAME["n"] += 1
             FRAME["seq"] = seq
             NEW_FRAME.notify_all()
-    return last
+        if backlog > 12:
+            interval *= 0.82          # the model is ahead of the viewer
+        elif backlog < 3:
+            interval *= 1.15          # do not outrun what is being made
+        interval = min(max(interval, 1.0 / 24), 0.4)
+        STATE["pace_fps"] = round(1.0 / interval, 1)
+        STATE["backlog"] = backlog
+        time.sleep(interval)
 
 
 def model_loop():
@@ -349,8 +389,16 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             PENDING.update(image=raw, prompt=str(req.get("prompt") or ""),
                                    seq=PENDING["seq"] + 1)
+        # the queue still holds the old rollout's frames. The stream
+        # filters them out by seq so none reach the screen, but paced
+        # release would spend seconds draining them before the new
+        # rollout's first frame got its turn — which reads as the prompt
+        # being ignored. Drop them.
+        with PACE:
+            PENDING_FRAMES.clear()
         return self._send(200, {"ok": True, "seq": PENDING["seq"]})
 
 
 threading.Thread(target=model_loop, daemon=True).start()
+threading.Thread(target=pacer, daemon=True).start()
 ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
