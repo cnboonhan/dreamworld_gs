@@ -355,16 +355,33 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        last = -1
+        last, opened, sent = -1, time.time(), 0
         try:
             while True:
                 with NEW_FRAME:
+                    # wake for a frame of OUR rollout, or for the news that
+                    # ours has been superseded
                     if not NEW_FRAME.wait_for(
-                            lambda: (FRAME["n"] != last and FRAME["jpeg"]
-                                     and (not want or FRAME["seq"] == want)),
+                            lambda: (want and FRAME["seq"] > want)
+                                    or (FRAME["n"] != last and FRAME["jpeg"]
+                                        and (not want or
+                                             FRAME["seq"] == want)),
                             timeout=30):
+                        # a rollout that never arrives must not hold this
+                        # connection for the life of the process: the
+                        # browser only gets a handful per host, and a
+                        # stuck one blocks the next /seed
+                        if not sent and time.time() - opened > 180:
+                            return
                         continue
+                    # the view moved on. This response belongs to a rollout
+                    # nobody is watching any more; ending it frees the
+                    # socket instead of parking a thread on a condition
+                    # that can never again be true.
+                    if want and FRAME["seq"] > want:
+                        return
                     jpeg, last = FRAME["jpeg"], FRAME["n"]
+                sent += 1
                 self.wfile.write(b"--dwframe\r\nContent-Type: image/jpeg\r\n"
                                  b"Content-Length: "
                                  + str(len(jpeg)).encode() + b"\r\n\r\n"

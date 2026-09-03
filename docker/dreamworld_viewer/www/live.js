@@ -14,11 +14,15 @@ const FILES = '/dreamworld_editor/files';
 const GRAPH = '/dreamworld_editor/graph';
 const STREAMER = '/streamer';
 const STILL_MS = 600;          // held-still before the rollout is seeded
+const SEED_MS = 15000;         // a seed request that misses this is lost
 
 const $ = id => document.getElementById(id);
 const st = { at: null, look: 'original', graph: null, seq: 0,
              timer: null, streaming: false, seeding: false,
-             moving: false, target: null };
+             moving: false, target: null,
+             // the core is the one writer of position and this page
+             // follows it, exactly as the splat walkthrough does
+             follow: true };
 
 function chip(cls, text) {
   const el = $('chip');
@@ -80,11 +84,19 @@ async function seed() {
     // rollout inherits the viewer's own field of view rather than guessing
     const view = window.dwp('live', 'view') || { fov: 1.6 };
     const image = captureView();
-    const r = await fetch(`${STREAMER}/seed`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image, prompt: $('prompt').value,
-                             fov: view.fov })
-    });
+    // a seed that never answers used to leave the chip reading
+    // "seeding…" for good; give it a deadline it can miss out loud
+    const ctl = new AbortController();
+    const bell = setTimeout(() => ctl.abort(), SEED_MS);
+    let r;
+    try {
+      r = await fetch(`${STREAMER}/seed`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image, prompt: $('prompt').value,
+                               fov: view.fov }),
+        signal: ctl.signal
+      });
+    } finally { clearTimeout(bell); }
     if (!r.ok) throw new Error(await r.text());
     const doc = await r.json();
     st.seq = doc.seq;
@@ -93,13 +105,16 @@ async function seed() {
     st.streaming = true;
     chip('wait', 'warming up…');
   } catch (e) {
-    chip('off', 'streamer unreachable');
+    chip('off', e.name === 'AbortError' ? 'seed timed out — retrying'
+                                        : 'streamer unreachable');
+    if (e.name === 'AbortError') setTimeout(settle, 1500);
   } finally {
     st.seeding = false;
   }
 }
 
 function settle() {                 // called after every camera change
+  pushState();                      // where we look is part of where we are
   if (st.moving) return;            // a walk owns the screen until it lands
   stopStream();
   clearTimeout(st.timer);
@@ -349,7 +364,14 @@ function openPanel(to) {
 $('cancelBtn').onclick = () => { $('panel').style.display = 'none'; };
 $('goBtn').onclick = () => {
   $('panel').style.display = 'none';
-  if (st.target) walkTo(st.target, $('tlook').value);
+  if (!st.target) return;
+  const to = st.target, look = $('tlook').value;
+  st.target = null;
+  // one writer of position: while synced, even our own button asks the
+  // core to move the walker and the follow loop enacts what comes back,
+  // so the harness and this page never hold different beliefs
+  if (st.follow) postPosition(to, look);
+  else walkTo(to, look);
 };
 
 // ---- crossing an edge -----------------------------------------------------
@@ -412,8 +434,153 @@ async function walkTo(to, look) {
   $('shade').style.opacity = '0';
   st.moving = false;
   drawPlan();
+  pushState(true);
   settle();                           // and the new view comes alive
 }
+
+// ---- the core: the one writer of position ---------------------------------
+// The splat walkthrough already follows dreamworld_core, so the live page
+// follows it the same way rather than inventing a second belief about
+// where the walker stands. The core holds the position; the harness (or
+// our own go button) moves it; we notice the sequence advance and enact
+// it — a spin and a crossing for a neighbour, a cut for anywhere else.
+// The chip is the toggle: click to walk free, click again to catch up.
+let lastSeq = 0, coreOk = 0, lastSent = '', lastPush = 0;
+
+function coreMark() {
+  const el = $('core');
+  if (!el) return;
+  if (!st.follow) {
+    el.textContent = '○ core unsynced';
+    el.className = '';
+    return;
+  }
+  const live = performance.now() - coreOk < 3000;
+  el.textContent = live ? '● core synced' : '○ core unreachable';
+  el.className = live ? 'on' : 'off';
+}
+setInterval(coreMark, 1000);
+
+function postPosition(at, look) {
+  return fetch('/dreamworld_core/position', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ at, look }) }).catch(() => {});
+}
+
+function pushState(force) {
+  if (!st.graph || !st.at) return;
+  const now = performance.now();
+  if (!force && now - lastPush < 250) return;
+  const me = st.graph.vertices[st.at];
+  const view = window.dwp('live', 'view') || { yaw: 0, pitch: 0 };
+  const doc = {
+    at: st.at, look: st.look, level: me.level, x: me.x, y: me.y,
+    lift: me.lift || null,
+    yaw_deg: Math.round(view.yaw * 1800 / Math.PI) / 10,
+    pitch_deg: Math.round(view.pitch * 1800 / Math.PI) / 10,
+    moving: st.moving,
+    // what this page is, so the harness can tell the two walkers apart
+    surface: 'live',
+    hidden: document.hidden,
+  };
+  const s = JSON.stringify(doc);
+  if (!force && s === lastSent && now - lastPush < 1000) return;
+  lastSent = s;
+  lastPush = now;
+  hb.postMessage(s);
+}
+
+function followTruth(pos, seq) {
+  if (!st.follow || st.moving || !st.graph) return;
+  // a seq far BELOW ours means the core restarted and began a new count —
+  // resync rather than gate out every command until this tab reloads
+  if (seq < lastSeq - 100) lastSeq = seq - 1;
+  if (!(seq > lastSeq)) return;
+  lastSeq = seq;
+  enact(pos.at, pos.look, pos.yaw_deg);
+}
+
+async function enact(to, look, yawDeg) {
+  const v = st.graph.vertices[to];
+  if (!v || !(v.panos || {})[look]) return;
+  if (to === st.at && look === st.look) {
+    // the same place: this is a TURN, which the panorama can simply do
+    if (yawDeg != null) {
+      st.moving = true;
+      await spinTo(yawDeg * Math.PI / 180, 600);
+      st.moving = false;
+      pushState(true);
+      settle();
+    }
+    return;
+  }
+  if (neighbours(st.at).includes(to)) await walkTo(to, look);
+  else await jumpTo(to, look);
+}
+
+// somewhere the walk did not carry us: a cut, not a crossing, because
+// pretending otherwise would animate a journey nobody took
+async function jumpTo(to, look) {
+  st.moving = true;
+  clearTimeout(st.timer);
+  stopStream();
+  chip('', 'moving…');
+  $('shade').style.opacity = '1';
+  await new Promise(r => setTimeout(r, 320));
+  st.at = to; st.look = look;
+  $('prompt').value = '';
+  fillPickers();
+  showPano();
+  await new Promise(r => requestAnimationFrame(
+    () => requestAnimationFrame(r)));
+  $('shade').style.opacity = '0';
+  st.moving = false;
+  drawPlan();
+  pushState(true);
+  settle();
+}
+
+// The heartbeat lives in a WORKER: page timers throttle to one a minute in
+// a hidden tab, and this page hidden must not read as this walker dead.
+const hb = new Worker(URL.createObjectURL(new Blob([
+  // an absolute url, baked in: a blob worker's base is the blob itself,
+  // and "/dreamworld_core/..." against that is not a url at all — it
+  // threw once a second into the empty catch below, which is a quiet way
+  // for a heartbeat to not exist
+  "const URL_=" + JSON.stringify(
+    location.origin + "/dreamworld_core/viewer/state") + ";" +
+  "let body=null;" +
+  "onmessage=e=>{body=e.data};" +
+  "setInterval(()=>{if(!body)return;" +
+  "fetch(URL_,{method:'POST'," +
+  "headers:{'Content-Type':'application/json'},body:body})" +
+  ".then(async r=>{if(r.ok)postMessage(await r.json())})" +
+  ".catch(()=>{})},1000)"], { type: 'application/javascript' })));
+hb.onmessage = e => {
+  if (!e.data) return;
+  coreOk = performance.now();
+  if (e.data.position) followTruth(e.data.position, e.data.seq);
+  coreMark();
+};
+document.addEventListener('visibilitychange', () => pushState(true));
+
+$('core').onclick = async () => {
+  st.follow = !st.follow;
+  coreMark();
+  if (!st.follow || st.moving) return;
+  // rejoining catches up by CUT — wherever the core went while we were
+  // free is not a walk we took, so a fade says so honestly
+  try {
+    const doc = await (await fetch('/dreamworld_core/position')).json();
+    lastSeq = doc.seq || 0;
+    const p2 = doc.position;
+    if (p2 && (p2.at !== st.at || p2.look !== st.look)
+        && st.graph.vertices[p2.at]
+        && (st.graph.vertices[p2.at].panos || {})[p2.look]) {
+      await jumpTo(p2.at, p2.look);
+    }
+  } catch (e) {}
+};
 
 // ---- boot -----------------------------------------------------------------
 (async () => {
@@ -424,8 +591,21 @@ async function walkTo(to, look) {
   st.at = st.graph.vertices[want] && withPano.includes(want)
     ? want : withPano[0];
   if (!st.at) { chip('off', 'no panoramas in this project'); return; }
+  // the core already knows where the walker stands; start there rather
+  // than at whichever vertex sorts first
+  try {
+    const doc = await (await fetch('/dreamworld_core/position')).json();
+    lastSeq = doc.seq || 0;
+    const p2 = doc.position;
+    if (p2 && st.graph.vertices[p2.at]
+        && (st.graph.vertices[p2.at].panos || {})[p2.look]) {
+      st.at = p2.at; st.look = p2.look;
+    }
+  } catch (e) {}
   fillPickers();
   showPano();
+  coreMark();
+  pushState(true);
   // say whether the model is even up before the first still moment
   try {
     const h = await (await fetch(`${STREAMER}/health`)).json();
