@@ -303,9 +303,12 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      # one worker per card it is given, and it is given one fewer than
-      # it used to be: the live streamer took card 1 while this was away
-      DW_GEN_NPROC: "${DW_GEN_NPROC:-3}"
+      # One worker per card — and the COUNT MUST DIVIDE 16. Stage 3
+      # (world expansion) shards attention across the cards and its head
+      # size is 16, so three cards dies ten minutes in with "Invalid Head
+      # size: 16, which should be divisible by spsize 3". 1, 2 or 4,
+      # never 3. The streamer holds card 1, which leaves two.
+      DW_GEN_NPROC: "${DW_GEN_NPROC:-2}"
       DW_LLM_ADDR: vlm
     depends_on:
       # started, not healthy: the planner talks to the VLM when a job runs,
@@ -318,14 +321,17 @@ services:
           devices:
             - driver: nvidia
               capabilities: [gpu]
-              # the cards nothing else is holding. Card 1 was this
-              # service's before the live streamer moved in; generating a
-              # world and streaming one are the two jobs most likely to be
-              # wanted at once, so they do not share.
-              # spelled out, not "${VAR:-2,3,4}": device_ids is a LIST,
-              # and an interpolated string lands in it as ONE id named
-              # "2,3,4", which is not a device
-              device_ids: ["2", "3", "4"]
+              # Card 1 was this service's before the live streamer
+              # moved in; generating a world and streaming one are the
+              # two jobs most likely to be wanted at once, so they do not
+              # share. Two, not the three that are free: the divides-16
+              # rule above means card 4 is left idle rather than breaking
+              # stage 3. Stop the streamer and this can be ["1","2","3",
+              # "4"] with DW_GEN_NPROC=4 again, which is what it was.
+              # Spelled out, not "${VAR:-2,3}": device_ids is a LIST, and
+              # an interpolated string lands in it as ONE id named "2,3",
+              # which is not a device.
+              device_ids: ["2", "3"]
     restart: unless-stopped
 
   # Qwen-Image-Edit-2509 — the model behind panorama variants. Holds ~45GB

@@ -100,7 +100,7 @@ assets/                    gitignored: weights (hf/, models/), projects/
 ```
 
 GPUs on this box: **0** vLLM (Qwen3-VL — trajectory planning and the
-mission agent) · **1** the live streamer · **2–4** splat generation ·
+mission agent) · **1** the live streamer · **2–3** splat generation · **4** free ·
 **5** qwen image edit ·
 **6** wan video · **7** wan video (second instance).
 

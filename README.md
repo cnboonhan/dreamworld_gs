@@ -96,14 +96,14 @@ Measured on this box (NVIDIA H200s), generating the sample office:
 
 | job | model | cards | VRAM | time |
 | --- | --- | --- | --- | --- |
-| splat world | HY-World 2.0 | 3 | large | **15–20 min** per place |
+| splat world | HY-World 2.0 | 2 | large | **~31 min** per place (measured; 15–20 min on four cards) |
 | live view | LingBot-World v2 14B causal-fast | 1 | ~80 GB | **~4.5 fps** streamed, ~20s to warm |
 | crossing video | Wan 2.2 FLF (×2 instances) | 1 each | ~72 GB | **6–7 min** per video (+~2 min model load on a cold instance) |
 | panorama variant | Qwen-Image-Edit-2509 | 1 | ~60 GB | **~1 min** per edit |
 | mission agent / planner | Qwen3-VL-8B (vLLM) | 1 | ~17 GB | interactive |
 
-A building of V places and E edges costs roughly `V × 17 min` of splat
-time (3 cards) and `2E × 6.5 min` of video time (halved across the two
+A building of V places and E edges costs roughly `V × 31 min` of splat
+time (2 cards) and `2E × 6.5 min` of video time (halved across the two
 wangen instances) — the queues run unattended and the editor toasts each
 completion.
 
