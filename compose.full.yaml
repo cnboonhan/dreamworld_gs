@@ -96,6 +96,7 @@ services:
       HOME: /tmp
       DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
       QWEN_URL: "http://qwen:8000"
+      SPLATGEN_URL: "http://splatgen:8000"
       WANGEN_URLS: "http://wangen:8000,http://wangen2:8000"
       STREAMER_URL: "http://streamer:8000"
     restart: unless-stopped
@@ -251,8 +252,8 @@ services:
       VLM_BASE_URL: "http://vlm:8000/v1"
     restart: unless-stopped
 
-  # Qwen3-VL — the mission agent's brain, behind the harness at /harness.
-  # ~17GB loaded, a card of its own.
+  # Qwen3-VL — the trajectory planner's eyes during splat generation (and
+  # later the mission agent's). ~17GB loaded, a card of its own.
   vlm:
     image: vllm/vllm-openai:v0.11.0
     container_name: dreamworld-vlm
@@ -284,9 +285,52 @@ services:
               device_ids: ["${DW_VLM_GPU:-0}"]
     restart: unless-stopped
 
+  # HY-World 2.0 — panorama -> 3DGS world. Main's generator image with a
+  # one-job HTTP wrapper in place of Prefect; four cards, ~17 minutes a
+  # world. The editor submits scenes under the dreamworld/ tree.
+  splatgen:
+    <<: *as-caller
+    build:
+      context: ./docker
+      dockerfile: splatgen/splatgen.Dockerfile
+    image: dreamworld/splatgen:latest
+    container_name: dreamworld-splatgen
+    shm_size: 32gb
+    volumes:
+      - /etc/passwd:/etc/passwd:ro
+      - ./assets/models:/assets/models:ro
+      - ./assets/hf:/assets/hf:ro
+      - ./assets/projects:/projects
+    environment:
+      HOME: /tmp
+      # one worker per card it is given, and it is given one fewer than
+      # it used to be: the live streamer took card 1 while this was away
+      DW_GEN_NPROC: "${DW_GEN_NPROC:-3}"
+      DW_LLM_ADDR: vlm
+    depends_on:
+      # started, not healthy: the planner talks to the VLM when a job runs,
+      # not when this container boots
+      vlm:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              # the cards nothing else is holding. Card 1 was this
+              # service's before the live streamer moved in; generating a
+              # world and streaming one are the two jobs most likely to be
+              # wanted at once, so they do not share.
+              # spelled out, not "${VAR:-2,3,4}": device_ids is a LIST,
+              # and an interpolated string lands in it as ONE id named
+              # "2,3,4", which is not a device
+              device_ids: ["2", "3", "4"]
+    restart: unless-stopped
+
   # Qwen-Image-Edit-2509 — the model behind panorama variants. Holds ~45GB
-  # VRAM while loaded, so it gets a card of its own. No host port: only
-  # the editor talks to it.
+  # VRAM while loaded, so it gets a card of its own, one world generation
+  # will not be using. No host port: only the editor talks to it.
   qwen:
     <<: *as-caller
     build:
