@@ -240,7 +240,7 @@ def edge_view(name: str, variant: str | None, bearing: float):
 
     Ported from main's make_spawn_cam and leaning on what v2 knows that
     main didn't use: the panorama was aligned to the building BEFORE
-    generation, so the world's facing_direction (the pano centre, in ply
+    generation, so HY-World's facing_direction (the pano centre, in ply
     coordinates) is building east, its up_direction is building up, and
     center_point is the capture position. A bearing then rotates east
     toward north (up cross east) in the ply's own frame. The camera rows
