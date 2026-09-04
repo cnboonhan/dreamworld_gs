@@ -48,6 +48,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# `docker compose restart` keeps the filesystem, so the last run's lock
+# files survive into this one and Xvfb dies with "Server is already active
+# for display :99" — a permanent crash loop, since every restart inherits
+# the same stale lock. If nothing actually answers on the display, the
+# locks are leftovers: clear them.
+DNUM="${DISPLAY#:}"
+if ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+    rm -f "/tmp/.X${DNUM}-lock" "/tmp/.X11-unix/X${DNUM}"
+fi
+
 Xvfb "$DISPLAY" -screen 0 "${W}x${H}x24" -nolisten tcp &
 XVFB_PID=$!
 # wait for the server to accept connections before anything tries to draw

@@ -12,7 +12,11 @@
      resolves a position into a level, and what door requests are issued
      against. -->
 <launch>
-  <arg name="gz_args" default="-s -r /projects/__PROJECT__/worlds/__MAP__/__MAP__.world"/>
+  <!-- -v 3: gz suppresses warnings by default, and the lift plugin's
+       "Discarding request: [lift1] is busy" — the only symptom of upstream
+       rmf_simulation#132 when the plugin is <2.4.1 — is a warning. Hours
+       were lost to a silent failure; regeneration must not re-silence it. -->
+  <arg name="gz_args" default="-s -r -v 3 /projects/__PROJECT__/worlds/__MAP__/__MAP__.world"/>
 
   <set_env name="GZ_SIM_RESOURCE_PATH"
            value="/projects/__PROJECT__:/projects/__PROJECT__/maps:/projects/__PROJECT__/worlds/__MAP__:/projects/__PROJECT__/worlds/__MAP__/models"/>
