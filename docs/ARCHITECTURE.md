@@ -27,8 +27,9 @@ harness rides, and which GPU holds what.
    change, write a prompt, *edit* — Qwen-Image-Edit repaints only where
    you aimed. Undo swaps back; the original is never touched.
 6. **Splats**: per look, *generate splat* queues HY-World 2.0 — six
-   stages, four GPUs, ~17 minutes a world. The box shows the stage and
-   the queue; the viewer opens the result at its spawn camera.
+   stages, ~31 minutes a world on its two cards (the GPU count must
+   divide 16: 1, 2 or 4). The box shows the stage and the queue; the
+   viewer opens the result at its spawn camera.
 7. **Crossings**: select an edge; each direction card shows both
    panoramas faced along the walk's own bearing and the splat
    walkthrough, with a *video transition* box beneath. The prompt
@@ -88,14 +89,14 @@ docker/
   proxy/                   nginx: one port, every surface
   rmf-tools/               traffic editor, world build, Gazebo+RMF sim
   dreamworld_editor/       the NiceGUI editor and its store
-  dreamworld_viewer/       the walkthrough (static, fed by the editor)
+  dreamworld_viewer/       the live page + walkthrough (static, fed by the editor)
   dreamworld_core/         the state holder — the seam's fixed address
   streamer/                the live layer: a world model behind /streamer
   harness/                 the dashboard, tools and mission agent
   splatgen/                HY-World 2.0 behind a one-job queue
   qwen/                    Qwen-Image-Edit-2509 (panorama variants)
   wangen/                  Wan 2.2 (crossing videos) behind the same queue
-scripts/                   fetch_assets.py, models.txt, pack.py
+scripts/                   fetch_assets.py, models.txt, pack.py, push_project.py
 assets/                    gitignored: weights (hf/, models/), projects/
 ```
 

@@ -105,19 +105,6 @@ def door_on_edge(ax, ay, bx, by):
     return [best] if best else []
 
 
-def doors_on_path(waypoints, thresh=2.0):
-    """Door names whose position is within `thresh` m of any path segment."""
-    hit = []
-    for name, dx, dy in G.get("doors", []):
-        near = any(
-            _seg_dist(dx, dy, waypoints[i][0], waypoints[i][1],
-                      waypoints[i + 1][0], waypoints[i + 1][1]) <= thresh
-            for i in range(len(waypoints) - 1)
-        )
-        if near:
-            hit.append(name)
-    return hit
-
 
 def _lift_of(door_name):
     """'ShaftDoor_lift1_L11_name' -> ('lift1', 'L11'); None for a regular door."""
@@ -681,7 +668,6 @@ def goto():
     Drives r1 along the given nav-graph waypoints (the dream walker's own path)."""
     body = request.get_json(force=True, silent=True) or {}
     wps = body.get("waypoints") or []
-    level = body.get("level") or G["args"].level
     if len(wps) < 1:
         return jsonify(ok=False, error="no waypoints"), 400
     task_id = body.get("task_id") or f"dream_{int(time.time() * 1000)}"

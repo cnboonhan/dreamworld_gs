@@ -644,6 +644,8 @@ def transition_body(frm, la, to, lb, refresh_all, vid):
             ui.label("both looks need panoramas first").classes(
                 "text-xs text-gray-500")
         elif wstat.get("busy"):
+            # first running scene, whichever instance holds it
+            wrun = next(iter(wstat.get("running") or {}), "")
             ui.label(f"will queue behind {crossing.short(wrun)}").classes(
                 "text-xs text-gray-500")
 

@@ -734,10 +734,6 @@ def push_state(reset=False):
     BUS.send({"type": "state", **st})
 
 
-def robot_watchdog():
-    """Retired: there is no robot to wander. The walker is followed, not
-    corrected — pose_pump adopts wherever the core says it stands."""
-
 
 # ---- tools ------------------------------------------------------------------
 def tool(desc, params=()):
@@ -1039,7 +1035,7 @@ def call_lift(level=""):
     # physically carries it and the bridge re-levels itself on arrival. It must not
     # teleport the robot instead — that fights the cabin.
     riding = floor != ST["level"] and ST["lift_of"].get(ST["cur"]) == lift
-    res = bridge("/call_lift", {"lift": lift, "floor": floor, "ride": riding})
+    bridge("/call_lift", {"lift": lift, "floor": floor, "ride": riding})
     # Riding it is not the same as calling it: you have ridden only if you were
     # standing in the cabin when it moved. Then the graph underneath changes, and
     # every level-keyed thing has to be rebuilt before the next tool call reads it.

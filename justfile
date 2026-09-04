@@ -11,7 +11,7 @@ _default:
 # Idempotent and cheap to re-run: a repo already in the cache is recognised
 # without touching the network. The list is scripts/models.txt.
 #
-# Download every model the pipeline needs (~550GB, needs network).
+# Download every model the pipeline needs (~1.2TB, needs network).
 fetch:
     HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
         --with safetensors --no-project \
