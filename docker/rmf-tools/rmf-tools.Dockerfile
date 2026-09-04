@@ -57,13 +57,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # From apt, not pip — ROS's python tree is externally managed (PEP 668), and
 # both scripts run under the system interpreter.
 
-# The scripts source /rmf_demos_ws/install/setup.bash — the from-source overlay
-# the upstream image carried. Here RMF is debians under /opt/ros/jazzy, so
-# stand that path up as a shim rather than editing five scripts: the world,
-# sim, editor and galaxea roles then keep working untouched.
-RUN mkdir -p /rmf_demos_ws/install \
-    && printf '%s\n' '. /opt/ros/jazzy/setup.bash' \
-        > /rmf_demos_ws/install/setup.bash
+# The apt lift plugin (2.3.3) carries upstream rmf_simulation#132: the boot
+# LiftCmd is created without door_state set, and when that uninitialized
+# field is not zero, the command never completes and EVERY request is
+# discarded as "busy" — from boot, for every lift, with no recovery. x86
+# boxes usually get lucky zeros; this box's allocator reliably does not,
+# which is why lifts never rode here. Jazzy never got the backport
+# (its branch still reads 2.3.3), so apt cannot fix it: rebuild the one
+# plugin from the SAME 2.3.3 source plus the one-commit fix, as a colcon
+# overlay that shadows the deb. Everything else stays apt.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential cmake python3-colcon-common-extensions \
+        qtbase5-dev qtdeclarative5-dev \
+    && git clone --depth 1 --branch 2.3.3 \
+        https://github.com/open-rmf/rmf_simulation /tmp/rmf_sim \
+    && curl -sL https://github.com/open-rmf/rmf_simulation/commit/0a409cbb.patch \
+        | git -C /tmp/rmf_sim apply \
+    && grep -q "door_state = DoorModeCmp::CLOSE" \
+        /tmp/rmf_sim/rmf_building_sim_gz_plugins/src/lift.cpp \
+    && . /opt/ros/jazzy/setup.sh \
+    && colcon build \
+        --base-paths /tmp/rmf_sim \
+        --packages-select rmf_building_sim_gz_plugins \
+        --build-base /tmp/rmf_build \
+        --install-base /rmf_demos_ws/install \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && rm -rf /tmp/rmf_sim /tmp/rmf_build /var/lib/apt/lists/*
+
+# The scripts source /rmf_demos_ws/install/setup.bash — on the upstream
+# amd64 image that was the from-source overlay, and here it is colcon's own
+# setup for the patched plugin, which chains back to /opt/ros/jazzy (the
+# underlay sourced during its build). Overlay first on every search path,
+# so gz loads the FIXED liblift.so and the deb's copy never runs.
 
 # ROS installs a package's executables under lib/<pkg>/ rather than on PATH,
 # and entrypoint.sh calls `traffic-editor` bare. Link it wherever the deb put
