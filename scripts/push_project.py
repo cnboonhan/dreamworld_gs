@@ -12,7 +12,6 @@ The repo is created PRIVATE unless --public is passed, and the flag is
 deliberately explicit: these are photographs of a real building.
 """
 import argparse
-import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi

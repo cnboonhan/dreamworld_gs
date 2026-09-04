@@ -17,7 +17,7 @@ x-as-caller: &as-caller
   user: "${DW_UID:-1000}:${DW_GID:-1000}"
   environment:
     HOME: /tmp
-    USER: dreamworld
+    USER: "${DW_USER:-dreamworld}"
 
 services:
 
@@ -58,7 +58,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       DISPLAY: ":99"
     restart: unless-stopped
 
@@ -80,7 +80,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       DISPLAY: ":99"
       # sim wall-clock speed: doors open and lifts ride this many times
       # faster than real time
@@ -104,7 +104,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
       QWEN_URL: "http://qwen:8000"
       SPLATGEN_URL: "http://splatgen:8000"
@@ -128,7 +128,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
     deploy:
@@ -155,7 +155,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
     deploy:
@@ -190,7 +190,6 @@ services:
       - ./assets/cache/streamer:/cache
     environment:
       HOME: /tmp
-      USER: dreamworld
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
       DW_STREAMER_RUNNER: "${DW_STREAMER_RUNNER:-causal-forcing-wan2.1-i2v-1.3b-framewise}"
@@ -207,6 +206,11 @@ services:
       # and the last of it fades back to the photograph, so the loop
       # closes instead of cutting. 0 restores the cut.
       DW_STREAMER_TAIL_S: "${DW_STREAMER_TAIL_S:-5}"
+      # torch's inductor cache-dir check calls getpass.getuser(), which
+      # falls back to pwd.getpwuid() -- and this caller is an LDAP uid, so
+      # the /etc/passwd mounted above (local users only) has no entry for
+      # it. getuser() prefers $USER, so it never reaches pwd.
+      USER: "${DW_USER:-dreamworld}"
     deploy:
       resources:
         reservations:
@@ -264,7 +268,7 @@ services:
       - ./assets/projects:/projects:ro
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       CORE_URL: "http://dreamworld_core:8000"
       # through the PROXY, which answers even with no editor running
       EDITOR_URL: "http://proxy/dreamworld_editor"
@@ -286,10 +290,8 @@ services:
     environment:
       HF_HOME: /hf
       HF_HUB_OFFLINE: "1"
-      # --trust-remote-code below makes vLLM stand up a module cache under
-      # HF_HOME on boot, and that mount is read-only on purpose. Point the
-      # cache at scratch instead: the weights stay read-only, and the model
-      # still resolves out of them.
+      # --trust-remote-code makes transformers mkdir $HF_HOME/modules, and
+      # /hf is mounted read-only on purpose: weights are never mutated.
       HF_MODULES_CACHE: /tmp/hf_modules
       # FlashInfer ships PRECOMPILED cubins and this build has none for
       # sm_103, so its sampler dies with "no kernel image is available for
@@ -339,6 +341,9 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      # as everywhere else that runs as the caller: an LDAP uid has no
+      # /etc/passwd line, and torch asks getpass.getuser() for one
+      USER: "${DW_USER:-dreamworld}"
       # One worker per card — and the COUNT MUST DIVIDE 16. Stage 3
       # (world expansion) shards attention across the cards and its head
       # size is 16, so three cards dies ten minutes in with "Invalid Head
@@ -390,7 +395,7 @@ services:
       - ./assets/hf:/assets/hf:ro
     environment:
       HOME: /tmp
-      USER: dreamworld
+      USER: "${DW_USER:-dreamworld}"
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
       # the repo id, resolved out of the mounted cache — not a bare path,

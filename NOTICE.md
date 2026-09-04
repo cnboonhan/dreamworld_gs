@@ -1,48 +1,35 @@
-# Third-party code
+# Third-party code and models
 
-Vendored into this repository:
+## Vendored (ported into this repository)
 
-| Path | Upstream | License |
+| Path | Heritage | License |
 | --- | --- | --- |
-| `docker/splat-generator/tools/threedgrut/` | [nv-tlabs/3dgrut](https://github.com/nv-tlabs/3dgrut) — export subtree only, used to write Isaac Sim NuRec USDZ | Apache-2.0 |
-| `docker/splat-viewer/www/` | [antimatter15/splat](https://github.com/antimatter15/splat) — WebGL 3DGS viewer by Kevin Kwok; patched to resolve `?url=` against this origin and to load a `.cam.json` spawn pose | MIT |
-| `docker/pano-viewer/www/` | equirect WebGL viewer engine from the `dream_editor` tool in the internal htx-robotics-release dreamworld project; reduced to a single panel, given a file picker and an aspect-ratio check | internal |
+| `docker/dreamworld_editor/js/dw_splat.js`, `docker/dreamworld_viewer/www/viewer.js` | WebGL 3DGS renderer of [antimatter15/splat](https://github.com/antimatter15/splat) heritage — 32-byte records, counting-sort worker, packed-covariance texture, shaders | MIT |
+| `docker/splat-generator/tools/threedgrut/` | export subtree of [nv-tlabs/3dgrut](https://github.com/nv-tlabs/3dgrut) — writes the Isaac Sim NuRec USDZ | Apache-2.0 |
+| `docker/dreamworld_editor/js/dw_pano.js`, `docker/dreamworld_viewer/www/pano.js` | equirect panorama viewer from the internal htx-robotics dreamworld tools | internal |
+| `docker/rmf-tools/generate_world.sh`, `postprocess_world.py`, `sim.launch.xml.template` | world generation from the internal dreamworld pipeline | internal |
+| the sample `multilevel_office` map | same pipeline (robot meshes not included) | internal |
 
-Installed at build time, not vendored:
+## Images built on
 
-| Component | Upstream | License |
+| Base | Ships | License |
 | --- | --- | --- |
-| gsplat 1.5.3 | [nerfstudio-project/gsplat](https://github.com/nerfstudio-project/gsplat) — the CUDA rasteriser | Apache-2.0 |
-| pycolmap 3.12.6 | [colmap/colmap](https://github.com/colmap/colmap) — structure from motion | BSD-3-Clause |
-| PyTorch, OpenCV, torchmetrics, plyfile, usd-core, nvidia-ncore | see each project | permissive (BSD / Apache-2.0 / MIT) |
+| `ghcr.io/open-rmf/rmf/rmf_demos` | [Open-RMF](https://github.com/open-rmf) (`rmf_traffic`, `rmf_fleet_adapter`, `rmf_traffic_editor` …), [Gazebo](https://gazebo.org/), ROS 2 Jazzy | Apache-2.0 |
+| — plus, in that image | [noVNC](https://github.com/novnc/noVNC) / [websockify](https://github.com/novnc/websockify), unmodified Ubuntu packages | MPL-2.0 / LGPL-3.0 |
+| `vllm/vllm-openai` | vLLM serving Qwen3-VL | Apache-2.0 |
+| CUDA devel images | the generator and streamer stacks (PyTorch, gsplat, transformers, FlashDreams) | permissive |
 
-**No pretrained model weights.** This pipeline measures geometry from the
-photographs rather than imagining it, so nothing is downloaded at runtime and
-nothing is mounted but the projects themselves.
+## Model weights (fetched by `just fetch`, manifest in `scripts/models.txt`)
 
-Earlier revisions carried a generative path — HY-World 2.0, and with it SAM 3,
-Wan 2.1 I2V, Qwen3-VL, Qwen-Image-Edit, WorldStereo, MoGe, ZIM and
-GroundingDINO — several of which are non-commercial or otherwise restricted.
-All of it was removed, along with the weights it needed. If you restore that
-path from history, those licenses apply again and want reviewing first.
+| Model | Role | License note |
+| --- | --- | --- |
+| tencent/HY-World-2.0 (+ WorldStereo, HunyuanWorld-Mirror, Wan 2.1 I2V base) | splat-world generation | **Tencent Hunyuan community license — territory and acceptable-use restricted; outputs must be identified as AI-generated in public contexts** |
+| robbyant/lingbot-world-v2-14b-causal-fast | the live layer | Apache-2.0 |
+| Wan-AI/Wan2.2-I2V-A14B | crossing videos | Apache-2.0 |
+| Qwen/Qwen-Image-Edit-2509, Qwen/Qwen3-VL-8B | panorama variants; agent/planner | Apache-2.0 |
+| facebook/sam3 (ModelScope), MoGe, ZIM, GroundingDINO, DINOv2 | the trajectory planner's perception | per-model; SAM 3 is gated on HF |
 
-## Open-RMF
-
-The `rmf-tools` image is built `FROM ghcr.io/open-rmf/rmf/rmf_demos`, which
-ships [Open-RMF](https://github.com/open-rmf) — `rmf_traffic`, `rmf_task`,
-`rmf_fleet_adapter`, `rmf_building_map_tools` and `rmf_traffic_editor` — under
-the **Apache License 2.0**, together with [Gazebo](https://gazebo.org/)
-(Apache-2.0) and ROS 2 Jazzy (Apache-2.0).
-
-The world generation and its SDF fixups (`generate_world.sh`,
-`postprocess_world.py`, `sim.launch.xml.template`) are ported from the internal
-`dreamworld` pipeline, trimmed to what a simulated — rather than generatively
-rendered — building needs.
-
-`samples/multilevel_office/` is the `multilevel_office` map from that same
-pipeline (its robot meshes are not included, since no robot is simulated here).
-
-The browser view of both Qt applications uses
-[noVNC](https://github.com/novnc/noVNC) (MPL-2.0) and
-[websockify](https://github.com/novnc/websockify) (LGPL-3.0), installed from
-Ubuntu packages inside the image and not modified.
+Weights and photographs stay in the gitignored `assets/` tree; nothing is
+committed and nothing leaves the box at runtime. Publishing anything a
+restricted model produced (the gh-pages bundle included) is a clearance
+decision — see the license of the model that made it first.
