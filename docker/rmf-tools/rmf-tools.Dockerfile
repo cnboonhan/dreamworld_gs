@@ -6,30 +6,46 @@
 #   sim      that world running headless under RMF, shown over noVNC
 #   editor   the traffic editor itself, shown over noVNC
 #
-# NOT on ghcr.io/open-rmf/rmf/rmf_demos: that image is published for
-# linux/amd64 only (every tag — jazzy, kilted, rolling, lyrical, latest), so
-# on aarch64 there is nothing to pull. Nothing needs building from source
-# though: every RMF debian is released for arm64 as well as amd64 — the two
-# package lists are identical, 47 each — and ros:jazzy is multi-arch. So the
-# base is stock ROS and RMF arrives through apt, which is how the upstream
-# image's own contents get there.
+# ONE file, TWO bases, chosen by the architecture docker is building for:
 #
-# Gazebo Harmonic comes with it: ros-gz-sim pulls ROS's gz-*-vendor packages,
-# so Harmonic needs no second apt source. gz-tools-vendor is named explicitly
-# because entrypoint.sh shells out to the `gz` CLI to wait for the server
-# (`gz topic -l`) and to attach the GUI (`gz sim -g`).
+#   amd64  ghcr.io/open-rmf/rmf/rmf_demos — RMF built from source (the lift
+#          plugin at 2.7.0 carries upstream rmf_simulation#132's fix), plus
+#          Gazebo Harmonic and the traffic editor, all prebuilt. Published
+#          for amd64 ONLY, which is why it cannot serve both.
+#   arm64  stock ros:jazzy + the RMF debians (released for arm64 too) —
+#          except the lift plugin, rebuilt from the deb's own 2.3.3 source
+#          with #132 cherry-picked, because jazzy's apt package never got
+#          the backport and its boot bug is deterministic on this
+#          allocator: every request "busy" forever, from boot.
 #
-# What the base lacks is a display — the sim GUI and the editor are both Qt
-# apps, and this stack is used over ssh with forwarded ports, not X11. So we
-# add a virtual X server and publish it as a web page: Xvfb -> x11vnc ->
-# websockify -> noVNC.
+# Each branch is the file that was PROVEN on its box; the final stage picks
+# by TARGETARCH, and BuildKit only pulls the stage it actually uses. The
+# shared tail (noVNC, Xvfb plumbing, the scripts) lives once, at the end.
 #
-# Rendering is software (llvmpipe). Passing a GPU through to a GLX app inside a
-# container needs a real X server on the host, which defeats the point; these are
-# floorplan-scale scenes and the physics runs on the CPU regardless.
-#
-# Build: just setup images   (or: docker compose build rmfsim)
-FROM ros:jazzy-ros-base
+# Rendering is software (llvmpipe) on both. Build: docker compose build rmfsim
+
+ARG TARGETARCH
+
+# ---------- amd64: the prebuilt rmf_demos overlay ----------
+FROM ghcr.io/open-rmf/rmf/rmf_demos:jazzy-rmf-latest AS rmf-amd64
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb x11vnc novnc websockify openbox xterm \
+        x11-utils xdotool libgl1-mesa-dri libglx-mesa0 mesa-utils \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prefect, so world generation is a tracked job like everything else. In its own
+# venv: this base pins ROS's python packages system-wide and pip refuses to
+# touch them (PEP 668), which is the right call — ROS keeps its tree, we keep
+# ours. --system-site-packages so the flow can still import yaml alongside it.
+RUN python3 -m venv --system-site-packages /opt/prefect \
+    && /opt/prefect/bin/pip install --no-cache-dir 'prefect==3.8.1' \
+    && /opt/prefect/bin/python -c "import prefect, yaml; print('prefect', prefect.__version__)"
+
+# ---------- arm64: apt debians + the one patched plugin ----------
+FROM ros:jazzy-ros-base AS rmf-arm64
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -105,6 +121,9 @@ RUN set -eux; \
 RUN python3 -m venv --system-site-packages /opt/prefect \
     && /opt/prefect/bin/pip install --no-cache-dir 'prefect==3.8.1' \
     && /opt/prefect/bin/python -c "import prefect, yaml; print('prefect', prefect.__version__)"
+
+# ---------- shared: the display plumbing and the scripts ----------
+FROM rmf-${TARGETARCH:-amd64}
 
 # Land on a connected session, not on noVNC's connect dialog: opening the port
 # should show the application, the way the other viewers in this stack do.

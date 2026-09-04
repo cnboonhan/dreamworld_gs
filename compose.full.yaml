@@ -353,7 +353,7 @@ services:
       # size is 16, so three cards dies ten minutes in with "Invalid Head
       # size: 16, which should be divisible by spsize 3". 1, 2 or 4,
       # never 3. The streamer holds card 1, which leaves two.
-      DW_GEN_NPROC: "${DW_GEN_NPROC:-1}"
+      DW_GEN_NPROC: "${DW_GEN_NPROC:-2}"
       DW_LLM_ADDR: vlm
     depends_on:
       # started, not healthy: the planner talks to the VLM when a job runs,
@@ -373,16 +373,10 @@ services:
               # LIST, and an interpolated string lands in it as ONE id
               # named "2,3", which is not a device.
               #
-              # ONE card on a four-card box. Upstream's ["2","3"] assumes
-              # eight: there, 2 and 3 are free and the video pair sits on
-              # 6 and 7. Here 0 is the VLM, 1 the streamer and qwen, and
-              # 2 and 3 are the two wangens — so taking both would leave
-              # crossings with nowhere to run. One divides 16, so stage 3
-              # is happy; world generation is an occasional batch job and
-              # is the right thing to make slower. Give it ["2","3"] with
-              # DW_GEN_NPROC=2 (or all four, NPROC=4) when the video
-              # workers are stopped.
-              device_ids: ["3"]
+              # Two on this eight-card box (the count must divide 16,
+              # see DW_GEN_NPROC above). A smaller box overrides BOTH in
+              # its overlay compose file — see compose.gb300.yaml.
+              device_ids: ["2", "3"]
     restart: unless-stopped
 
   # Qwen-Image-Edit-2509 — the model behind panorama variants. Holds ~45GB
