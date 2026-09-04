@@ -94,6 +94,8 @@ docker/
   streamer/                the live layer: a world model behind /streamer
   harness/                 the dashboard, tools and mission agent
   splatgen/                HY-World 2.0 behind a one-job queue
+  splat-generator/         its build: pinned HY-World clone, patches,
+                           the six-stage flow and export tools
   qwen/                    Qwen-Image-Edit-2509 (panorama variants)
   wangen/                  Wan 2.2 (crossing videos) behind the same queue
 scripts/                   fetch_assets.py, models.txt, pack.py, push_project.py

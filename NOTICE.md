@@ -5,6 +5,7 @@
 | Path | Heritage | License |
 | --- | --- | --- |
 | `docker/dreamworld_editor/js/dw_splat.js`, `docker/dreamworld_viewer/www/viewer.js` | WebGL 3DGS renderer of [antimatter15/splat](https://github.com/antimatter15/splat) heritage — 32-byte records, counting-sort worker, packed-covariance texture, shaders | MIT |
+| `docker/splat-generator/tools/threedgrut/` | export subtree of [nv-tlabs/3dgrut](https://github.com/nv-tlabs/3dgrut) — writes the Isaac Sim NuRec USDZ | Apache-2.0 |
 | `docker/dreamworld_editor/js/dw_pano.js`, `docker/dreamworld_viewer/www/pano.js` | equirect panorama viewer from the internal htx-robotics dreamworld tools | internal |
 | `docker/rmf-tools/generate_world.sh`, `postprocess_world.py`, `sim.launch.xml.template` | world generation from the internal dreamworld pipeline | internal |
 | the sample `multilevel_office` map | same pipeline (robot meshes not included) | internal |
