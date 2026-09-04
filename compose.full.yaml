@@ -24,6 +24,10 @@ services:
   # One forwarded port for everything: the proxy owns ${DW_PORT:-8080} and
   # routes each surface under its own path. Services keep no host ports.
   proxy:
+    # as the caller, like everything else: the files this serves are the
+    # caller's, and a umask-0027 box makes them 0640 — which stock nginx's
+    # uid-101 workers cannot open (see proxy.Dockerfile)
+    <<: *as-caller
     build:
       context: ./docker
       dockerfile: proxy/proxy.Dockerfile
