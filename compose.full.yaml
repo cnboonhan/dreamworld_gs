@@ -193,6 +193,11 @@ services:
       # and the last of it fades back to the photograph, so the loop
       # closes instead of cutting. 0 restores the cut.
       DW_STREAMER_TAIL_S: "${DW_STREAMER_TAIL_S:-5}"
+      # torch's inductor cache-dir check calls getpass.getuser(), which
+      # falls back to pwd.getpwuid() -- and this caller is an LDAP uid, so
+      # the /etc/passwd mounted above (local users only) has no entry for
+      # it. getuser() prefers $USER, so it never reaches pwd.
+      USER: "${DW_USER:-dreamworld}"
     deploy:
       resources:
         reservations:
@@ -268,6 +273,9 @@ services:
     environment:
       HF_HOME: /hf
       HF_HUB_OFFLINE: "1"
+      # --trust-remote-code makes transformers mkdir $HF_HOME/modules, and
+      # /hf is mounted read-only on purpose: weights are never mutated.
+      HF_MODULES_CACHE: /tmp/hf_modules
     command:
       - --model=Qwen/Qwen3-VL-8B-Instruct
       - --port=8000
