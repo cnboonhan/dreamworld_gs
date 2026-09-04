@@ -13,8 +13,13 @@ _default:
 #
 # Download every model the pipeline needs (~550GB, needs network).
 fetch:
+    # torch and numpy as well as safetensors: the SAM 3 repackaging reads
+    # and writes through safetensors.torch, which imports torch at module
+    # load and numpy inside save_file, so without them the fetch downloads
+    # everything and then dies on the last step. CPU torch is enough —
+    # nothing here touches a GPU.
     HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
-        --with safetensors --no-project \
+        --with safetensors --with torch --with numpy --no-project \
         {{repo}}/scripts/fetch_assets.py {{assets}}
 
 # Pack the WHOLE assets/projects/<project> into dist/ — maps, worlds, panos,
