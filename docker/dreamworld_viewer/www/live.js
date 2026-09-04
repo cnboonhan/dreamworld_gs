@@ -420,6 +420,32 @@ function playVideo(url, secs) {
   });
 }
 
+// The crossing videos are 832x480 frames extracted at 1.2 rad horizontal
+// fov and drawn with object-fit COVER — which crops by whichever dimension
+// must give. The panorama sits at the USER'S fov (1.6 by default), so a
+// straight cut into the video read as a zoom-in, and the cut back out as a
+// zoom-out. This is the video's fov as it lands on THIS window: match the
+// panorama to it before the video fades in, and hand the user's own fov
+// back once the crossing is done.
+function coverFov() {
+  const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+  const scale = Math.max(w / 832, h / 480);
+  return 2 * Math.atan(Math.tan(0.6) * (w / scale) / 832);
+}
+
+function fovTo(target, ms) {
+  return new Promise(res => {
+    const from = (window.dwp('live', 'view') || { fov: 1.6 }).fov;
+    const t0 = performance.now();
+    (function step() {
+      const t = Math.min(1, (performance.now() - t0) / ms);
+      const e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      window.dwp('live', 'zoom', from + (target - from) * e);
+      if (t < 1) requestAnimationFrame(step); else res();
+    })();
+  });
+}
+
 async function walkTo(to, look) {
   if (st.moving) return;
   st.moving = true;
@@ -427,9 +453,12 @@ async function walkTo(to, look) {
   stopStream();                       // the rollout belongs to where we were
   chip('', 'walking…');
   const bearing = bearingTo(to);
+  const myFov = (window.dwp('live', 'view') || { fov: 1.6 }).fov;
   await spinTo(bearing, 700);         // 1. turn to face the way we go
   const key = tagOf(st.at, st.look) + '__' + tagOf(to, look);
-  if ((st.graph.crossings || []).includes(key)) {
+  const crossing = (st.graph.crossings || []).includes(key);
+  if (crossing) {
+    await fovTo(coverFov(), 320);     // meet the video's framing first
     await playVideo(`${FILES}/.crossings/${key}/crossing.mp4`,
                     crossingSecs(to));   // 2. the crossing carries the walk
   } else {
@@ -445,6 +474,7 @@ async function walkTo(to, look) {
     () => requestAnimationFrame(r)));
   $('vid').style.opacity = '0';
   $('shade').style.opacity = '0';
+  if (crossing) await fovTo(myFov, 400);   // your zoom, given back
   st.moving = false;
   drawPlan();
   pushState(true);

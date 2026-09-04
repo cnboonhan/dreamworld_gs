@@ -4,6 +4,10 @@ set dotenv-load := true
 repo    := justfile_directory()
 assets  := repo / "assets"
 project := env_var_or_default("DW_PROJECT", "multilevel_office")
+# a box with its own topology sets COMPOSE_FILE in .env (e.g. the GB300:
+# COMPOSE_FILE=compose.full.yaml:compose.gb300.yaml) and compose reads the
+# variable itself; every recipe below passes -f only when it is unset
+cf := if env_var_or_default("COMPOSE_FILE", "") == "" { "-f compose.full.yaml" } else { "" }
 
 _default:
     @just --list
@@ -13,8 +17,13 @@ _default:
 #
 # Download every model the pipeline needs (~1.2TB, needs network).
 fetch:
+    # torch and numpy as well as safetensors: the SAM 3 repackaging reads
+    # and writes through safetensors.torch, which imports torch at module
+    # load and numpy inside save_file, so without them the fetch downloads
+    # everything and then dies on the last step. CPU torch is enough —
+    # nothing here touches a GPU.
     HF_HOME={{assets}}/hf uv run --with huggingface_hub --with modelscope \
-        --with safetensors --no-project \
+        --with safetensors --with torch --with numpy --no-project \
         {{repo}}/scripts/fetch_assets.py {{assets}}
 
 # Pack the WHOLE assets/projects/<project> into dist/ — maps, worlds, panos,
@@ -51,11 +60,11 @@ _env:
 
 # Rebuild the Gazebo world + nav graph from building.yaml (after map edits).
 world: _env
-    docker compose -f compose.full.yaml run --rm --no-deps rmfsim world {{project}}
+    docker compose {{cf}} run --rm --no-deps rmfsim world {{project}}
 
 # FULL: everything — authoring, simulation, and all four generators (8 GPUs).
 up: _env
-    docker compose -f compose.full.yaml up -d --build
+    docker compose {{cf}} up -d --build
     @echo "  http://localhost:8080                     every surface, one port"
     @echo "  http://localhost:8080/sim_editor          trace the building map"
     @echo "  http://localhost:8080/dreamworld_editor   grow the dreamworld"
@@ -78,7 +87,7 @@ minimal: _env
 bundle proj=project:
     #!/usr/bin/env bash
     set -euo pipefail
-    docker compose -f compose.full.yaml run --rm --no-deps dreamworld_editor \
+    docker compose {{cf}} run --rm --no-deps dreamworld_editor \
         python bundle.py /projects/{{proj}}/bundle
     dest={{assets}}/projects/{{proj}}/bundle
     cp -r {{repo}}/docker/dreamworld_viewer/www/. "$dest/"

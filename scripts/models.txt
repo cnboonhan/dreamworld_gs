@@ -34,6 +34,14 @@ Wan-AI/Wan2.2-I2V-A14B-Diffusers
 # view still (~81GB). DW_STREAMER_RUNNER names which one serves.
 robbyant/lingbot-world-v2-14b-causal-fast
 
+# The UMT5 text encoder the LingBot runners prompt through. A DIFFERENT
+# repo from the Wan2.1-T2V-1.3B below despite the near-identical name —
+# the -Diffusers one is the only place flashdreams looks for
+# text_encoder/ and tokenizer/, and without it the streamer loads its
+# weights, then dies reaching for a text encoder that is not there.
+# Only text_encoder/** and tokenizer/** are actually read (~22GB).
+Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+
 # the live layer's small alternative — Causal-Forcing Wan 2.1 1.3B I2V.
 # Also baked into the streamer image, so a box that builds it locally
 # already has these; listed because a box that PULLS the image does not.

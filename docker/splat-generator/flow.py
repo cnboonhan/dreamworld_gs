@@ -15,6 +15,7 @@ Two ways to run it:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -107,13 +108,22 @@ def export_world(scene: str) -> dict:
     world = Path(scene) / "world.ply"
     world.write_bytes(plys[-1].read_bytes())
 
-    sh(["python", TOOLS / "ply_to_isaac.py", world, f"{scene}/world.usdz"], logger)
+    # The USDZ is for Isaac Sim and nothing in this stack reads it -- a job
+    # is judged done by world.ply. pxr (usd-core) has no aarch64 build, so
+    # rather than fail the whole run at the last stage, skip it and say so.
+    usdz = f"{scene}/world.usdz"
+    if importlib.util.find_spec("pxr") is not None:
+        sh(["python", TOOLS / "ply_to_isaac.py", world, usdz], logger)
+    else:
+        usdz = None
+        logger.info("no pxr (usd-core has no aarch64 build) -- skipping the "
+                    "Isaac USDZ export; world.ply is unaffected")
     sh(["python", TOOLS / "make_spawn_cam.py", scene], logger)
     # A world generated at a waypoint has one walk per corridor leaving it, and
     # the viewer needs the lanes before any of them can be marked. Derived and
     # idempotent, so it belongs here rather than in whatever ran the build.
     sh(["python", TOOLS / "edge_walks.py", scene], logger)
-    return {"ply": str(world), "usdz": f"{scene}/world.usdz"}
+    return {"ply": str(world), "usdz": usdz}
 
 
 def _run_name() -> str:
@@ -146,7 +156,8 @@ def generate_world(scene: str, gpus: int = 4, steps: int = 2000,
     train_gaussians(scene, steps)
     out = export_world(scene)
     print(f"3DGS : {out['ply']}")
-    print(f"Isaac: {out['usdz']}")
+    if out.get("usdz"):
+        print(f"Isaac: {out['usdz']}")
     return out
 
 

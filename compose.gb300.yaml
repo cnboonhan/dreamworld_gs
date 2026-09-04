@@ -1,0 +1,24 @@
+# The GB300 box: four cards, not eight. Everything env-shaped moves in
+# .env (DW_WAN_GPU=2, DW_WAN2_GPU=3, DW_EDIT_GPU=1 there); this overlay
+# carries only what compose cannot take from a variable — device_ids is a
+# LIST, and "${VAR:-2,3}" lands in it as one id named "2,3".
+#
+# Select it in that box's .env:
+#   COMPOSE_FILE=compose.full.yaml:compose.gb300.yaml
+services:
+  splatgen:
+    environment:
+      # one card: 0 is the VLM, 1 the streamer and qwen, 2 and 3 the two
+      # wangens — taking two would leave crossings nowhere to run. One
+      # divides 16, so stage 3 is happy; world generation is an
+      # occasional batch job and the right thing to make slower.
+      DW_GEN_NPROC: "${DW_GEN_NPROC:-1}"
+    deploy:
+      resources:
+        reservations:
+          # !override: compose MERGES overlay lists by appending, and a
+          # second devices entry would reserve base's cards as well
+          devices: !override
+            - driver: nvidia
+              capabilities: [gpu]
+              device_ids: ["3"]

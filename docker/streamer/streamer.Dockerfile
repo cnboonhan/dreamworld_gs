@@ -6,7 +6,15 @@
 # checkpoint is distilled specifically to suppress long-horizon drift)
 # and Causal-Forcing Wan 2.1 1.3B I2V (no camera to steer, an eleventh
 # the size). The server asks the pipeline which one it is by signature.
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+# ONE file, both boxes: the H200 host (CUDA 12.8 driver, sm_90) and the
+# GB300 host (CUDA 13.0 driver, sm_103) — arm64 here IS the GB300, so the
+# toolkit and the torch stack key off TARGETARCH. Each branch is exactly
+# what ran on its box before the files merged.
+ARG TARGETARCH
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS cuda-amd64
+FROM nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04 AS cuda-arm64
+FROM cuda-${TARGETARCH:-amd64}
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,19 +24,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
-ARG FLASHDREAMS_REF=main
-RUN git clone --depth 1 --branch ${FLASHDREAMS_REF} \
-        https://github.com/NVIDIA/flashdreams /opt/flashdreams
+# PINNED, no longer `main`: upstream #557 moved integrations/lingbot into
+# a v2 tree on 2026-09-03, and an unpinned clone stopped building that
+# same day. This sha is the rev the working image was built from —
+# migrating to the v2 layout is its own task, not a side effect of a
+# cache miss.
+ARG FLASHDREAMS_REF=04558b14473ff082460a9a9ed88ec0d140faf4f6
+RUN git clone https://github.com/NVIDIA/flashdreams /opt/flashdreams \
+    && git -C /opt/flashdreams checkout --quiet ${FLASHDREAMS_REF}
 WORKDIR /opt/flashdreams
 
 RUN uv sync --project integrations/lingbot
 RUN uv sync --package flashdreams-causal-forcing --inexact
-# LAST, and after every sync: uv resolves torch cu130 and this box's
-# driver is CUDA 12.8. The mismatch surfaces as "driver too old", or
-# worse as a torchaudio import error that empties the runner registry.
-RUN uv pip install --python .venv/bin/python \
-        --index-url https://download.pytorch.org/whl/cu128 \
-        torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1
+# LAST, and after every sync: uv's own resolution has to be overridden so
+# the three stay a matched set — a mismatch surfaces as "driver too old",
+# or worse as a torchaudio import error that empties the runner registry.
+#   amd64: cu128, the H200 driver's CUDA — torch 2.9.1 and its partners.
+#   arm64: cu130 — the GB300 driver IS 13.0 and sm_103 has no cu128
+#          kernels; 2.11.0 because torchvision 0.24.1 / torchaudio 2.9.1
+#          were never built for aarch64 in any CUDA index, and it is the
+#          version flashdreams' own lock targets, so transformer-engine —
+#          built from source against the resolved torch — keeps its ABI.
+RUN case "${TARGETARCH:-amd64}" in \
+      arm64) uv pip install --python .venv/bin/python \
+               --index-url https://download.pytorch.org/whl/cu130 \
+               torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 ;; \
+      *)     uv pip install --python .venv/bin/python \
+               --index-url https://download.pytorch.org/whl/cu128 \
+               torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 ;; \
+    esac
 
 # The weights bake in, so the image is self-contained on a box with no
 # assets tree — 22GB all told, against 70GB for a camera model. Baked at

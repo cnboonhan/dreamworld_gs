@@ -6,10 +6,18 @@ name: dreamworld
 
 x-as-caller: &as-caller
   # run as the invoking user so outputs aren't root-owned; that uid has no
-  # entry in the image's passwd, which some libraries insist on reading
+  # entry in the image's passwd, which some libraries insist on reading.
+  # USER is that reading: getpass.getuser() consults $USER before it asks
+  # pwd, so naming it is what stops the lookup ever reaching a uid that
+  # SSSD owns and no passwd file on this box lists. Torch reaches for it to
+  # name a compile cache; flashdreams calls default_cache_dir() directly,
+  # so pointing TORCHINDUCTOR_CACHE_DIR somewhere writable is not enough.
+  # NOTE: a service's own `environment:` REPLACES this block rather than
+  # merging into it, which is why both keys are repeated below per service.
   user: "${DW_UID:-1000}:${DW_GID:-1000}"
   environment:
     HOME: /tmp
+    USER: "${DW_USER:-dreamworld}"
 
 services:
 
@@ -54,6 +62,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       DISPLAY: ":99"
     restart: unless-stopped
 
@@ -75,6 +84,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       DISPLAY: ":99"
       # sim wall-clock speed: doors open and lifts ride this many times
       # faster than real time
@@ -98,6 +108,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       DW_PROJECT: "${DW_PROJECT:-multilevel_office}"
       QWEN_URL: "http://qwen:8000"
       SPLATGEN_URL: "http://splatgen:8000"
@@ -121,6 +132,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
     deploy:
@@ -147,6 +159,7 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
     deploy:
@@ -259,6 +272,7 @@ services:
       - ./assets/projects:/projects:ro
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       CORE_URL: "http://dreamworld_core:8000"
       # through the PROXY, which answers even with no editor running
       EDITOR_URL: "http://proxy/dreamworld_editor"
@@ -269,7 +283,10 @@ services:
   # Qwen3-VL — the trajectory planner's eyes during splat generation (and
   # later the mission agent's). ~17GB loaded, a card of its own.
   vlm:
-    image: vllm/vllm-openai:v0.11.0
+    build:
+      context: ./docker
+      dockerfile: vlm/vlm.Dockerfile
+    image: dreamworld/vlm:latest
     container_name: dreamworld-vlm
     ipc: host
     volumes:
@@ -280,6 +297,14 @@ services:
       # --trust-remote-code makes transformers mkdir $HF_HOME/modules, and
       # /hf is mounted read-only on purpose: weights are never mutated.
       HF_MODULES_CACHE: /tmp/hf_modules
+      # FlashInfer ships PRECOMPILED cubins and this build has none for
+      # sm_103, so its sampler dies with "no kernel image is available for
+      # execution on the device" during the profile run. The newer ptxas
+      # next door cannot help — nothing is being assembled here, the kernel
+      # simply was not built for this card. Fall back to the torch-native
+      # top-k/top-p sampler, which is compiled for it.
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+
     command:
       - --model=Qwen/Qwen3-VL-8B-Instruct
       - --port=8000
@@ -320,6 +345,9 @@ services:
       - ./assets/projects:/projects
     environment:
       HOME: /tmp
+      # as everywhere else that runs as the caller: an LDAP uid has no
+      # /etc/passwd line, and torch asks getpass.getuser() for one
+      USER: "${DW_USER:-dreamworld}"
       # One worker per card — and the COUNT MUST DIVIDE 16. Stage 3
       # (world expansion) shards attention across the cards and its head
       # size is 16, so three cards dies ten minutes in with "Invalid Head
@@ -341,13 +369,13 @@ services:
               # Card 1 was this service's before the live streamer
               # moved in; generating a world and streaming one are the
               # two jobs most likely to be wanted at once, so they do not
-              # share. Two, not the three that are free: the divides-16
-              # rule above means card 4 is left idle rather than breaking
-              # stage 3. Stop the streamer and this can be ["1","2","3",
-              # "4"] with DW_GEN_NPROC=4 again, which is what it was.
-              # Spelled out, not "${VAR:-2,3}": device_ids is a LIST, and
-              # an interpolated string lands in it as ONE id named "2,3",
-              # which is not a device.
+              # share. Spelled out, not "${VAR:-2,3}": device_ids is a
+              # LIST, and an interpolated string lands in it as ONE id
+              # named "2,3", which is not a device.
+              #
+              # Two on this eight-card box (the count must divide 16,
+              # see DW_GEN_NPROC above). A smaller box overrides BOTH in
+              # its overlay compose file — see compose.gb300.yaml.
               device_ids: ["2", "3"]
     restart: unless-stopped
 
@@ -365,6 +393,7 @@ services:
       - ./assets/hf:/assets/hf:ro
     environment:
       HOME: /tmp
+      USER: "${DW_USER:-dreamworld}"
       HF_HOME: /assets/hf
       HF_HUB_OFFLINE: "1"
       # the repo id, resolved out of the mounted cache — not a bare path,

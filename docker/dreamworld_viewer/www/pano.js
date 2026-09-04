@@ -193,6 +193,8 @@ window.dwPano = (id, url, offId, ns, opts) => {
       readout(); share();
     },
     nudge: d => { st.off = (st.off + d + 360) % 360; readout(); },
+    zoom: f => { st.fov = Math.max(0.5, Math.min(2.6, f));
+      readout(); share(); },
     heading: () => st.look,
     load: u => st.load(u),          // show a different panorama
     lookAt: (r, p) => { st.look = r;
