@@ -1015,8 +1015,14 @@ def _door(to, mode):
     names = res.get("doors") or [name]
     lift = ST["lift_of"].get(tgt) or ST["lift_of"].get(cur)
     if lift and not wait_lift_door(lift, mode == "open"):
+        # say what the world WAS doing: a cabin that left for another
+        # floor and a door that sat closed are different failures
+        st = lift_states().get(lift) or {}
         return {"ok": False, "door": names[0],
-                "error": f"{lift}'s door did not reach {mode}"}
+                "error": f"{lift}'s door did not reach {mode} — door state "
+                         f"{st.get('door')}, cabin at {st.get('floor') or '?'}"
+                         + ("" if st.get("floor") in (None, ST["level"])
+                            else f" (not {ST['level']}: {_lift_hint()})")}
     if not lift and not wait_door(names, mode == "open"):
         st = door_states()
         return {"ok": False, "door": names[0],
@@ -1189,7 +1195,7 @@ def door_states():
     return (bridge("/door_state") or {}).get("doors") or {}
 
 
-def wait_door(names, want_open, timeout=25):
+def wait_door(names, want_open, timeout=60):
     """Block until every named door has finished moving into the wanted state.
 
     A DoorRequest is a request: the leaf takes seconds to swing, and open_door
@@ -1210,8 +1216,16 @@ def wait_door(names, want_open, timeout=25):
     return False
 
 
-def wait_lift_door(lift, want_open, timeout=20):
-    """Block until `lift`'s door reaches open (2) / closed (0). From _wait_lift_door."""
+def wait_lift_door(lift, want_open, timeout=75):
+    """Block until `lift`'s door reaches open (2) / closed (0). From _wait_lift_door.
+
+    The timeout is wall clock, and the door swings in SIM time: on a box
+    whose gazebo cannot hold its real_time_factor (llvmpipe on a busy CPU),
+    the same request that clears in 4s here took more than the old 20s —
+    "lift1's door did not reach open" with nothing actually wrong. A pass
+    returns the moment the state lands, so a generous bound costs nothing
+    when the world is fast; only real failures wait it out.
+    """
     if not ST.get("galaxea") or not lift:
         return True
     target = DOOR_OPEN if want_open else 0
