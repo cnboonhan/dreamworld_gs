@@ -404,7 +404,8 @@ $('goBtn').onclick = () => {
 // ---- crossing an edge -----------------------------------------------------
 function spinTo(bearing, ms) {
   return new Promise(res => {
-    const from = window.dwp('live', 'heading') || 0;
+    const v0 = window.dwp('live', 'view') || { yaw: 0, pitch: 0 };
+    const from = v0.yaw, p0 = v0.pitch;
     let d = bearing - from;
     while (d > Math.PI) d -= 2 * Math.PI;
     while (d < -Math.PI) d += 2 * Math.PI;
@@ -412,7 +413,10 @@ function spinTo(bearing, ms) {
     (function step() {
       const t = Math.min(1, (performance.now() - t0) / ms);
       const e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;   // ease in-out
-      window.dwp('live', 'face', from + d * e);
+      // pitch eases home WITH the turn — face() zeroed it on the spin's
+      // first frame, which jumped the horizon for anyone looking up or
+      // down when the walk began
+      window.dwp('live', 'pose', from + d * e, p0 * (1 - e));
       if (t < 1) requestAnimationFrame(step); else res();
     })();
   });
