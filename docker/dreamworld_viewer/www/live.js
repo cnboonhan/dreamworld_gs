@@ -84,7 +84,7 @@ async function seed() {
   try {
     // the canvas IS the conditioning: exactly the framing on screen, so the
     // rollout inherits the viewer's own field of view rather than guessing
-    const view = window.dwp('live', 'view') || { fov: 1.6 };
+    const view = window.dwp('live', 'view') || { fov: 1.2 };
     const image = captureView();
     // a seed that never answers used to leave the chip reading
     // "seeding…" for good; give it a deadline it can miss out loud
@@ -435,7 +435,8 @@ function coverFov() {
 
 function fovTo(target, ms) {
   return new Promise(res => {
-    const from = (window.dwp('live', 'view') || { fov: 1.6 }).fov;
+    const from = (window.dwp('live', 'view') || { fov: 1.2 }).fov;
+    if (Math.abs(target - from) < 0.02) return res();   // already there
     const t0 = performance.now();
     (function step() {
       const t = Math.min(1, (performance.now() - t0) / ms);
@@ -453,7 +454,7 @@ async function walkTo(to, look) {
   stopStream();                       // the rollout belongs to where we were
   chip('', 'walking…');
   const bearing = bearingTo(to);
-  const myFov = (window.dwp('live', 'view') || { fov: 1.6 }).fov;
+  const myFov = (window.dwp('live', 'view') || { fov: 1.2 }).fov;
   await spinTo(bearing, 700);         // 1. turn to face the way we go
   const key = tagOf(st.at, st.look) + '__' + tagOf(to, look);
   const crossing = (st.graph.crossings || []).includes(key);

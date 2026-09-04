@@ -25,7 +25,12 @@ window.dwPano = (id, url, offId, ns, opts) => {
   if (!cv || cv.dataset.dw) return;
   cv.dataset.dw = 1;
   opts = opts || {};
-  const st = { off: 0, look: 0, pitch: 0, fov: 1.6, drag: null, ready: false };
+  // 1.2 rad, NOT an arbitrary default: it is the horizontal fov the
+  // crossing videos are rendered at (crossing.py extracts 832x480 at
+  // 1.2), so at rest the panorama and a crossing share one framing and
+  // walking between waypoints needs no zoom at all. Q/E still adjusts;
+  // a crossing then eases to 1.2 and hands the user's value back.
+  const st = { off: 0, look: 0, pitch: 0, fov: 1.2, drag: null, ready: false };
   const gl = cv.getContext('webgl', { antialias: true,
                                     preserveDrawingBuffer: true });
   const VS = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
