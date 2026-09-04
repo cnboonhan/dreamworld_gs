@@ -60,14 +60,24 @@ STILL = os.environ.get(
 # because a framewise runner emits ONE frame per block and a block-based
 # count then rebuilt the cache twice a second — which costs far more than
 # the drift it was preventing.
-REANCHOR = int(os.environ.get("DW_STREAMER_REANCHOR", "480"))
+REANCHOR = int(os.environ.get("DW_STREAMER_REANCHOR", "960"))
 # and a wall-clock bound on the same thing, because frames are not
 # seconds: the runner's rate moves with the prompt and the card, so a
 # frame count alone makes the loop's LENGTH drift even when the picture
 # does not. Whichever bound falls first sends the rollout back to the
 # photograph, so what you watch is a ~15s loop of the view you are
 # standing in rather than an ever-lengthening improvisation away from it.
-LOOP_S = float(os.environ.get("DW_STREAMER_LOOP_S", "15"))
+LOOP_S = float(os.environ.get("DW_STREAMER_LOOP_S", "30"))
+# The loop used to CUT back to the photograph: the rollout had wandered a
+# few pixels off and whatever was moving in it stopped existing between
+# one frame and the next. So spend the last of the loop returning: the
+# frames cross-fade to the seed, reaching it exactly at the boundary, and
+# the next rollout starts from that same seed. Nothing jumps, because the
+# last frame of the old loop and the first of the new one are the same
+# photograph. Costs no generation — it is a blend over frames already made.
+# Wider than one block (~3.8s here), so the fade is spread over two
+# rather than crammed into the last one.
+TAIL_S = float(os.environ.get("DW_STREAMER_TAIL_S", "5"))
 # The pose track is a perfect "do not move" signal — relative poses are
 # frame-to-frame, so identity everywhere is exactly zero motion — but the
 # video model still has a prior of its own and wanders. So close the loop:
@@ -187,11 +197,15 @@ def drift_of(a, b):
     return abs(dx) * 4.0, abs(dy) * 4.0
 
 
-def publish(frames, seq):
+def publish(frames, seq, seed_rgb=None, alphas=None):
     """Queue a block's frames for paced release, and return the last
-    frame's luma so the loop can measure its drift."""
+    frame's luma so the loop can measure its drift.
+
+    `alphas` is one weight per frame for the fade home: 0 shows what the
+    model made, 1 shows the seed photograph. Drift is measured on the
+    UNFADED frame, or the fade would flatter it into reporting zero."""
     last = None
-    for f in frames:
+    for i, f in enumerate(frames):
         a = f.detach().float().clamp(-1, 1)
         if a.ndim == 4:
             a = a[0]
@@ -200,6 +214,9 @@ def publish(frames, seq):
         arr = ((a + 1.0) * 127.5).round().clamp(0, 255).to(torch.uint8)
         rgb = arr.cpu().numpy()
         last = _gray_small(rgb)
+        w = alphas[i] if alphas else 0.0
+        if w > 0 and seed_rgb is not None:
+            rgb = (rgb * (1.0 - w) + seed_rgb * w).astype(np.uint8)
         with PACE:
             PENDING_FRAMES.append((rgb, seq))
             while len(PENDING_FRAMES) > MAX_BACKLOG:
@@ -296,14 +313,14 @@ def model_loop():
           flush=True)
 
     cache, step, seq, t0, done = None, 0, -1, 0.0, 0
-    anchored_at, blk = 0.0, 0.0
+    anchored_at, blk, seed_rgb = 0.0, 0.0, None
     while True:
         with LOCK:
             pend = dict(PENDING)
         if pend["seq"] != seq and pend["image"] is not None:
             # a new view or a new prompt: the cache belongs to the old one
             seq, cache, step, done, t0 = pend["seq"], None, 0, 0, time.time()
-            anchor = None
+            anchor, seed_rgb = None, None
             STATE.update(seeded_at=t0, prompt=pend["prompt"] or "", blocks=0,
                          drift=0.0, reanchors=0, loops=0)
         if seq < 0 or pend["image"] is None:
@@ -340,13 +357,38 @@ def model_loop():
                                         cache=cache))
                 pipe.finalize(autoregressive_index=step, cache=cache)
                 blk = time.time() - tblk
-            luma = publish(frames, seq)
+            # how far into the loop each of this block's frames lands.
+            # Timed rather than counted, because the fade must arrive at
+            # the seed exactly when the loop's clock does, and the frame
+            # rate is not a constant.
+            alphas = None
+            if TAIL_S and LOOP_S and seed_rgb is not None:
+                # el is measured AFTER generating, so this block's
+                # frames span [el - blk, el], not [el, el + blk].
+                #
+                # And the fade must land on the boundary the loop ACTUALLY
+                # uses, which is LOOP_S - blk/2 (nearest-block rounding),
+                # not LOOP_S. Aiming at LOOP_S left the fade half done —
+                # it reached about a third of the way home and the cut
+                # happened anyway, which is the jump this was meant to
+                # remove.
+                el, n_f = time.time() - anchored_at, len(frames)
+                end = LOOP_S - blk / 2
+                alphas = []
+                for i in range(n_f):
+                    at = el - blk + (i + 1) / max(n_f, 1) * blk
+                    alphas.append(min(1.0, max(
+                        0.0, (at - (end - TAIL_S)) / TAIL_S)))
+                if not any(alphas):
+                    alphas = None
+            luma = publish(frames, seq, seed_rgb, alphas)
             step += 1
             done += n
             if anchor is None:
-                anchor = _gray_small(np.asarray(Image.open(
+                seed_rgb = np.asarray(Image.open(
                     io.BytesIO(pend["image"])).convert("RGB").resize(
-                        (WIDTH, HEIGHT), Image.LANCZOS)))
+                        (WIDTH, HEIGHT), Image.LANCZOS)).astype(np.float32)
+                anchor = _gray_small(seed_rgb.astype(np.uint8))
             if luma is not None:
                 dx, dy = drift_of(anchor, luma)
                 STATE["drift"] = round(max(dx, dy), 1)
