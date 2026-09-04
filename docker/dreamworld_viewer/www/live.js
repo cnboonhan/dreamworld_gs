@@ -59,12 +59,26 @@ function fillPickers() {
 // view the viewer reports is exactly the one the rollout inherits and
 // nothing is stretched to fit.
 function captureView() {
+  // The stream comes back through <img object-fit:cover>, which shows the
+  // frame's CENTRAL window-shaped region and crops the rest. The old
+  // capture put the canvas's full width into the frame, so on any window
+  // narrower than 832:464 the display cropped it — the view came back
+  // enlarged, and the fade into the stream read as a zoom-in (31% at 4:3,
+  // measured). Build the frame the way the display will read it instead:
+  // the canvas lands exactly in the region cover will show; the margins,
+  // which no one ever sees, get a stretched backdrop so the model still
+  // conditions on plausible pixels out to the frame edge.
   const src = $('pano');
   const out = document.createElement('canvas');
   out.width = 832; out.height = 464;
-  const sw = src.width, sh = Math.min(src.height, src.width * 464 / 832);
-  out.getContext('2d').drawImage(src, 0, (src.height - sh) / 2, sw, sh,
-                                 0, 0, 832, 464);
+  const c = out.getContext('2d');
+  const winA = Math.max(1, src.width) / Math.max(1, src.height);
+  const frameA = 832 / 464;
+  let vx = 0, vy = 0, vw = 832, vh = 464;
+  if (winA < frameA) { vw = 464 * winA; vx = (832 - vw) / 2; }
+  else               { vh = 832 / winA; vy = (464 - vh) / 2; }
+  c.drawImage(src, 0, 0, 832, 464);        // the never-shown margins
+  c.drawImage(src, vx, vy, vw, vh);        // the visible region, exact
   return out.toDataURL('image/jpeg', 0.92);
 }
 
