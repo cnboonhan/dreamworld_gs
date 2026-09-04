@@ -17,7 +17,11 @@ ARG HYWORLD_REF=7f668e67c74338d50684e57be46a438459b6bbe1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    TORCH_CUDA_ARCH_LIST=9.0 \
+    # 10.0 as well as Hopper: a GB300 is sm_103, which CUDA 12.8's nvcc
+    # does not know (it stops at sm_101), but Blackwell runs 10.0 code, so
+    # the sm_100 cubin plus its PTX covers this card the same way torch's
+    # own kernels do. Drop 9.0, or add more, per box.
+    TORCH_CUDA_ARCH_LIST="9.0 10.0+PTX" \
     MAX_JOBS=32 \
     # headless rendering (pyrender/pyglet have no display in a container)
     PYOPENGL_PLATFORM=egl \
@@ -48,8 +52,19 @@ RUN git clone "$HYWORLD_REPO" /opt/hyworld \
     && patch -p1 < /tmp/hyworld.patch \
     && rm -rf .git
 
+# Headers, not just the runtime libraries above. On x86 every dependency
+# here arrives as a wheel; on aarch64 several have none and build from
+# source instead -- glcontext (pulled in by moge -> utils3d -> moderngl)
+# compiles x11.cpp and stops at X11/Xlib.h. A separate layer so it does
+# not invalidate the HY-World clone above.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libx11-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /opt/hyworld
 COPY splat-generator/build_env.sh /tmp/build_env.sh
+COPY splat-generator/decord_shim.py /tmp/decord_shim.py
 RUN bash /tmp/build_env.sh
 
 COPY splat-generator/tools/ /opt/tools/
