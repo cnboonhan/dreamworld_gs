@@ -531,18 +531,48 @@ def route_stop(path):
 
 
 def blocked_message(tgt, path, reached, obstacle):
-    """The dream's own BLOCKED wording, which the agent prompt is written against."""
+    """The dream's own BLOCKED wording, which the agent prompt is written against.
+
+    The lift branch must recommend take_lift, and ONLY take_lift: this text
+    used to say "call_lift then open_door", the planner gate rejects exactly
+    those verbs, and the agent bounced between the two instructions retrying
+    go_to forever. One voice: a cabin is take_lift's business."""
     u, v = obstacle
     lift = ST["lift_of"].get(v) or ST["lift_of"].get(u)
-    what = f"lift to {lab(v)}" if lift else f"door to {lab(v)}"
-    act = "call_lift then open_door" if lift else "open_door"
+    if lift:
+        cabin = v if v in ST["lift_of"] else u
+        lobby = u if cabin == v else v
+        head = (f"BLOCKED: {lab(cabin)} is {lift}'s cabin, and go_to never "
+                f"enters a lift. A level change is ONE subtask: take_lift "
+                f"<target level>, from the lobby.")
+        if reached == 0:
+            return head + f" You are at the lobby — call take_lift now."
+        return head + (f" go_to {lab(lobby)} first (that leg is clear), "
+                       f"then take_lift.")
+    what = f"door to {lab(v)}"
     if reached == 0:                                  # the obstacle is right here
         return (f"BLOCKED: the path to {lab(tgt)} is blocked by the {what} at "
-                f"{lab(ST['cur'])}. go_to only walks clear paths — {act} here first, "
-                f"then go_to.")
+                f"{lab(ST['cur'])}. go_to only walks clear paths — open_door here "
+                f"first, then go_to.")
     return (f"BLOCKED: the path to {lab(tgt)} is blocked by the {what} beyond "
             f"{lab(path[reached])}. go_to {lab(path[reached])} first (that leg "
-            f"is clear), then {act}, then go_to {lab(tgt)}.")
+            f"is clear), then open_door, then go_to {lab(tgt)}.")
+
+
+
+def _lift_hint():
+    """What to tell an agent whose shaft door has no cabin behind it.
+
+    Mid-ride, the runnable thing is the take_lift-installed call_lift step
+    still waiting in the todos — name it. Free-standing, call_lift would be
+    refused by the gate, so the advice must be take_lift and nothing else.
+    """
+    nxt = next((t for t in ST.get("todos") or []
+                if t.get("via") == "take_lift" and t.get("status") != "completed"
+                and str(t.get("step", "")).startswith("call_lift")), None)
+    if nxt:
+        return f"run the pending '{nxt['step']}' subtask first"
+    return "a ride is take_lift <target level>; it calls the cabin itself"
 
 
 # ---- state ------------------------------------------------------------------
@@ -965,7 +995,7 @@ def _door(to, mode):
         st = lift_states().get(lift_here) or {}
         if st.get("floor") and st["floor"] != ST["level"]:
             return {"ok": False, "error": f"{lift_here} is at {st['floor']}, not "
-                                          f"{ST['level']} — call_lift {ST['level']} first"}
+                                          f"{ST['level']} — {_lift_hint()}"}
     # The bridge names the door from the EDGE, not from a name we pass it: two lift
     # doors can be colinear, and only the edge tells them apart. So send the two
     # waypoints and let it decide, which is also what makes its answer worth having.
@@ -979,7 +1009,7 @@ def _door(to, mode):
     if ST.get("galaxea") and not res.get("ok", True):
         err = res.get("error") or f"the bridge refused to {mode} it"
         if "is at" in err:
-            err += " — call_lift brings it to this floor first"
+            err += " — " + _lift_hint()
         return {"ok": False, "error": err, "door": name}
     # Prefer the bridge's own naming; ours is a fallback for a viewer-only run.
     names = res.get("doors") or [name]
@@ -1321,7 +1351,13 @@ def nearest_lift_lobby(cur):
 
 
 def decompose_doors(cur, tgt):
-    """(steps, route) opening every closed door on the way, or None."""
+    """(steps, route, cabin) opening every closed door on the way, or None.
+
+    A cabin on the path ends the plan at its lobby, and `cabin` names the
+    lift: this used to emit select_lift/face/call_lift/open_door — a
+    sequence write_todos REJECTS, so the tool that says "put these steps
+    into write_todos" was producing plans that could not be written. The
+    lift primitives belong to take_lift alone."""
     path = dijkstra(ST["adj"], cur, tgt)
     if not path or len(path) < 2:
         return None
@@ -1334,14 +1370,10 @@ def decompose_doors(cur, tgt):
             steps.append(f"go_to {lab(u)}")
             walked = u
         if cabin:
-            # A lift is not a door with extra steps: it has to be called to this
-            # floor before its door means anything, so it gets its own sequence.
-            steps += [f"select_lift {cabin}", f"face {lab(v)}",
-                      f"call_lift {ST['level']}", "open_door"]
-        else:
-            steps += [f"face {lab(v)}", "open_door"]
+            return steps, [lab(i) for i in path], cabin
+        steps += [f"face {lab(v)}", "open_door"]
     steps.append(f"go_to {lab(tgt)}")
-    return steps, [lab(i) for i in path]
+    return steps, [lab(i) for i in path], None
 
 
 @tool("Plan the FULL obstacle-aware route to a waypoint WITHOUT trial-and-error. "
@@ -1359,7 +1391,16 @@ def plan_route(to):
         d = decompose_doors(cur, tgt)
         if not d:
             return {"ok": False, "error": f"no path to {to}"}
-        steps, route = d
+        steps, route, cabin = d
+        if cabin:
+            # the target is (or lies behind) a lift cabin on this level:
+            # the plan runs to the lobby, and the ride is take_lift's
+            return {"ok": True, "steps": steps, "route": route,
+                    "then": "take_lift <target level>",
+                    "note": f"{to} is {cabin}'s cabin — go_to never enters a "
+                            f"lift. write_todos the 'steps' (they reach the "
+                            f"lobby), then call take_lift <target level>; it "
+                            f"installs and verifies the whole ride."}
         return {"ok": True, "steps": steps, "route": route,
                 "lifts": sorted({ST["lift_of"][i] for i in dijkstra(ST["adj"], cur, tgt)
                                  if i in ST["lift_of"]}),
@@ -1370,7 +1411,7 @@ def plan_route(to):
     if not lvl:
         return {"ok": False, "error": f"'{to}' is not a known waypoint on any level."}
     lobby = nearest_lift_lobby(cur)
-    pre = (decompose_doors(cur, lobby) or ([], []))[0] if lobby is not None else []
+    pre = (decompose_doors(cur, lobby) or ([], [], None))[0] if lobby is not None else []
     return {"ok": True, "needs_level_change": lvl, "steps": pre,
             "then": f"take_lift {lvl}",
             "note": f"'{to}' is on {lvl}. write_todos the 'steps' (reach a lift lobby) "
